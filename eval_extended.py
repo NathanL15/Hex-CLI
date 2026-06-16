@@ -115,6 +115,15 @@ def _verify_settings_json(sandbox: Path, _result: dict[str, Any]) -> tuple[bool,
     return True, "settings.json updated with debug=false"
 
 
+def _verify_recalled_memory(sandbox: Path, result: dict[str, Any]) -> tuple[bool, str]:
+    if "search_memory" not in result["tools_used"]:
+        return False, f"model never called search_memory to recall past context, tools_used={result['tools_used']!r}"
+    msg = result["finished_message"]
+    if "buggy_calc.py" not in msg:
+        return False, f"model didn't surface the recalled file path in its answer: {msg!r}"
+    return True, "model used search_memory and recalled the correct file path"
+
+
 # ---------------------------------------------------------------------------
 # Extended case matrix
 # ---------------------------------------------------------------------------
@@ -194,6 +203,21 @@ EXTENDED_CASES: list[TestCase] = [
         setup={"buggy.py": "def add(a, b) return a + b\n"},
         tag="self_correct",
         verify=_verify_self_corrected_py,
+    ),
+
+    # ---- Semantic memory — recall context from a seeded past session ----
+    TestCase(
+        "memory-1", "agentic",
+        "What file did I fix a syntax error in earlier, and what tool did I use to confirm the fix?",
+        max_steps=4, expect_tool_calls=True, expected_tools=("search_memory",),
+        memory_seed=[{
+            "text": "fix syntax error in buggy_calc.py",
+            "tool_sequence": ["read_file", "edit_file", "verify_syntax"],
+            "key_paths": ["buggy_calc.py"],
+            "outcome": "completed",
+        }],
+        tag="semantic_memory",
+        verify=_verify_recalled_memory,
     ),
 
     # ---- Filler — broaden casual/factual/agentic coverage ----
