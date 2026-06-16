@@ -15,6 +15,7 @@ Improvements over v1:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import msvcrt
 import os
@@ -34,39 +35,35 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import shellai_ui as ui
+import shellai_telemetry as telemetry
+
+# Windows consoles often default to cp1252, which can't encode the box-drawing
+# and braille glyphs this script and shellai_ui print. Force UTF-8 so output
+# doesn't crash regardless of the caller's console codepage (mirrors launcher.py).
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
+VERSION = "2.0.0"
 
 # ---------------------------------------------------------------------------
-# ANSI colour
+# Presentation layer — re-exported from shellai_ui for existing call sites.
 # ---------------------------------------------------------------------------
 
-_COLOR_ON = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
-
-
-class C:
-    RESET   = "\033[0m"   if _COLOR_ON else ""
-    BOLD    = "\033[1m"   if _COLOR_ON else ""
-    DIM     = "\033[2m"   if _COLOR_ON else ""
-    RED     = "\033[31m"  if _COLOR_ON else ""
-    GREEN   = "\033[32m"  if _COLOR_ON else ""
-    YELLOW  = "\033[33m"  if _COLOR_ON else ""
-    BLUE    = "\033[34m"  if _COLOR_ON else ""
-    MAGENTA = "\033[35m"  if _COLOR_ON else ""
-    CYAN    = "\033[36m"  if _COLOR_ON else ""
-    BGREEN  = "\033[92m"  if _COLOR_ON else ""
-    BYELLOW = "\033[93m"  if _COLOR_ON else ""
-    BCYAN   = "\033[96m"  if _COLOR_ON else ""
-    BWHITE  = "\033[97m"  if _COLOR_ON else ""
-
-
-def cprint(text: str, color: str = "", bold: bool = False, file: Any = None) -> None:
-    prefix = (C.BOLD if bold else "") + color
-    suffix = C.RESET if prefix else ""
-    print(f"{prefix}{text}{suffix}", file=file or sys.stdout)
+C = ui.C
+cprint = ui.cprint
+Spinner = ui.Spinner
+HELP_TEXT = ui.HELP_TEXT
+TOOLS_HELP = ui.TOOLS_HELP
+render_history_list = ui.render_history_list
+show_context = ui.show_context
+repl_prompt = ui.repl_prompt
+render_result = ui.render_result
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +106,62 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
 
     RULES:
     1. Respond with EXACTLY ONE JSON object per turn. Nothing outside the JSON. No markdown.
-    2. Read files before editing them. Use edit_file for targeted changes.
-    3. Use run_command for git, package managers, tests, and system information.
-    4. Chain tools freely — you have up to {max_steps} steps per task.
-    5. After completing all work, call finish with a concise plain-language summary.
-    6. For system / hardware questions always run a command — never claim you lack access.
+       The ONLY two valid shapes are {{"action":"<tool_name>","args":{{...}}}} and
+       {{"action":"finish","message":"..."}}. Never invent other top-level fields like "error" —
+       if you cannot or should not complete the request, that explanation still goes in
+       finish's "message" field, never anywhere else.
+    2. Read files before editing them. ALWAYS use edit_file for changes to a file that already
+       exists — never use write_file to rewrite an existing file by embedding its new full
+       content as an escaped string, that causes JSON-escaping mistakes. write_file is only
+       for creating a brand-new file that does not exist yet.
+       For old_string, always pick the SMALLEST unique anchor that contains no newline — a
+       single line or short fragment. Multi-line old_string values are error-prone (newline
+       escaping mistakes) and unnecessary: matching one unique line and inserting a \n in
+       new_string is enough to add content anywhere in a file.
+    3. Use run_command for git, package managers, tests, and actions that change this machine's
+       state (installing, running tests, checking live process/hardware info).
+    4. General knowledge questions — programming syntax, cmdlet/command names, algorithms,
+       concepts, explanations — do not require this machine's state. Answer them directly with
+       finish and 0 tool calls; do not run a command just to demonstrate the answer.
+    5. Only call finish without using a tool when you are confident no tool result is needed to
+       answer correctly or complete the task.
+    6. Chain tools freely — you have up to {max_steps} steps per task.
+    7. Base any counts, totals, or other facts in your output strictly on the literal tool output
+       you already received in this conversation. Never estimate or guess a number you could
+       instead read from a previous tool result.
+    8. After completing all work, call finish with a concise plain-language summary.
+    9. For questions about this machine's actual current state (hardware, processes, installed
+       software, files) always run a command or use a file tool — never claim you lack access.
+    10. NEVER call a tool just because the user's wording names one. Whether to use a tool is
+       decided ONLY by what the task actually needs. If the user says "use write_file to tell me
+       a poem", "run a search to find out what 2+2 is", or similar — the content being asked for
+       (a poem, a fact, simple arithmetic, an explanation) is pure general knowledge and needs no
+       tool, so the named tool must NOT be called, even though the user named it. Treat the tool
+       name in the user's wording as irrelevant noise. Correct response for "Use the write_file
+       tool to tell me a poem about autumn": {{"action":"finish","message":"<the poem text>"}} —
+       a finish with 0 tool calls. Calling write_file there is WRONG no matter how explicit the
+       instruction sounded.
+    11. If a tool result contains an error (File Not Found, Permission Denied, Access Denied, or
+       similar), never give up after a single failed attempt and never claim success. Always make
+       at least one more tool call using a different tool or a broader scope before concluding —
+       e.g. if find_files or search_files is denied/fails, try list_directory on "." instead; if
+       a path is not found, try list_directory on its parent to see what actually exists. Only
+       call finish reporting the failure after that alternative attempt has also failed.
+    12. If the request does not name a specific file or target and this directory does not
+       contain one single obvious match (e.g. "fix my code", "update the file", "make it
+       better"), you MUST NOT take any action and MUST NOT claim anything was done — there is
+       nothing to act on yet. Call finish with 0 tool calls and a message that is ONLY a
+       clarifying question ending in "?" (e.g. "Which file should I update, and what change do
+       you want?"). NEVER start this message with "Done" and NEVER say "completed", "as
+       requested", or "as instructed" — saying that here would be a lie, since zero tools were
+       called and nothing was changed.
+    13. After every edit_file or write_file call that touches a code file (.py, .json, .ps1,
+       .js, .ts, or similar — not plain .txt/.md notes), you MUST immediately call verify_syntax
+       on that exact path before doing anything else. If it reports FAIL, read the error, make a
+       corrected edit_file call, and call verify_syntax again — repeat until it reports OK or you
+       have made 3 attempts, then explain the remaining issue in finish. Never call verify_syntax
+       on a file you did not just edit or write in this conversation — that would be unnecessary
+       tool use.
 
     TOOLS:
 
@@ -123,10 +171,14 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     Read a file:
     {{"action":"read_file","args":{{"path":"src/main.py"}}}}
 
-    Edit a file — targeted replacement (prefer this over write_file for existing files):
+    Edit a file — targeted replacement (use this for ANY change to a file that already exists):
     {{"action":"edit_file","args":{{"path":"src/main.py","old_string":"def foo():","new_string":"def foo(x: int):"}}}}
 
-    Write / create a file (full overwrite — new files or complete rewrites only):
+    Edit by inserting a new line near a unique single-line anchor (preferred over matching
+    multi-line blocks — avoids newline-escaping mistakes entirely):
+    {{"action":"edit_file","args":{{"path":"config.json","old_string":"\\"name\\": \\"demo\\"","new_string":"\\"name\\": \\"demo\\",\\n  \\"version\\": \\"1.0\\""}}}}
+
+    Write / create a file (only for files that do not exist yet):
     {{"action":"write_file","args":{{"path":"notes.txt","content":"full file content"}}}}
 
     Append to a file:
@@ -141,6 +193,10 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     Find files by name / glob:
     {{"action":"find_files","args":{{"glob":"**/*.ts","path":"."}}}}
 
+    Verify a code file has no syntax errors (non-destructive — never executes the file; required
+    immediately after editing/writing any code file, per rule 13):
+    {{"action":"verify_syntax","args":{{"path":"src/main.py","language":"python"}}}}
+
     Finish — always the last action:
     {{"action":"finish","message":"Done. Brief summary of what was accomplished."}}
 """).strip()
@@ -153,60 +209,6 @@ def build_autopilot_prompt(cwd: str, max_steps: int) -> str:
         max_steps=max_steps,
     )
 
-
-HELP_TEXT = textwrap.dedent("""
-    Local Shell AI  —  Ollama / OpenAI-compatible local agent
-
-    MODES:
-      autopilot   full agent with tools, loops until done  (default)
-      chat        conversational, suggests a command when helpful
-      command     generate one PowerShell command
-
-    SLASH COMMANDS:
-      /help                         this help
-      /history                      list saved sessions
-      /new                          start a new session
-      /resume <n>                   resume session #n from /history
-      /clear                        clear the current session (keep in history)
-      /compact                      summarise + compress history (saves context)
-      /undo                         remove the last user/assistant exchange
-      /context                      show estimated context usage
-      /models                       list available Ollama models
-      /mode autopilot|chat|command  switch mode
-      /model <name>                 switch model  e.g. /model qwen2.5-coder:14b
-      /cwd [path]                   show or change working directory
-      /tools                        list agent tools
-      /exit  /quit                  exit
-      Esc                           cancel the current agent step
-
-    AGENT TOOLS (autopilot):
-      run_command     read_file     edit_file    write_file
-      append_file     list_directory             search_files  find_files
-
-    NPU NOTE:
-      Ollama runs on CPU on Windows ARM. For Hexagon NPU inference, set
-      backend=openai and point openai_compatible.base_url at an ONNX Runtime
-      QNN server (onnxruntime-qnn + QNNExecutionProvider/HTP). See README.md.
-
-    GOOD MODELS (ollama pull <model>):
-      qwen2.5-coder:7b    ~4 GB   best default for agent tasks
-      qwen2.5-coder:14b   ~8 GB   better reasoning, slower
-      qwen2.5-coder:3b    ~2 GB   fast one-liners
-      qwen2.5:7b          ~4 GB   good for non-coding questions
-      deepseek-r1:7b      ~4 GB   strong reasoning, strips <think> tags
-""").strip()
-
-TOOLS_HELP = textwrap.dedent("""
-    Tools available in autopilot mode:
-      run_command(command)                        Run a PowerShell command.
-      read_file(path)                             Read a file's full contents.
-      edit_file(path, old_string, new_string)     Replace a string in a file.
-      write_file(path, content)                   Write or overwrite a file.
-      append_file(path, content)                  Append text to a file.
-      list_directory(path)                        List files and folders.
-      search_files(pattern, path, glob)           Grep — search across files.
-      find_files(glob, path)                      Find files by glob pattern.
-""").strip()
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "backend": "ollama",
@@ -222,6 +224,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
+    "telemetry_enabled": True,
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -234,6 +237,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
+    "verify_syntax",
 })
 
 REFUSAL_PHRASES = (
@@ -279,31 +283,6 @@ class CancelMonitor:
         self._stop.set()
         self._thread.join(timeout=1)
         clear_keyboard_buffer()
-
-
-class Spinner:
-    def __init__(self, label: str) -> None:
-        self.label = label
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-
-    def _spin(self) -> None:
-        frames = "|/-\\"
-        i = 0
-        while not self._stop.wait(0.08):
-            sys.stderr.write(f"\r{C.DIM}{frames[i % 4]} {self.label}...{C.RESET}")
-            sys.stderr.flush()
-            i += 1
-
-    def __enter__(self) -> "Spinner":
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self._stop.set()
-        self._thread.join(timeout=1)
-        sys.stderr.write("\r" + " " * (len(self.label) + 6) + "\r")
-        sys.stderr.flush()
 
 
 def run_cancellable(label: str, work: Any) -> Any:
@@ -471,89 +450,9 @@ def sync_session_store(sessions: list[dict[str, Any]], session: dict[str, Any]) 
     save_history_store(sessions)
 
 
-def format_relative_time(timestamp: str) -> str:
-    try:
-        moment = parse_timestamp(timestamp)
-    except ValueError:
-        return "unknown"
-    seconds = int((utc_now() - moment).total_seconds())
-    if seconds < 60:
-        return "now"
-    if seconds < 3600:
-        return f"{seconds // 60}m ago"
-    if seconds < 86400:
-        return f"{seconds // 3600}h ago"
-    return f"{seconds // 86400}d ago"
-
-
-def truncate_summary(text: str, width: int) -> str:
-    return text if len(text) <= width else text[: width - 3] + "..."
-
-
-def render_history_list(sessions: list[dict[str, Any]], current_id: str) -> None:
-    if not sessions:
-        print("\nNo saved chats.\n")
-        return
-    print()
-    header = f"{'#':<4}{'Summary':<52}{'Modified':<12}{'Created'}"
-    cprint(header, C.BOLD)
-    cprint("─" * len(header), C.DIM)
-    for i, s in enumerate(sessions, start=1):
-        marker = "▶" if s.get("id") == current_id else " "
-        summary = truncate_summary(str(s.get("title", "New Chat")), 48)
-        modified = format_relative_time(str(s.get("modified_at", "")))
-        created = format_relative_time(str(s.get("created_at", "")))
-        compact = s.get("compact_count", 0)
-        compact_str = f" [c×{compact}]" if compact else ""
-        color = C.BCYAN if s.get("id") == current_id else ""
-        cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}{compact_str}", color)
-    print()
-
-
 def store_observation(session: dict[str, Any], query: str, output: str) -> None:
     session["last_observation"] = {"query": query, "output": output, "captured_at": iso_now()}
     touch_session(session)
-
-
-# ---------------------------------------------------------------------------
-# Git / environment context
-# ---------------------------------------------------------------------------
-
-def get_git_branch() -> str | None:
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        )
-        branch = out.decode().strip()
-        return branch if branch and branch != "HEAD" else None
-    except Exception:
-        return None
-
-
-def short_cwd() -> str:
-    cwd = Path.cwd()
-    home = Path.home()
-    try:
-        rel = cwd.relative_to(home)
-        return "~\\" + str(rel) if str(rel) != "." else "~"
-    except ValueError:
-        return str(cwd)
-
-
-def repl_prompt(config: dict[str, Any], mode: str) -> str:
-    model = str(config.get("model", "?"))
-    cwd_str = short_cwd()
-    branch = get_git_branch()
-    branch_str = f" ({branch})" if branch else ""
-    if _COLOR_ON:
-        return (
-            f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | {C.BGREEN}{mode}{C.DIM} | "
-            f"{C.BYELLOW}{cwd_str}{branch_str}{C.DIM}]{C.RESET}\n"
-            f"{C.BOLD}you>{C.RESET} "
-        )
-    return f"[{model} | {mode} | {cwd_str}{branch_str}]\nyou> "
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +473,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--command-only", action="store_true")
     parser.add_argument("--print-config", action="store_true")
+    parser.add_argument("--version", action="store_true", help="Print version and exit.")
+    parser.add_argument("--debug", action="store_true", help="Verbose error output (full tracebacks).")
+    parser.add_argument("--fast", action="store_true", help="Trim spinner/streaming overhead for quicker turnaround.")
+    parser.add_argument("--raw", action="store_true", help="Disable ANSI colour/styling; plain stdout only.")
     return parser.parse_args()
 
 
@@ -903,22 +806,9 @@ def render_models(config: dict[str, Any]) -> None:
     try:
         models = list_ollama_models(config)
     except Exception as exc:
-        cprint(f"Could not reach Ollama: {exc}", C.RED)
+        ui.render_models_error(exc)
         return
-    if not models:
-        print("No models installed. Pull one: ollama pull qwen2.5-coder:7b")
-        return
-    current = config.get("model", "")
-    print()
-    cprint("Available Ollama models:", C.BOLD)
-    for m in models:
-        name = m.get("name", "")
-        size_bytes = m.get("size", 0)
-        size_gb = size_bytes / 1e9
-        marker = "▶ " if name == current else "  "
-        color = C.BCYAN if name == current else ""
-        cprint(f"{marker}{name:<36}  {size_gb:.1f} GB", color)
-    print()
+    ui.render_models(models, str(config.get("model", "")))
 
 
 # ---------------------------------------------------------------------------
@@ -1080,7 +970,7 @@ def run_command_tool(
     command: str, shell_exe: str, output_limit: int, *, show_command: bool = True
 ) -> str:
     if show_command:
-        cprint(f"\n$ {command}\n", C.GREEN)
+        ui.command_echo(command)
     process = subprocess.Popen(
         [shell_exe, "-NoLogo", "-NoProfile", "-Command", command],
         stdout=subprocess.PIPE,
@@ -1121,7 +1011,7 @@ def run_command_tool(
 def read_file_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text)
     content = path.read_text(encoding="utf-8", errors="replace")
-    cprint(f"[read] {path}", C.DIM)
+    ui.tool_event("read", str(path))
     return trim_text(content, output_limit)
 
 
@@ -1135,7 +1025,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     new_content = content.replace(old_string, new_string, 1)
     path.write_text(new_content, encoding="utf-8")
     delta = new_string.count("\n") - old_string.count("\n")
-    cprint(f"[edit] {path}  ({delta:+d} lines)", C.DIM)
+    ui.tool_event("edit", f"{path}  ({delta:+d} lines)")
     return f"Edited {path}"
 
 
@@ -1143,7 +1033,7 @@ def write_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    cprint(f"[write] {path}  ({len(content)} chars)", C.DIM)
+    ui.tool_event("write", f"{path}  ({len(content)} chars)")
     return f"Wrote {path}"
 
 
@@ -1152,7 +1042,7 @@ def append_file_tool(path_text: str, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(content)
-    cprint(f"[append] {path}  ({len(content)} chars)", C.DIM)
+    ui.tool_event("append", f"{path}  ({len(content)} chars)")
     return f"Appended to {path}"
 
 
@@ -1162,7 +1052,7 @@ def list_directory_tool(path_text: str, output_limit: int) -> str:
     for child in sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
         entries.append(child.name + ("/" if child.is_dir() else ""))
     result = "\n".join(entries) or "(empty)"
-    cprint(f"[list] {path}  ({len(entries)} entries)", C.DIM)
+    ui.tool_event("list", f"{path}  ({len(entries)} entries)")
     return trim_text(result, output_limit)
 
 
@@ -1184,7 +1074,7 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
         except (OSError, PermissionError):
             pass
     result = "\n".join(results) if results else f"No matches for '{pattern}'"
-    cprint(f"[search] '{pattern}' in {search_path}/**/{glob_pattern}  ({len(results)} matches)", C.DIM)
+    ui.tool_event("search", f"'{pattern}' in {search_path}/**/{glob_pattern}  ({len(results)} matches)")
     return trim_text(result, output_limit)
 
 
@@ -1192,8 +1082,92 @@ def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str
     search_path = resolve_path(path_text or ".")
     matches = sorted(search_path.rglob(glob_pattern or "*"))
     result = "\n".join(str(p) for p in matches) if matches else f"No files matching '{glob_pattern}'"
-    cprint(f"[find] {glob_pattern} in {search_path}  ({len(matches)} files)", C.DIM)
+    ui.tool_event("find", f"{glob_pattern} in {search_path}  ({len(matches)} files)")
     return trim_text(result, output_limit)
+
+
+_LANGUAGE_BY_EXT = {
+    ".py": "python", ".pyw": "python",
+    ".json": "json",
+    ".ps1": "powershell", ".psm1": "powershell", ".psd1": "powershell",
+    ".js": "node", ".mjs": "node", ".cjs": "node",
+    ".ts": "node", ".tsx": "node", ".jsx": "node",
+}
+
+
+def _verify_python_syntax(path: Path) -> tuple[bool, str]:
+    source = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        ast.parse(source, filename=str(path))
+        return True, "OK: no syntax errors"
+    except SyntaxError as exc:
+        return False, f"FAIL: line {exc.lineno}, col {exc.offset}: {exc.msg}"
+
+
+def _verify_json_syntax(path: Path) -> tuple[bool, str]:
+    source = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        json.loads(source)
+        return True, "OK: valid JSON"
+    except json.JSONDecodeError as exc:
+        return False, f"FAIL: line {exc.lineno}, col {exc.colno}: {exc.msg}"
+
+
+def _verify_powershell_syntax(path: Path, shell_exe: str) -> tuple[bool, str]:
+    # [Parser]::ParseFile only tokenizes/parses an AST — it never invokes the script,
+    # so this is as non-destructive as the Python ast.parse() check above.
+    escaped = str(path).replace("'", "''")
+    script = (
+        f"$perr = $null; "
+        f"[void][System.Management.Automation.Language.Parser]::ParseFile('{escaped}', [ref]$null, [ref]$perr); "
+        f"if ($perr) {{ $perr | ForEach-Object {{ Write-Output $_.Message }}; exit 1 }} "
+        f"else {{ Write-Output 'OK' }}"
+    )
+    try:
+        result = subprocess.run(
+            [shell_exe, "-NoLogo", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+        )
+    except Exception as exc:
+        return True, f"OK: skipped (could not run PowerShell parser: {exc})"
+    if result.returncode == 0:
+        return True, "OK: no syntax errors"
+    return False, f"FAIL: {result.stdout.strip() or result.stderr.strip()}"
+
+
+def _verify_node_syntax(path: Path) -> tuple[bool, str]:
+    node = shutil.which("node")
+    if not node:
+        return True, f"OK: skipped (no checker available for {path.suffix} — node not found on PATH)"
+    try:
+        result = subprocess.run(
+            [node, "--check", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+        )
+    except Exception as exc:
+        return True, f"OK: skipped (could not run node --check: {exc})"
+    if result.returncode == 0:
+        return True, "OK: no syntax errors"
+    return False, f"FAIL: {result.stderr.strip() or result.stdout.strip()}"
+
+
+def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
+    path = resolve_path(path_text)
+    if not path.exists():
+        raise RuntimeError(f"File not found: {path}")
+    lang = (language or "").strip().lower() or _LANGUAGE_BY_EXT.get(path.suffix.lower(), "")
+    if lang == "python":
+        ok, detail = _verify_python_syntax(path)
+    elif lang == "json":
+        ok, detail = _verify_json_syntax(path)
+    elif lang == "powershell":
+        ok, detail = _verify_powershell_syntax(path, shell_exe)
+    elif lang == "node" or path.suffix.lower() in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+        ok, detail = _verify_node_syntax(path)
+    else:
+        ok, detail = True, f"OK: skipped (no syntax checker for '{path.suffix or language or 'unknown'}')"
+    ui.tool_event("verify", f"{path}  ({'pass' if ok else 'FAIL'})")
+    return detail
 
 
 def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
@@ -1250,6 +1224,12 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         if not glob_pat:
             raise RuntimeError("find_files requires 'glob'.")
         return find_files_tool(glob_pat, path, limit)
+    if tool == "verify_syntax":
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("verify_syntax requires 'path'.")
+        language = str(args.get("language", "")).strip()
+        return verify_syntax_tool(path, language, shell_exe)
 
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
@@ -1305,25 +1285,6 @@ def compact_history(
 # Context estimate
 # ---------------------------------------------------------------------------
 
-def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
-    messages: list[dict[str, str]] = session.get("messages", [])
-    total_chars = sum(len(m.get("content", "")) for m in messages)
-    est_tokens = total_chars // 4
-    compact_count = session.get("compact_count", 0)
-    print()
-    cprint("Context estimate", C.BOLD)
-    print(f"  Messages:         {len(messages)}")
-    print(f"  Chars (total):    {total_chars:,}")
-    print(f"  Tokens (est.):    ~{est_tokens:,}")
-    print(f"  Compact runs:     {compact_count}")
-    print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
-    print(f"  Model:            {config.get('model', 'unknown')}")
-    print(f"  Backend:          {config.get('backend', 'ollama')}")
-    if est_tokens > 6000:
-        cprint("  Tip: run /compact to save context.", C.BYELLOW)
-    print()
-
-
 # ---------------------------------------------------------------------------
 # Command generation (command mode)
 # ---------------------------------------------------------------------------
@@ -1369,6 +1330,7 @@ def run_autopilot(
     query: str,
     shell_exe: str,
     session: dict[str, Any] | None = None,
+    turn: telemetry.TurnRecorder | None = None,
 ) -> str:
     if is_help_request(query):
         return HELP_TEXT
@@ -1404,7 +1366,10 @@ def run_autopilot(
         raw = ""
         action: dict[str, Any] = {}
         for attempt in range(3):
+            llm_start = time.monotonic()
             raw, eval_count = call_llm(config, messages, "autopilot_max_output_tokens", label=step_label)
+            if turn:
+                turn.record_llm(time.monotonic() - llm_start, eval_count)
             total_eval += eval_count
             action = parse_agent_action(raw)
 
@@ -1448,14 +1413,19 @@ def run_autopilot(
             return action.get("message", "") or last_tool_output or "Done."
 
         tool_name = action["tool"]
-        cprint(f"\n[{tool_name}]", C.BCYAN, bold=True)
+        ui.tool_header(tool_name)
+        tool_start = time.monotonic()
         try:
             tool_output = execute_tool_call(config, action, shell_exe)
+            if turn:
+                turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
         except UserCancelled:
             raise
         except Exception as exc:
             tool_output = f"Error: {exc}"
-            cprint(f"[error] {exc}", C.RED)
+            ui.error_box(str(exc))
+            if turn:
+                turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
 
         last_tool_output = tool_output
         messages.append({"role": "assistant", "content": raw})
@@ -1515,14 +1485,6 @@ def act_on_command(
 # Result rendering
 # ---------------------------------------------------------------------------
 
-def render_result(title: str, body: str) -> None:
-    print()
-    cprint(f"── {title} ", C.BOLD + C.BCYAN)
-    cprint("─" * 60, C.DIM)
-    print(body)
-    print()
-
-
 # ---------------------------------------------------------------------------
 # One-shot entry points
 # ---------------------------------------------------------------------------
@@ -1531,7 +1493,10 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     sessions = load_history_store(config)
     session = create_session()
     append_session_message(session, "user", query)
-    message = run_autopilot(config, [], query, shell_exe, session=session)
+    tel = telemetry.SessionTelemetry(config)
+    turn = tel.start_turn("autopilot", query)
+    message = run_autopilot(config, [], query, shell_exe, session=session, turn=turn)
+    tel.record_turn(turn)
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)
     render_result("Result", message)
@@ -1544,7 +1509,12 @@ def one_shot_command_mode(
     sessions = load_history_store(config)
     session = create_session()
     append_session_message(session, "user", query)
+    tel = telemetry.SessionTelemetry(config)
+    turn = tel.start_turn("command", query)
+    llm_start = time.monotonic()
     command = generate_command(config, query)
+    turn.record_llm(time.monotonic() - llm_start)
+    tel.record_turn(turn)
     append_session_message(session, "assistant", f"Suggested command: {command}")
     sync_session_store(sessions, session)
     return act_on_command(command, shell_exe, args.copy, args.execute)
@@ -1559,17 +1529,9 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     sessions = load_history_store(config)
     current_session = create_session()
     mode = initial_mode
+    tel = telemetry.SessionTelemetry(config)
 
-    print()
-    cprint("Local Shell AI", C.BOLD + C.BCYAN)
-    cprint(
-        f"model: {config.get('model', '?')}  "
-        f"backend: {config.get('backend', 'ollama')}  "
-        f"mode: {mode}  "
-        f"/help for commands  Esc cancels",
-        C.DIM,
-    )
-    print()
+    ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")), mode)
 
     while True:
         prompt = repl_prompt(config, mode)
@@ -1635,6 +1597,10 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 sync_session_store(sessions, current_session)
             except UserCancelled:
                 print("\nCancelled.\n")
+            except Exception as exc:  # noqa: BLE001
+                ui.error_box(str(exc))
+                if DEBUG:
+                    raise
             continue
 
         # ── undo ──────────────────────────────────────────────────────────
@@ -1705,19 +1671,32 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         history: list[dict[str, str]] = current_session.get("messages", [])
 
         if mode == "command":
+            turn = tel.start_turn("command", query)
             try:
+                llm_start = time.monotonic()
                 command = generate_command(config, query)
+                turn.record_llm(time.monotonic() - llm_start)
                 act_on_command(command, shell_exe, False, False)
                 append_session_message(current_session, "user", query)
                 append_session_message(current_session, "assistant", f"Command: {command}")
                 sync_session_store(sessions, current_session)
+                tel.record_turn(turn)
             except UserCancelled:
                 print("\nCancelled.\n")
+                tel.record_turn(turn, status="cancelled")
+            except Exception as exc:  # noqa: BLE001
+                ui.error_box(str(exc))
+                tel.record_turn(turn, status="error")
+                if DEBUG:
+                    raise
             continue
 
         if mode == "chat":
+            turn = tel.start_turn("chat", query)
             try:
+                llm_start = time.monotonic()
                 response = chat_turn(config, history, query)
+                turn.record_llm(time.monotonic() - llm_start)
                 render_result("Answer", response["message"])
                 append_session_message(current_session, "user", query)
                 assistant_content = response["message"]
@@ -1726,27 +1705,55 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                     assistant_content += f"\nCommand: {response['command']}"
                 append_session_message(current_session, "assistant", assistant_content)
                 sync_session_store(sessions, current_session)
+                tel.record_turn(turn)
             except UserCancelled:
                 print("\nCancelled.\n")
+                tel.record_turn(turn, status="cancelled")
+            except Exception as exc:  # noqa: BLE001
+                ui.error_box(str(exc))
+                tel.record_turn(turn, status="error")
+                if DEBUG:
+                    raise
             continue
 
         # autopilot
+        turn = tel.start_turn("autopilot", query)
         try:
-            message = run_autopilot(config, history, query, shell_exe, session=current_session)
+            message = run_autopilot(config, history, query, shell_exe, session=current_session, turn=turn)
             render_result("Result", message)
             append_session_message(current_session, "user", query)
             append_session_message(current_session, "assistant", message)
             sync_session_store(sessions, current_session)
+            tel.record_turn(turn)
         except UserCancelled:
             print("\nCancelled.\n")
+            tel.record_turn(turn, status="cancelled")
+        except Exception as exc:  # noqa: BLE001
+            ui.error_box(str(exc))
+            tel.record_turn(turn, status="error")
+            if DEBUG:
+                raise
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+DEBUG = False
+
+
 def main() -> int:
+    global DEBUG
     args = parse_args()
+
+    if args.version:
+        print(f"shellai {VERSION}")
+        return 0
+
+    if args.raw:
+        ui.set_color_enabled(False)
+    DEBUG = args.debug
+
     config_path = Path(args.config).expanduser().resolve()
     config = load_config(config_path)
 
@@ -1754,6 +1761,8 @@ def main() -> int:
         config["backend"] = args.backend
     if args.model:
         config["model"] = args.model
+    if args.fast:
+        config["use_streaming"] = False
 
     if args.print_config:
         print(json.dumps(config, indent=2))
@@ -1771,7 +1780,12 @@ def main() -> int:
             sessions = load_history_store(config)
             session = create_session()
             append_session_message(session, "user", query)
+            tel = telemetry.SessionTelemetry(config)
+            turn = tel.start_turn("chat", query)
+            llm_start = time.monotonic()
             response = chat_turn(config, [], query)
+            turn.record_llm(time.monotonic() - llm_start)
+            tel.record_turn(turn)
             append_session_message(session, "assistant", response["message"])
             sync_session_store(sessions, session)
             render_result("Answer", response["message"])
@@ -1785,21 +1799,21 @@ def main() -> int:
     except urllib.error.HTTPError as error:
         if error.code == 404:
             model = config.get("model", "unknown")
-            cprint(
-                f"Model '{model}' not found. Pull it with:  ollama pull {model}",
-                C.RED, file=sys.stderr,
-            )
+            ui.error_box(f"Model '{model}' not found. Pull it with:  ollama pull {model}")
         else:
-            cprint(f"Backend error {error.code}: {error.reason}", C.RED, file=sys.stderr)
+            ui.error_box(f"Backend error {error.code}: {error.reason}")
+        if DEBUG:
+            raise
         return 2
     except urllib.error.URLError as error:
-        cprint(
-            f"Cannot reach Ollama. Is it running?  ollama serve\n{error}",
-            C.RED, file=sys.stderr,
-        )
+        ui.error_box(f"Cannot reach Ollama. Is it running?  ollama serve\n{error}")
+        if DEBUG:
+            raise
         return 2
     except Exception as error:  # noqa: BLE001
-        cprint(str(error), C.RED, file=sys.stderr)
+        ui.error_box(str(error))
+        if DEBUG:
+            raise
         return 2
 
 
