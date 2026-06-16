@@ -3,6 +3,9 @@ history.json
 shellai.json
 shellai_npurun.json
 *.log
+eval_results.json
+eval_extended_results.json
+.shellai/
 
 # Third-party clone with its own git history; see README for setup
 npurun/
