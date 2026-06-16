@@ -1,0 +1,1807 @@
+#!/usr/bin/env python3
+"""shellai — local Ollama/OpenAI-compatible CLI agent.
+
+Improvements over v1:
+  - Streaming with live token counter (Ollama backend)
+  - ANSI colour output (auto-detected, respects NO_COLOR)
+  - /compact  /undo  /context  /models  /cwd  slash commands
+  - Git branch shown in REPL prompt
+  - <think>...</think> stripping for reasoning models
+  - JSON parse retry on malformed agent output (up to 2 retries)
+  - Higher defaults: max_agent_steps=15, autopilot_max_output_tokens=2048
+  - Date + CWD injected into the autopilot system prompt each turn
+  - Better output formatting with labelled sections
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import msvcrt
+import os
+import queue
+import re
+import shutil
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+import urllib.error
+import urllib.request
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
+HISTORY_PATH = APP_DIR / "history.json"
+DEFAULT_TIMEOUT_SECONDS = 300
+
+# ---------------------------------------------------------------------------
+# ANSI colour
+# ---------------------------------------------------------------------------
+
+_COLOR_ON = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+class C:
+    RESET   = "\033[0m"   if _COLOR_ON else ""
+    BOLD    = "\033[1m"   if _COLOR_ON else ""
+    DIM     = "\033[2m"   if _COLOR_ON else ""
+    RED     = "\033[31m"  if _COLOR_ON else ""
+    GREEN   = "\033[32m"  if _COLOR_ON else ""
+    YELLOW  = "\033[33m"  if _COLOR_ON else ""
+    BLUE    = "\033[34m"  if _COLOR_ON else ""
+    MAGENTA = "\033[35m"  if _COLOR_ON else ""
+    CYAN    = "\033[36m"  if _COLOR_ON else ""
+    BGREEN  = "\033[92m"  if _COLOR_ON else ""
+    BYELLOW = "\033[93m"  if _COLOR_ON else ""
+    BCYAN   = "\033[96m"  if _COLOR_ON else ""
+    BWHITE  = "\033[97m"  if _COLOR_ON else ""
+
+
+def cprint(text: str, color: str = "", bold: bool = False, file: Any = None) -> None:
+    prefix = (C.BOLD if bold else "") + color
+    suffix = C.RESET if prefix else ""
+    print(f"{prefix}{text}{suffix}", file=file or sys.stdout)
+
+
+# ---------------------------------------------------------------------------
+# System prompts
+# ---------------------------------------------------------------------------
+
+COMMAND_SYSTEM_PROMPT = textwrap.dedent("""
+    You are a Windows PowerShell command generator.
+    Convert the user's request into one safe, concrete PowerShell command for Windows.
+    - Return exactly one command. No markdown, no code fences, no explanation.
+    - Prefer native PowerShell cmdlets over cmd.exe aliases.
+    - Always quote paths that contain spaces.
+    - If the request is ambiguous, choose the safest useful interpretation.
+""").strip()
+
+CHAT_SYSTEM_PROMPT = textwrap.dedent("""
+    You are a local terminal assistant for Windows PowerShell.
+    Answer questions directly and concisely. Suggest a PowerShell command only when it genuinely helps.
+
+    Return valid JSON:
+    {"message":"your response","command":"one PowerShell command or empty string"}
+""").strip()
+
+COMPACT_SYSTEM_PROMPT = textwrap.dedent("""
+    Produce a compact summary of this conversation for context compression.
+    Include:
+    - Task / goal that was worked on
+    - Key decisions and findings
+    - Files created or edited (full paths)
+    - Commands run and their outcomes
+    - Current state and what still needs to be done
+    Be dense — this replaces the full history in future turns.
+    Return plain text, no JSON.
+""").strip()
+
+_AUTOPILOT_TEMPLATE = textwrap.dedent("""
+    You are a powerful local coding and system agent running on Windows 11 / PowerShell.
+    Date: {date}. Working directory: {cwd}.
+    You have full access to the filesystem and shell via the tools below.
+
+    RULES:
+    1. Respond with EXACTLY ONE JSON object per turn. Nothing outside the JSON. No markdown.
+    2. Read files before editing them. Use edit_file for targeted changes.
+    3. Use run_command for git, package managers, tests, and system information.
+    4. Chain tools freely — you have up to {max_steps} steps per task.
+    5. After completing all work, call finish with a concise plain-language summary.
+    6. For system / hardware questions always run a command — never claim you lack access.
+
+    TOOLS:
+
+    Run a PowerShell command:
+    {{"action":"run_command","args":{{"command":"Get-Process | Sort CPU -Desc | Select -First 10"}}}}
+
+    Read a file:
+    {{"action":"read_file","args":{{"path":"src/main.py"}}}}
+
+    Edit a file — targeted replacement (prefer this over write_file for existing files):
+    {{"action":"edit_file","args":{{"path":"src/main.py","old_string":"def foo():","new_string":"def foo(x: int):"}}}}
+
+    Write / create a file (full overwrite — new files or complete rewrites only):
+    {{"action":"write_file","args":{{"path":"notes.txt","content":"full file content"}}}}
+
+    Append to a file:
+    {{"action":"append_file","args":{{"path":"log.txt","content":"new line\\n"}}}}
+
+    List a directory:
+    {{"action":"list_directory","args":{{"path":"."}}}}
+
+    Search for text in files (regex grep):
+    {{"action":"search_files","args":{{"pattern":"def main","path":".","glob":"*.py"}}}}
+
+    Find files by name / glob:
+    {{"action":"find_files","args":{{"glob":"**/*.ts","path":"."}}}}
+
+    Finish — always the last action:
+    {{"action":"finish","message":"Done. Brief summary of what was accomplished."}}
+""").strip()
+
+
+def build_autopilot_prompt(cwd: str, max_steps: int) -> str:
+    return _AUTOPILOT_TEMPLATE.format(
+        date=datetime.now().strftime("%Y-%m-%d"),
+        cwd=cwd,
+        max_steps=max_steps,
+    )
+
+
+HELP_TEXT = textwrap.dedent("""
+    Local Shell AI  —  Ollama / OpenAI-compatible local agent
+
+    MODES:
+      autopilot   full agent with tools, loops until done  (default)
+      chat        conversational, suggests a command when helpful
+      command     generate one PowerShell command
+
+    SLASH COMMANDS:
+      /help                         this help
+      /history                      list saved sessions
+      /new                          start a new session
+      /resume <n>                   resume session #n from /history
+      /clear                        clear the current session (keep in history)
+      /compact                      summarise + compress history (saves context)
+      /undo                         remove the last user/assistant exchange
+      /context                      show estimated context usage
+      /models                       list available Ollama models
+      /mode autopilot|chat|command  switch mode
+      /model <name>                 switch model  e.g. /model qwen2.5-coder:14b
+      /cwd [path]                   show or change working directory
+      /tools                        list agent tools
+      /exit  /quit                  exit
+      Esc                           cancel the current agent step
+
+    AGENT TOOLS (autopilot):
+      run_command     read_file     edit_file    write_file
+      append_file     list_directory             search_files  find_files
+
+    NPU NOTE:
+      Ollama runs on CPU on Windows ARM. For Hexagon NPU inference, set
+      backend=openai and point openai_compatible.base_url at an ONNX Runtime
+      QNN server (onnxruntime-qnn + QNNExecutionProvider/HTP). See README.md.
+
+    GOOD MODELS (ollama pull <model>):
+      qwen2.5-coder:7b    ~4 GB   best default for agent tasks
+      qwen2.5-coder:14b   ~8 GB   better reasoning, slower
+      qwen2.5-coder:3b    ~2 GB   fast one-liners
+      qwen2.5:7b          ~4 GB   good for non-coding questions
+      deepseek-r1:7b      ~4 GB   strong reasoning, strips <think> tags
+""").strip()
+
+TOOLS_HELP = textwrap.dedent("""
+    Tools available in autopilot mode:
+      run_command(command)                        Run a PowerShell command.
+      read_file(path)                             Read a file's full contents.
+      edit_file(path, old_string, new_string)     Replace a string in a file.
+      write_file(path, content)                   Write or overwrite a file.
+      append_file(path, content)                  Append text to a file.
+      list_directory(path)                        List files and folders.
+      search_files(pattern, path, glob)           Grep — search across files.
+      find_files(glob, path)                      Find files by glob pattern.
+""").strip()
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "backend": "ollama",
+    "model": "qwen2.5-coder:7b",
+    "temperature": 0.1,
+    "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+    "max_output_tokens": 512,
+    "chat_max_output_tokens": 1024,
+    "autopilot_max_output_tokens": 2048,
+    "max_agent_steps": 15,
+    "tool_output_limit": 12000,
+    "stream_delay_ms": 0,
+    "history_retention_days": 30,
+    "shell_exe": "",
+    "use_streaming": True,
+    "system_prompt": COMMAND_SYSTEM_PROMPT,
+    "chat_system_prompt": CHAT_SYSTEM_PROMPT,
+    "ollama": {"host": "http://127.0.0.1:11434"},
+    "openai_compatible": {
+        "base_url": "http://127.0.0.1:8000/v1",
+        "api_key": "local",
+    },
+}
+
+TOOL_NAMES = frozenset({
+    "run_command", "read_file", "edit_file", "write_file",
+    "append_file", "list_directory", "search_files", "find_files",
+})
+
+REFUSAL_PHRASES = (
+    "i don't have access", "i do not have access", "i cannot access",
+    "i'm sorry", "i am sorry", "unable to access",
+    "don't have the ability", "do not have the ability",
+    "i'm not able", "i am not able",
+    "as an ai", "as a language model",
+)
+
+
+# ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+
+class UserCancelled(Exception):
+    pass
+
+
+def clear_keyboard_buffer() -> None:
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+
+
+class CancelMonitor:
+    def __init__(self) -> None:
+        self.cancelled = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+
+    def _watch(self) -> None:
+        while not self._stop.wait(0.05):
+            if msvcrt.kbhit():
+                if msvcrt.getwch() == "\x1b":
+                    self.cancelled.set()
+
+    def __enter__(self) -> "CancelMonitor":
+        clear_keyboard_buffer()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=1)
+        clear_keyboard_buffer()
+
+
+class Spinner:
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self) -> None:
+        frames = "|/-\\"
+        i = 0
+        while not self._stop.wait(0.08):
+            sys.stderr.write(f"\r{C.DIM}{frames[i % 4]} {self.label}...{C.RESET}")
+            sys.stderr.flush()
+            i += 1
+
+    def __enter__(self) -> "Spinner":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=1)
+        sys.stderr.write("\r" + " " * (len(self.label) + 6) + "\r")
+        sys.stderr.flush()
+
+
+def run_cancellable(label: str, work: Any) -> Any:
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def worker() -> None:
+        try:
+            result["value"] = work()
+        except BaseException as exc:  # noqa: BLE001
+            error["value"] = exc
+
+    thread = threading.Thread(target=worker, daemon=True)
+    with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
+        thread.start()
+        while thread.is_alive():
+            if monitor.cancelled.is_set():
+                raise UserCancelled()
+            thread.join(0.05)
+
+    if "value" in error:
+        raise error["value"]
+    return result.get("value")
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def ensure_default_config(path: Path) -> None:
+    if not path.exists():
+        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    ensure_default_config(path)
+    with path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    return deep_merge(DEFAULT_CONFIG, data)
+
+
+# ---------------------------------------------------------------------------
+# Session / History
+# ---------------------------------------------------------------------------
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_now() -> str:
+    return utc_now().isoformat()
+
+
+def parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def create_session() -> dict[str, Any]:
+    now = iso_now()
+    return {
+        "id": str(uuid4()),
+        "title": "New Chat",
+        "created_at": now,
+        "modified_at": now,
+        "messages": [],
+        "last_observation": None,
+        "compact_count": 0,
+    }
+
+
+def session_has_messages(session: dict[str, Any]) -> bool:
+    msgs = session.get("messages")
+    return isinstance(msgs, list) and len(msgs) > 0
+
+
+def generate_session_title(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9\s-]", "", text).strip()
+    words = [w for w in cleaned.split() if w]
+    if not words:
+        return "New Chat"
+    return " ".join(w.upper() if w.isupper() else w.capitalize() for w in words[:6])
+
+
+def touch_session(session: dict[str, Any]) -> None:
+    session["modified_at"] = iso_now()
+
+
+def append_session_message(session: dict[str, Any], role: str, content: str) -> None:
+    msgs = session.setdefault("messages", [])
+    if not isinstance(msgs, list):
+        session["messages"] = []
+        msgs = session["messages"]
+    if not session_has_messages(session) and role == "user":
+        session["title"] = generate_session_title(content)
+    msgs.append({"role": role, "content": content})
+    touch_session(session)
+
+
+def sort_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(sessions, key=lambda s: s.get("modified_at", ""), reverse=True)
+
+
+def save_history_store(sessions: list[dict[str, Any]]) -> None:
+    HISTORY_PATH.write_text(
+        json.dumps({"sessions": sort_sessions(sessions)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    if HISTORY_PATH.exists():
+        with HISTORY_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        raw = data.get("sessions", []) if isinstance(data, dict) else []
+        sessions = [s for s in raw if isinstance(s, dict)]
+
+    cutoff = utc_now() - timedelta(days=int(config.get("history_retention_days", 30)))
+    filtered: list[dict[str, Any]] = []
+    changed = False
+    for s in sessions:
+        try:
+            modified_at = parse_timestamp(str(s.get("modified_at", "")))
+        except ValueError:
+            changed = True
+            continue
+        if modified_at < cutoff:
+            changed = True
+            continue
+        s.setdefault("title", "New Chat")
+        s.setdefault("created_at", s.get("modified_at", iso_now()))
+        s.setdefault("messages", [])
+        s.setdefault("last_observation", None)
+        s.setdefault("compact_count", 0)
+        filtered.append(s)
+
+    filtered = sort_sessions(filtered)
+    if changed:
+        save_history_store(filtered)
+    return filtered
+
+
+def upsert_session(sessions: list[dict[str, Any]], session: dict[str, Any]) -> None:
+    if not session_has_messages(session):
+        return
+    for i, existing in enumerate(sessions):
+        if existing.get("id") == session.get("id"):
+            sessions[i] = session
+            return
+    sessions.append(session)
+
+
+def sync_session_store(sessions: list[dict[str, Any]], session: dict[str, Any]) -> None:
+    upsert_session(sessions, session)
+    save_history_store(sessions)
+
+
+def format_relative_time(timestamp: str) -> str:
+    try:
+        moment = parse_timestamp(timestamp)
+    except ValueError:
+        return "unknown"
+    seconds = int((utc_now() - moment).total_seconds())
+    if seconds < 60:
+        return "now"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+def truncate_summary(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
+def render_history_list(sessions: list[dict[str, Any]], current_id: str) -> None:
+    if not sessions:
+        print("\nNo saved chats.\n")
+        return
+    print()
+    header = f"{'#':<4}{'Summary':<52}{'Modified':<12}{'Created'}"
+    cprint(header, C.BOLD)
+    cprint("─" * len(header), C.DIM)
+    for i, s in enumerate(sessions, start=1):
+        marker = "▶" if s.get("id") == current_id else " "
+        summary = truncate_summary(str(s.get("title", "New Chat")), 48)
+        modified = format_relative_time(str(s.get("modified_at", "")))
+        created = format_relative_time(str(s.get("created_at", "")))
+        compact = s.get("compact_count", 0)
+        compact_str = f" [c×{compact}]" if compact else ""
+        color = C.BCYAN if s.get("id") == current_id else ""
+        cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}{compact_str}", color)
+    print()
+
+
+def store_observation(session: dict[str, Any], query: str, output: str) -> None:
+    session["last_observation"] = {"query": query, "output": output, "captured_at": iso_now()}
+    touch_session(session)
+
+
+# ---------------------------------------------------------------------------
+# Git / environment context
+# ---------------------------------------------------------------------------
+
+def get_git_branch() -> str | None:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        branch = out.decode().strip()
+        return branch if branch and branch != "HEAD" else None
+    except Exception:
+        return None
+
+
+def short_cwd() -> str:
+    cwd = Path.cwd()
+    home = Path.home()
+    try:
+        rel = cwd.relative_to(home)
+        return "~\\" + str(rel) if str(rel) != "." else "~"
+    except ValueError:
+        return str(cwd)
+
+
+def repl_prompt(config: dict[str, Any], mode: str) -> str:
+    model = str(config.get("model", "?"))
+    cwd_str = short_cwd()
+    branch = get_git_branch()
+    branch_str = f" ({branch})" if branch else ""
+    if _COLOR_ON:
+        return (
+            f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | {C.BGREEN}{mode}{C.DIM} | "
+            f"{C.BYELLOW}{cwd_str}{branch_str}{C.DIM}]{C.RESET}\n"
+            f"{C.BOLD}you>{C.RESET} "
+        )
+    return f"[{model} | {mode} | {cwd_str}{branch_str}]\nyou> "
+
+
+# ---------------------------------------------------------------------------
+# CLI args
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="shellai",
+        description="Local coding and system agent for Windows PowerShell.",
+    )
+    parser.add_argument("query", nargs="*", help="Question or task.")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
+    parser.add_argument("--backend", choices=["ollama", "openai"])
+    parser.add_argument("--model")
+    parser.add_argument("--mode", choices=["autopilot", "chat", "command"], default="autopilot")
+    parser.add_argument("--copy", action="store_true")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--command-only", action="store_true")
+    parser.add_argument("--print-config", action="store_true")
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+def http_json_request(
+    url: str, payload: dict[str, Any], headers: dict[str, str], timeout_s: int
+) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    for k, v in headers.items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def http_json_get(url: str, timeout_s: int = 10) -> Any:
+    with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# LLM backends — streaming (Ollama) and non-streaming
+# ---------------------------------------------------------------------------
+
+def _ollama_stream_chat(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    token_key: str,
+    label: str = "thinking",
+) -> tuple[str, int]:
+    """Stream from Ollama /api/chat. Returns (content, eval_count)."""
+    host = config["ollama"]["host"].rstrip("/")
+    url = f"{host}/api/chat"
+    payload: dict[str, Any] = {
+        "model": config["model"],
+        "messages": messages,
+        "stream": True,
+        "options": {
+            "temperature": config["temperature"],
+            "num_predict": int(config.get(token_key, 2048)),
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    line_q: queue.Queue[bytes | None] = queue.Queue()
+    err_box: dict[str, BaseException] = {}
+
+    def read_lines(resp: Any) -> None:
+        try:
+            for raw in resp:
+                line_q.put(raw)
+        except BaseException as exc:  # noqa: BLE001
+            err_box["value"] = exc
+        finally:
+            line_q.put(None)
+
+    parts: list[str] = []
+    eval_count = 0
+    tok = 0
+
+    with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+        reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
+        with CancelMonitor() as monitor:
+            reader.start()
+            while True:
+                if monitor.cancelled.is_set():
+                    raise UserCancelled()
+                try:
+                    raw = line_q.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                if raw is None:
+                    break
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                chunk = (data.get("message") or {}).get("content", "")
+                if chunk:
+                    parts.append(chunk)
+                    tok += 1
+                    sys.stderr.write(
+                        f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                    )
+                    sys.stderr.flush()
+                if data.get("done"):
+                    eval_count = data.get("eval_count", tok)
+
+    if "value" in err_box:
+        raise err_box["value"]
+
+    sys.stderr.write("\r" + " " * 60 + "\r")
+    sys.stderr.flush()
+    return "".join(parts), eval_count
+
+
+def ollama_chat_non_stream(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    token_key: str,
+    json_format: bool = False,
+) -> str:
+    host = config["ollama"]["host"].rstrip("/")
+    payload: dict[str, Any] = {
+        "model": config["model"],
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": config["temperature"],
+            "num_predict": int(config.get(token_key, 2048)),
+        },
+    }
+    if json_format:
+        payload["format"] = "json"
+    resp = http_json_request(f"{host}/api/chat", payload, {}, int(config["timeout_seconds"]))
+    return str((resp.get("message") or {}).get("content", "")).strip()
+
+
+def openai_chat(config: dict[str, Any], messages: list[dict[str, str]], token_key: str) -> str:
+    base_url = config["openai_compatible"]["base_url"].rstrip("/")
+    api_key = config["openai_compatible"].get("api_key", "local")
+    payload: dict[str, Any] = {
+        "model": config["model"],
+        "temperature": config["temperature"],
+        "max_tokens": int(config.get(token_key, 2048)),
+        "messages": messages,
+    }
+    resp = http_json_request(
+        f"{base_url}/chat/completions", payload,
+        {"Authorization": f"Bearer {api_key}"}, int(config["timeout_seconds"])
+    )
+    choices = resp.get("choices") or []
+    if not choices:
+        raise RuntimeError("OpenAI-compatible backend returned no choices.")
+    return str((choices[0].get("message") or {}).get("content", "")).strip()
+
+
+def _openai_stream_chat(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    token_key: str,
+    label: str = "thinking",
+) -> tuple[str, int]:
+    """Stream from an OpenAI-compatible SSE endpoint. Returns (content, token_count).
+
+    SSE format (per chunk):  data: {"choices":[{"delta":{"content":"..."},...}]}
+    Terminator:              data: [DONE]
+    """
+    base_url = config["openai_compatible"]["base_url"].rstrip("/")
+    api_key = config["openai_compatible"].get("api_key", "local")
+    url = f"{base_url}/chat/completions"
+
+    payload: dict[str, Any] = {
+        "model": config["model"],
+        "temperature": config["temperature"],
+        "max_tokens": int(config.get(token_key, 2048)),
+        "messages": messages,
+        "stream": True,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {api_key}")
+
+    line_q: queue.Queue[bytes | None] = queue.Queue()
+    err_box: dict[str, BaseException] = {}
+
+    def read_lines(resp: Any) -> None:
+        try:
+            for raw in resp:
+                line_q.put(raw)
+        except BaseException as exc:  # noqa: BLE001
+            err_box["value"] = exc
+        finally:
+            line_q.put(None)
+
+    parts: list[str] = []
+    tok = 0
+
+    with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+        reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
+        with CancelMonitor() as monitor:
+            reader.start()
+            while True:
+                if monitor.cancelled.is_set():
+                    raise UserCancelled()
+                try:
+                    raw = line_q.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                if raw is None:
+                    break
+                line = raw.strip()
+                if not line:
+                    continue
+                # SSE lines start with "data: "
+                text = line.decode("utf-8", errors="replace")
+                if text == "data: [DONE]":
+                    break
+                if not text.startswith("data: "):
+                    continue
+                try:
+                    data = json.loads(text[6:])
+                except json.JSONDecodeError:
+                    continue
+                choices = data.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content", "")
+                if delta:
+                    parts.append(delta)
+                    tok += 1
+                    sys.stderr.write(
+                        f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                    )
+                    sys.stderr.flush()
+
+    if "value" in err_box:
+        raise err_box["value"]
+
+    sys.stderr.write("\r" + " " * 60 + "\r")
+    sys.stderr.flush()
+    return "".join(parts), tok
+
+
+def ollama_generate_with_system(config: dict[str, Any], system: str, prompt: str) -> str:
+    host = config["ollama"]["host"].rstrip("/")
+    payload: dict[str, Any] = {
+        "model": config["model"],
+        "system": system,
+        "prompt": prompt.strip(),
+        "stream": False,
+        "options": {
+            "temperature": config["temperature"],
+            "num_predict": int(config.get("max_output_tokens", 512)),
+        },
+    }
+    resp = http_json_request(f"{host}/api/generate", payload, {}, int(config["timeout_seconds"]))
+    return str(resp.get("response", "")).strip()
+
+
+def openai_generate_with_system(config: dict[str, Any], system: str, prompt: str) -> str:
+    return openai_chat(
+        config,
+        [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        "max_output_tokens",
+    )
+
+
+def llm_generate(config: dict[str, Any], system: str, prompt: str) -> str:
+    if config["backend"] == "ollama":
+        return ollama_generate_with_system(config, system, prompt)
+    if config["backend"] == "openai":
+        return openai_generate_with_system(config, system, prompt)
+    raise RuntimeError(f"Unsupported backend: {config['backend']}")
+
+
+def call_llm(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    token_key: str,
+    *,
+    label: str = "thinking",
+    json_format: bool = False,
+) -> tuple[str, int]:
+    """Unified LLM call with correct cancellation.
+
+    Streaming path (_ollama_stream_chat) manages its own CancelMonitor; calling
+    it through run_cancellable would create two competing monitors on the same
+    console input buffer. Non-streaming path uses run_cancellable + Spinner.
+    """
+    if config["backend"] == "ollama" and config.get("use_streaming", True):
+        return _ollama_stream_chat(config, messages, token_key, label=label)
+
+    if config["backend"] == "openai" and config.get("use_streaming", True):
+        return _openai_stream_chat(config, messages, token_key, label=label)
+
+    result_box: dict[str, Any] = {}
+    error_box: dict[str, BaseException] = {}
+
+    def _work() -> None:
+        try:
+            if config["backend"] == "ollama":
+                content = ollama_chat_non_stream(config, messages, token_key, json_format=json_format)
+            elif config["backend"] == "openai":
+                content = openai_chat(config, messages, token_key)
+            else:
+                raise RuntimeError(f"Unsupported backend: {config['backend']}")
+            result_box["value"] = (content, 0)
+        except BaseException as exc:  # noqa: BLE001
+            error_box["value"] = exc
+
+    thread = threading.Thread(target=_work, daemon=True)
+    with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
+        thread.start()
+        while thread.is_alive():
+            if monitor.cancelled.is_set():
+                raise UserCancelled()
+            thread.join(0.05)
+
+    if "value" in error_box:
+        raise error_box["value"]
+    return result_box.get("value", ("", 0))
+
+
+
+# ---------------------------------------------------------------------------
+# Ollama model listing
+# ---------------------------------------------------------------------------
+
+def list_ollama_models(config: dict[str, Any]) -> list[dict[str, Any]]:
+    host = config["ollama"]["host"].rstrip("/")
+    data = http_json_get(f"{host}/api/tags", timeout_s=10)
+    return data.get("models") or []
+
+
+def render_models(config: dict[str, Any]) -> None:
+    try:
+        models = list_ollama_models(config)
+    except Exception as exc:
+        cprint(f"Could not reach Ollama: {exc}", C.RED)
+        return
+    if not models:
+        print("No models installed. Pull one: ollama pull qwen2.5-coder:7b")
+        return
+    current = config.get("model", "")
+    print()
+    cprint("Available Ollama models:", C.BOLD)
+    for m in models:
+        name = m.get("name", "")
+        size_bytes = m.get("size", 0)
+        size_gb = size_bytes / 1e9
+        marker = "▶ " if name == current else "  "
+        color = C.BCYAN if name == current else ""
+        cprint(f"{marker}{name:<36}  {size_gb:.1f} GB", color)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Text utilities
+# ---------------------------------------------------------------------------
+
+def trim_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n...[truncated to {limit} chars]"
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def is_help_request(query: str) -> bool:
+    normalized = re.sub(r"[?!.,]+", "", normalize_text(query))
+    return normalized in {"help", "/help", "what can you do", "what is this", "how do i use this"}
+
+
+def is_small_talk(query: str) -> bool:
+    normalized = re.sub(r"[?!.,]+", "", normalize_text(query))
+    return normalized in {"hi", "hello", "hey", "whats up", "what is up", "yo"}
+
+
+def local_meta_response(query: str, config: dict[str, Any]) -> str | None:
+    normalized = re.sub(r"[?!.,]+", "", normalize_text(query))
+    model = str(config.get("model", "unknown")).strip() or "unknown"
+    backend = str(config.get("backend", "ollama")).strip()
+    label = f"{model} via {'Ollama' if backend == 'ollama' else 'local OpenAI-compatible endpoint'}"
+    if any(p in normalized for p in ("what model are you", "which model are you", "what llm")):
+        return f"Using {label}."
+    if normalized in {"who are you", "what are you"}:
+        return f"Local coding and system agent powered by {label}."
+    return None
+
+
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks emitted by reasoning models like deepseek-r1."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def resolve_path(raw: str) -> Path:
+    expanded = os.path.expandvars(os.path.expanduser(raw.strip().strip('"')))
+    return Path(expanded).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+def parse_json_object(raw_text: str) -> dict[str, Any] | None:
+    text = strip_thinking(raw_text).strip()
+    if not text:
+        return None
+    # Direct parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    # Strip markdown fences
+    stripped = re.sub(r"^```[a-zA-Z]*\s*|```\s*$", "", text, flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    # Extract first {...} block
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def extract_command(raw_text: str) -> str:
+    text = raw_text.strip()
+    if not text:
+        raise RuntimeError("Model returned an empty response.")
+    if "```" in text:
+        for part in text.split("```"):
+            candidate = part.strip()
+            if not candidate:
+                continue
+            lines = [ln for ln in candidate.splitlines() if ln.strip()]
+            if not lines:
+                continue
+            if lines[0].lower() in {"powershell", "pwsh", "ps1", "bash", "sh"}:
+                lines = lines[1:]
+            if lines:
+                return "\n".join(lines).strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError("Model did not return a usable command.")
+    return lines[0]
+
+
+def parse_chat_response(raw_text: str) -> dict[str, str]:
+    parsed = parse_json_object(raw_text)
+    if isinstance(parsed, dict):
+        message = str(parsed.get("message", "")).strip()
+        command = str(parsed.get("command", "")).strip()
+        return {
+            "message": message or "Done.",
+            "command": extract_command(command) if command else "",
+        }
+    return {"message": strip_thinking(raw_text).strip() or "Done.", "command": ""}
+
+
+def parse_agent_action(raw_text: str) -> dict[str, Any]:
+    parsed = parse_json_object(raw_text)
+    if isinstance(parsed, dict):
+        action = str(parsed.get("action", "")).strip().lower()
+        args = parsed.get("args")
+        args = args if isinstance(args, dict) else {}
+
+        if action in TOOL_NAMES:
+            return {"action": "tool", "tool": action, "args": args}
+        if action == "tool":
+            tool = str(parsed.get("tool", "")).strip()
+            return {"action": "tool", "tool": tool, "args": args}
+        if action == "finish":
+            return {"action": "finish", "message": str(parsed.get("message", "")).strip()}
+
+        tool = str(parsed.get("tool", "")).strip()
+        if tool in TOOL_NAMES:
+            return {"action": "tool", "tool": tool, "args": args}
+
+        message = str(parsed.get("message", "")).strip()
+        if message:
+            return {"action": "finish", "message": message}
+
+    return {"action": "finish", "message": strip_thinking(raw_text).strip()}
+
+
+# ---------------------------------------------------------------------------
+# Shell + file tools
+# ---------------------------------------------------------------------------
+
+def detect_shell(shell_hint: str) -> str:
+    if shell_hint:
+        return shell_hint
+    for candidate in ("pwsh.exe", "powershell.exe"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return "powershell.exe"
+
+
+def run_command_tool(
+    command: str, shell_exe: str, output_limit: int, *, show_command: bool = True
+) -> str:
+    if show_command:
+        cprint(f"\n$ {command}\n", C.GREEN)
+    process = subprocess.Popen(
+        [shell_exe, "-NoLogo", "-NoProfile", "-Command", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    out_q: queue.Queue[str] = queue.Queue()
+
+    def reader() -> None:
+        assert process.stdout is not None
+        for line in iter(process.stdout.readline, ""):
+            out_q.put(line)
+        process.stdout.close()
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    parts: list[str] = []
+    with CancelMonitor() as monitor:
+        while t.is_alive() or not out_q.empty() or process.poll() is None:
+            if monitor.cancelled.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                raise UserCancelled()
+            try:
+                line = out_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            print(line, end="")
+            parts.append(line)
+    process.wait()
+    output = "".join(parts)
+    return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
+
+
+def read_file_tool(path_text: str, output_limit: int) -> str:
+    path = resolve_path(path_text)
+    content = path.read_text(encoding="utf-8", errors="replace")
+    cprint(f"[read] {path}", C.DIM)
+    return trim_text(content, output_limit)
+
+
+def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
+    path = resolve_path(path_text)
+    if not path.exists():
+        raise RuntimeError(f"File not found: {path}")
+    content = path.read_text(encoding="utf-8")
+    if old_string not in content:
+        raise RuntimeError(f"String not found in {path}:\n{old_string!r}")
+    new_content = content.replace(old_string, new_string, 1)
+    path.write_text(new_content, encoding="utf-8")
+    delta = new_string.count("\n") - old_string.count("\n")
+    cprint(f"[edit] {path}  ({delta:+d} lines)", C.DIM)
+    return f"Edited {path}"
+
+
+def write_file_tool(path_text: str, content: str) -> str:
+    path = resolve_path(path_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    cprint(f"[write] {path}  ({len(content)} chars)", C.DIM)
+    return f"Wrote {path}"
+
+
+def append_file_tool(path_text: str, content: str) -> str:
+    path = resolve_path(path_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(content)
+    cprint(f"[append] {path}  ({len(content)} chars)", C.DIM)
+    return f"Appended to {path}"
+
+
+def list_directory_tool(path_text: str, output_limit: int) -> str:
+    path = resolve_path(path_text or ".")
+    entries = []
+    for child in sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+        entries.append(child.name + ("/" if child.is_dir() else ""))
+    result = "\n".join(entries) or "(empty)"
+    cprint(f"[list] {path}  ({len(entries)} entries)", C.DIM)
+    return trim_text(result, output_limit)
+
+
+def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_limit: int) -> str:
+    search_path = resolve_path(path_text or ".")
+    glob_pattern = glob_pattern or "*"
+    results: list[str] = []
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise RuntimeError(f"Invalid regex: {exc}") from exc
+    for fp in sorted(search_path.rglob(glob_pattern)):
+        if not fp.is_file():
+            continue
+        try:
+            for i, line in enumerate(fp.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if compiled.search(line):
+                    results.append(f"{fp}:{i}: {line}")
+        except (OSError, PermissionError):
+            pass
+    result = "\n".join(results) if results else f"No matches for '{pattern}'"
+    cprint(f"[search] '{pattern}' in {search_path}/**/{glob_pattern}  ({len(results)} matches)", C.DIM)
+    return trim_text(result, output_limit)
+
+
+def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str:
+    search_path = resolve_path(path_text or ".")
+    matches = sorted(search_path.rglob(glob_pattern or "*"))
+    result = "\n".join(str(p) for p in matches) if matches else f"No files matching '{glob_pattern}'"
+    cprint(f"[find] {glob_pattern} in {search_path}  ({len(matches)} files)", C.DIM)
+    return trim_text(result, output_limit)
+
+
+def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
+    tool = str(action.get("tool", "")).strip()
+    args = action.get("args")
+    if not isinstance(args, dict):
+        raise RuntimeError("Tool args must be a JSON object.")
+    limit = int(config.get("tool_output_limit", 12000))
+
+    if tool == "run_command":
+        cmd = str(args.get("command", "")).strip()
+        if not cmd:
+            raise RuntimeError("run_command requires 'command'.")
+        return run_command_tool(cmd, shell_exe, limit)
+    if tool == "read_file":
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("read_file requires 'path'.")
+        return read_file_tool(path, limit)
+    if tool == "edit_file":
+        path = str(args.get("path", "")).strip()
+        old = str(args.get("old_string", ""))
+        new = str(args.get("new_string", ""))
+        if not path:
+            raise RuntimeError("edit_file requires 'path'.")
+        if not old:
+            raise RuntimeError("edit_file requires 'old_string'.")
+        return edit_file_tool(path, old, new)
+    if tool == "write_file":
+        path = str(args.get("path", "")).strip()
+        content = str(args.get("content", ""))
+        if not path:
+            raise RuntimeError("write_file requires 'path'.")
+        return write_file_tool(path, content)
+    if tool == "append_file":
+        path = str(args.get("path", "")).strip()
+        content = str(args.get("content", ""))
+        if not path:
+            raise RuntimeError("append_file requires 'path'.")
+        return append_file_tool(path, content)
+    if tool == "list_directory":
+        path = str(args.get("path", ".")).strip() or "."
+        return list_directory_tool(path, limit)
+    if tool == "search_files":
+        pattern = str(args.get("pattern", "")).strip()
+        path = str(args.get("path", ".")).strip() or "."
+        glob_pat = str(args.get("glob", "*")).strip() or "*"
+        if not pattern:
+            raise RuntimeError("search_files requires 'pattern'.")
+        return search_files_tool(pattern, path, glob_pat, limit)
+    if tool == "find_files":
+        glob_pat = str(args.get("glob", "")).strip()
+        path = str(args.get("path", ".")).strip() or "."
+        if not glob_pat:
+            raise RuntimeError("find_files requires 'glob'.")
+        return find_files_tool(glob_pat, path, limit)
+
+    raise RuntimeError(f"Unknown tool: {tool!r}")
+
+
+# ---------------------------------------------------------------------------
+# /compact
+# ---------------------------------------------------------------------------
+
+def compact_history(
+    config: dict[str, Any],
+    session: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Summarise the current message history and replace it with a compact version."""
+    messages: list[dict[str, str]] = list(session.get("messages", []))
+    if len(messages) < 4:
+        print("Nothing to compact yet (fewer than 4 messages).")
+        return messages
+
+    summary_messages: list[dict[str, str]] = [
+        {"role": "system", "content": COMPACT_SYSTEM_PROMPT},
+        *messages,
+    ]
+    summary, _ = call_llm(config, summary_messages, "chat_max_output_tokens", label="compacting")
+    summary = strip_thinking(summary).strip()
+
+    new_messages: list[dict[str, str]] = [
+        {
+            "role": "user",
+            "content": (
+                "[Conversation compacted. Summary of prior context:]\n\n"
+                + summary
+                + "\n\n[Continue from here]"
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "Understood. I have the context summary and will continue from where we left off.",
+        },
+    ]
+    session["messages"] = new_messages
+    session["compact_count"] = session.get("compact_count", 0) + 1
+    touch_session(session)
+
+    n_removed = len(messages) - len(new_messages)
+    cprint(f"\nCompacted: {len(messages)} → {len(new_messages)} messages (removed ~{n_removed}).", C.BCYAN)
+    cprint("Summary:", C.BOLD)
+    print(summary)
+    print()
+    return new_messages
+
+
+# ---------------------------------------------------------------------------
+# Context estimate
+# ---------------------------------------------------------------------------
+
+def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
+    messages: list[dict[str, str]] = session.get("messages", [])
+    total_chars = sum(len(m.get("content", "")) for m in messages)
+    est_tokens = total_chars // 4
+    compact_count = session.get("compact_count", 0)
+    print()
+    cprint("Context estimate", C.BOLD)
+    print(f"  Messages:         {len(messages)}")
+    print(f"  Chars (total):    {total_chars:,}")
+    print(f"  Tokens (est.):    ~{est_tokens:,}")
+    print(f"  Compact runs:     {compact_count}")
+    print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
+    print(f"  Model:            {config.get('model', 'unknown')}")
+    print(f"  Backend:          {config.get('backend', 'ollama')}")
+    if est_tokens > 6000:
+        cprint("  Tip: run /compact to save context.", C.BYELLOW)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Command generation (command mode)
+# ---------------------------------------------------------------------------
+
+def generate_command(config: dict[str, Any], query: str) -> str:
+    return extract_command(
+        run_cancellable(
+            "planning",
+            lambda: llm_generate(config, config["system_prompt"], f"User request: {query.strip()}"),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat mode
+# ---------------------------------------------------------------------------
+
+def chat_turn(
+    config: dict[str, Any], history: list[dict[str, str]], query: str
+) -> dict[str, str]:
+    if is_help_request(query):
+        return {"message": HELP_TEXT, "command": ""}
+    meta = local_meta_response(query, config)
+    if meta:
+        return {"message": meta, "command": ""}
+
+    msgs: list[dict[str, str]] = [
+        {"role": "system", "content": config.get("chat_system_prompt", CHAT_SYSTEM_PROMPT)},
+        *history,
+        {"role": "user", "content": query.strip()},
+    ]
+    raw, _ = call_llm(config, msgs, "chat_max_output_tokens", label="thinking")
+    return parse_chat_response(raw)
+
+
+# ---------------------------------------------------------------------------
+# Autopilot: multi-step agentic loop
+# ---------------------------------------------------------------------------
+
+def run_autopilot(
+    config: dict[str, Any],
+    history: list[dict[str, str]],
+    query: str,
+    shell_exe: str,
+    session: dict[str, Any] | None = None,
+) -> str:
+    if is_help_request(query):
+        return HELP_TEXT
+    meta = local_meta_response(query, config)
+    if meta:
+        return meta
+    if is_small_talk(query):
+        return "Hi — what would you like me to do?"
+
+    cwd = str(Path.cwd())
+    max_steps = int(config.get("max_agent_steps", 15))
+    system_prompt = build_autopilot_prompt(cwd=cwd, max_steps=max_steps)
+    config_system = config.get("autopilot_system_prompt", "").strip()
+    if config_system:
+        system_prompt = config_system
+
+    user_content = f"Working directory: {cwd}\n\nRequest: {query.strip()}"
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        *history,
+        {"role": "user", "content": user_content},
+    ]
+
+    output_limit = int(config.get("tool_output_limit", 12000))
+    last_tool_output = ""
+    total_eval = 0
+
+    for step in range(max_steps):
+        step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
+        cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
+
+        # Up to 2 retries on bad JSON
+        raw = ""
+        action: dict[str, Any] = {}
+        for attempt in range(3):
+            raw, eval_count = call_llm(config, messages, "autopilot_max_output_tokens", label=step_label)
+            total_eval += eval_count
+            action = parse_agent_action(raw)
+
+            # Retry only if we got a malformed finish on early steps
+            if (
+                attempt < 2
+                and step < 3
+                and action["action"] == "finish"
+                and any(name in raw for name in TOOL_NAMES)
+                and not parse_json_object(raw)
+            ):
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your response was not valid JSON. "
+                        "Respond with exactly one JSON object as specified. No prose."
+                    ),
+                })
+                continue
+            break
+
+        if action["action"] == "finish":
+            msg = action.get("message", "")
+            # Nudge once if the model refused to use tools
+            if step == 0 and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES):
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({
+                    "role": "user",
+                    "content": "You have run_command and other tools available. Use them. Output JSON only.",
+                })
+                continue
+            result = msg or last_tool_output or "Done."
+            if session and last_tool_output:
+                store_observation(session, query, last_tool_output)
+            if total_eval:
+                cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
+            return result
+
+        if action["action"] != "tool" or not action.get("tool"):
+            return action.get("message", "") or last_tool_output or "Done."
+
+        tool_name = action["tool"]
+        cprint(f"\n[{tool_name}]", C.BCYAN, bold=True)
+        try:
+            tool_output = execute_tool_call(config, action, shell_exe)
+        except UserCancelled:
+            raise
+        except Exception as exc:
+            tool_output = f"Error: {exc}"
+            cprint(f"[error] {exc}", C.RED)
+
+        last_tool_output = tool_output
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": f"Tool output:\n{trim_text(tool_output, output_limit)}"})
+
+    if session and last_tool_output:
+        store_observation(session, query, last_tool_output)
+    if total_eval:
+        cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
+    return last_tool_output or "Done."
+
+
+# ---------------------------------------------------------------------------
+# Command execution UI
+# ---------------------------------------------------------------------------
+
+def copy_to_clipboard(command: str) -> None:
+    subprocess.run(["clip.exe"], input=command, text=True, check=True)
+
+
+def execute_command(command: str, shell_exe: str) -> int:
+    return subprocess.run([shell_exe, "-NoLogo", "-NoProfile", "-Command", command]).returncode
+
+
+def prompt_for_action() -> str:
+    while True:
+        choice = input("[E]xecute, [C]opy, [A]bort? ").strip().lower()
+        if choice in {"e", "execute", "c", "copy", "a", "abort"}:
+            return choice[:1]
+        print("Please choose E, C, or A.")
+
+
+def act_on_command(
+    command: str, shell_exe: str, force_copy: bool, force_execute: bool
+) -> int:
+    print()
+    cprint("Suggested command:", C.BOLD)
+    cprint(f"\n  {command}\n", C.BGREEN)
+    if force_copy:
+        copy_to_clipboard(command)
+        print("Copied.")
+        return 0
+    if force_execute:
+        return execute_command(command, shell_exe)
+    choice = prompt_for_action()
+    if choice == "c":
+        copy_to_clipboard(command)
+        print("Copied.")
+        return 0
+    if choice == "e":
+        return execute_command(command, shell_exe)
+    print("Aborted.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Result rendering
+# ---------------------------------------------------------------------------
+
+def render_result(title: str, body: str) -> None:
+    print()
+    cprint(f"── {title} ", C.BOLD + C.BCYAN)
+    cprint("─" * 60, C.DIM)
+    print(body)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# One-shot entry points
+# ---------------------------------------------------------------------------
+
+def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> int:
+    sessions = load_history_store(config)
+    session = create_session()
+    append_session_message(session, "user", query)
+    message = run_autopilot(config, [], query, shell_exe, session=session)
+    append_session_message(session, "assistant", message)
+    sync_session_store(sessions, session)
+    render_result("Result", message)
+    return 0
+
+
+def one_shot_command_mode(
+    config: dict[str, Any], query: str, shell_exe: str, args: argparse.Namespace
+) -> int:
+    sessions = load_history_store(config)
+    session = create_session()
+    append_session_message(session, "user", query)
+    command = generate_command(config, query)
+    append_session_message(session, "assistant", f"Suggested command: {command}")
+    sync_session_store(sessions, session)
+    return act_on_command(command, shell_exe, args.copy, args.execute)
+
+
+# ---------------------------------------------------------------------------
+# REPL
+# ---------------------------------------------------------------------------
+
+def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
+    shell_exe = detect_shell(str(config.get("shell_exe", "") or ""))
+    sessions = load_history_store(config)
+    current_session = create_session()
+    mode = initial_mode
+
+    print()
+    cprint("Local Shell AI", C.BOLD + C.BCYAN)
+    cprint(
+        f"model: {config.get('model', '?')}  "
+        f"backend: {config.get('backend', 'ollama')}  "
+        f"mode: {mode}  "
+        f"/help for commands  Esc cancels",
+        C.DIM,
+    )
+    print()
+
+    while True:
+        prompt = repl_prompt(config, mode)
+        try:
+            query = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sync_session_store(sessions, current_session)
+            return 0
+
+        if not query:
+            continue
+
+        norm = normalize_text(query)
+
+        # ── exit ──────────────────────────────────────────────────────────
+        if norm in {"/exit", "/quit"}:
+            sync_session_store(sessions, current_session)
+            return 0
+
+        # ── help / tools ──────────────────────────────────────────────────
+        if norm == "/help":
+            print(f"\n{HELP_TEXT}\n")
+            continue
+        if norm == "/tools":
+            print(f"\n{TOOLS_HELP}\n")
+            continue
+
+        # ── history ───────────────────────────────────────────────────────
+        if norm == "/history":
+            sync_session_store(sessions, current_session)
+            sessions = load_history_store(config)
+            render_history_list(sessions, str(current_session.get("id", "")))
+            continue
+
+        # ── new / clear ───────────────────────────────────────────────────
+        if norm in {"/new", "/clear"}:
+            sync_session_store(sessions, current_session)
+            current_session = create_session()
+            cprint("New session started.", C.DIM)
+            continue
+
+        # ── resume ────────────────────────────────────────────────────────
+        if norm.startswith("/resume ") or norm.startswith("/open "):
+            sync_session_store(sessions, current_session)
+            sessions = load_history_store(config)
+            parts = norm.split()
+            if len(parts) != 2 or not parts[1].isdigit():
+                print("Usage: /resume <number>")
+                continue
+            idx = int(parts[1]) - 1
+            if idx < 0 or idx >= len(sessions):
+                cprint("No session with that number.", C.YELLOW)
+                continue
+            current_session = sessions[idx]
+            cprint(f"Resumed: {current_session['title']}", C.BCYAN)
+            continue
+
+        # ── compact ───────────────────────────────────────────────────────
+        if norm == "/compact":
+            try:
+                new_msgs = compact_history(config, current_session)
+                sync_session_store(sessions, current_session)
+            except UserCancelled:
+                print("\nCancelled.\n")
+            continue
+
+        # ── undo ──────────────────────────────────────────────────────────
+        if norm == "/undo":
+            msgs: list[dict[str, str]] = current_session.get("messages", [])
+            if len(msgs) >= 2:
+                current_session["messages"] = msgs[:-2]
+                touch_session(current_session)
+                sync_session_store(sessions, current_session)
+                cprint("Removed last exchange.", C.DIM)
+            elif len(msgs) == 1:
+                current_session["messages"] = []
+                touch_session(current_session)
+                cprint("Removed last message.", C.DIM)
+            else:
+                print("Nothing to undo.")
+            continue
+
+        # ── context ───────────────────────────────────────────────────────
+        if norm == "/context":
+            show_context(current_session, config)
+            continue
+
+        # ── models ────────────────────────────────────────────────────────
+        if norm == "/models":
+            render_models(config)
+            continue
+
+        # ── mode ──────────────────────────────────────────────────────────
+        if norm in {"/mode autopilot", "/mode agent"}:
+            mode = "autopilot"
+            cprint("Mode: autopilot", C.DIM)
+            continue
+        if norm == "/mode chat":
+            mode = "chat"
+            cprint("Mode: chat", C.DIM)
+            continue
+        if norm == "/mode command":
+            mode = "command"
+            cprint("Mode: command", C.DIM)
+            continue
+
+        # ── model ─────────────────────────────────────────────────────────
+        if norm.startswith("/model "):
+            new_model = query.strip()[len("/model "):].strip()
+            if new_model:
+                config["model"] = new_model
+                cprint(f"Model: {new_model}", C.BCYAN)
+            else:
+                cprint(f"Current model: {config.get('model', 'unknown')}", C.DIM)
+            continue
+
+        # ── cwd ───────────────────────────────────────────────────────────
+        if norm == "/cwd" or norm.startswith("/cwd "):
+            parts_cwd = query.strip().split(None, 1)
+            if len(parts_cwd) == 2:
+                new_path = parts_cwd[1].strip()
+                try:
+                    os.chdir(resolve_path(new_path))
+                    cprint(f"cwd: {Path.cwd()}", C.BCYAN)
+                except Exception as exc:
+                    cprint(f"Cannot change to '{new_path}': {exc}", C.RED)
+            else:
+                cprint(f"cwd: {Path.cwd()}", C.DIM)
+            continue
+
+        # ── dispatch to mode ──────────────────────────────────────────────
+        history: list[dict[str, str]] = current_session.get("messages", [])
+
+        if mode == "command":
+            try:
+                command = generate_command(config, query)
+                act_on_command(command, shell_exe, False, False)
+                append_session_message(current_session, "user", query)
+                append_session_message(current_session, "assistant", f"Command: {command}")
+                sync_session_store(sessions, current_session)
+            except UserCancelled:
+                print("\nCancelled.\n")
+            continue
+
+        if mode == "chat":
+            try:
+                response = chat_turn(config, history, query)
+                render_result("Answer", response["message"])
+                append_session_message(current_session, "user", query)
+                assistant_content = response["message"]
+                if response["command"]:
+                    act_on_command(response["command"], shell_exe, False, False)
+                    assistant_content += f"\nCommand: {response['command']}"
+                append_session_message(current_session, "assistant", assistant_content)
+                sync_session_store(sessions, current_session)
+            except UserCancelled:
+                print("\nCancelled.\n")
+            continue
+
+        # autopilot
+        try:
+            message = run_autopilot(config, history, query, shell_exe, session=current_session)
+            render_result("Result", message)
+            append_session_message(current_session, "user", query)
+            append_session_message(current_session, "assistant", message)
+            sync_session_store(sessions, current_session)
+        except UserCancelled:
+            print("\nCancelled.\n")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    args = parse_args()
+    config_path = Path(args.config).expanduser().resolve()
+    config = load_config(config_path)
+
+    if args.backend:
+        config["backend"] = args.backend
+    if args.model:
+        config["model"] = args.model
+
+    if args.print_config:
+        print(json.dumps(config, indent=2))
+        return 0
+
+    query = " ".join(args.query).strip()
+    shell_exe = detect_shell(str(config.get("shell_exe", "") or ""))
+
+    try:
+        if not query:
+            return run_repl(config, initial_mode=args.mode)
+        if args.command_only or args.mode == "command":
+            return one_shot_command_mode(config, query, shell_exe, args)
+        if args.mode == "chat":
+            sessions = load_history_store(config)
+            session = create_session()
+            append_session_message(session, "user", query)
+            response = chat_turn(config, [], query)
+            append_session_message(session, "assistant", response["message"])
+            sync_session_store(sessions, session)
+            render_result("Answer", response["message"])
+            if response["command"]:
+                act_on_command(response["command"], shell_exe, args.copy, args.execute)
+            return 0
+        return one_shot_autopilot(config, query, shell_exe)
+    except UserCancelled:
+        cprint("Cancelled.", C.YELLOW, file=sys.stderr)
+        return 130
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            model = config.get("model", "unknown")
+            cprint(
+                f"Model '{model}' not found. Pull it with:  ollama pull {model}",
+                C.RED, file=sys.stderr,
+            )
+        else:
+            cprint(f"Backend error {error.code}: {error.reason}", C.RED, file=sys.stderr)
+        return 2
+    except urllib.error.URLError as error:
+        cprint(
+            f"Cannot reach Ollama. Is it running?  ollama serve\n{error}",
+            C.RED, file=sys.stderr,
+        )
+        return 2
+    except Exception as error:  # noqa: BLE001
+        cprint(str(error), C.RED, file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

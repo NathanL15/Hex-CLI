@@ -1,0 +1,18 @@
+# Local/personal data — not part of the project template
+history.json
+shellai.json
+shellai_npurun.json
+*.log
+
+# Third-party clone with its own git history; see README for setup
+npurun/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv-qnn/
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db

@@ -1,0 +1,246 @@
+# Local Shell AI
+
+`shellai` is a local terminal agent for Windows on ARM.
+
+It now works in three styles:
+
+1. **Autopilot mode** - full local agent mode with automatic PowerShell execution for OS and file tasks.
+2. **Chat mode** - answer in prose first and only suggest a command when it helps.
+3. **Command-only mode** - force a single PowerShell command and then choose **Execute / Copy / Abort**.
+
+It supports two local backends:
+
+1. **Ollama** for the simplest setup today.
+2. **OpenAI-compatible local endpoints** for Snapdragon NPU-backed runtimes built on Windows ML / ONNX Runtime QNN.
+
+## Files
+
+- `shellai.py` - main CLI
+- `shellai.cmd` - Windows launcher
+- `Ollama CLI.cmd` - Start Menu-friendly launcher name, runs `launcher.py`
+- `launcher.py` - picks the best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
+- `npu_server.py` / `setup_npu.py` / `npu_server.cmd` - DirectML/ONNX Runtime GenAI fallback server (Adreno GPU path, used when npurun isn't available)
+- `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored into this repo — see setup below)
+- `shellai.example.json` - config example
+- `examples\onnx_qnn_provider_example.py` - minimal QNN provider example for Hexagon NPU routing
+
+## Quick start
+
+From `C:\Users\Natha\local-shell-ai`:
+
+```powershell
+Copy-Item .\shellai.example.json .\shellai.json
+python .\shellai.py --print-config
+```
+
+Then run autopilot mode:
+
+```powershell
+python .\shellai.py
+```
+
+Or ask a one-shot question:
+
+```powershell
+python .\shellai.py "what can you do?"
+```
+
+Or force command-only mode:
+
+```powershell
+python .\shellai.py --command-only "list the ten largest files here"
+```
+
+Or use the launcher:
+
+```powershell
+.\shellai.cmd "show git status"
+```
+
+## Start Menu launcher
+
+This install also supports an app-style launcher named **Ollama CLI**.
+
+- Start Menu name: **Ollama CLI**
+- Backing launcher: `C:\Users\Natha\local-shell-ai\Ollama CLI.cmd`
+
+You can open it from Start and use it like a local CLI agent with statuses, streaming text, shell execution, and file actions.
+
+## PowerShell global alias
+
+Create your PowerShell profile if it does not exist:
+
+```powershell
+if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+notepad $PROFILE
+```
+
+Paste this in the profile:
+
+```powershell
+$ShellAiRoot = "$HOME\local-shell-ai"
+
+function shellai {
+    python "$ShellAiRoot\shellai.py" @Args
+}
+
+function ?? {
+    shellai @Args
+}
+
+Set-Alias sai shellai
+```
+
+Reload the profile:
+
+```powershell
+. $PROFILE
+```
+
+Examples:
+
+```powershell
+?? "show active network connections"
+sai "find all .log files larger than 50 MB"
+shellai "open the Downloads folder"
+```
+
+## Backend configuration
+
+The tool auto-creates `shellai.json` on first run. The most important keys are:
+
+```json
+{
+  "backend": "ollama",
+  "model": "qwen2.5-coder:3b",
+  "timeout_seconds": 240,
+  "max_output_tokens": 96,
+  "chat_max_output_tokens": 220,
+  "autopilot_max_output_tokens": 220,
+  "max_agent_steps": 8,
+  "tool_output_limit": 12000,
+  "stream_delay_ms": 8,
+  "history_retention_days": 30,
+  "ollama": {
+    "host": "http://127.0.0.1:11434"
+  },
+  "openai_compatible": {
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key": "local"
+  }
+}
+```
+
+`max_output_tokens` keeps command-only replies short, while the chat/autopilot token limits give the interactive modes enough room to behave like a real assistant. `history_retention_days` controls automatic cleanup of old chats.
+
+On the CPU-backed Ollama path, the first response can still take a couple of minutes on Windows on ARM while the model loads and generates.
+
+### Ollama setup
+
+Ollama is the easiest local path, but on Windows ARM it is still the **CPU path**, not the Hexagon NPU path.
+
+Example:
+
+```powershell
+& "$HOME\AppData\Local\Programs\Ollama\ollama.exe" pull qwen2.5-coder:1.5b
+python .\shellai.py --backend ollama --model qwen2.5-coder:1.5b "show running processes"
+```
+
+Recommended Ollama models on Snapdragon X Elite 78:
+
+| Use case | Model | Why |
+| --- | --- | --- |
+| Fastest coding-focused CPU path | `qwen2.5-coder:1.5b` | Very responsive, low RAM draw |
+| Best balance for local CLI suggestions | `qwen2.5-coder:3b` | Better command quality while staying light |
+| If you want a larger option | `deepseek-coder:6.7b` | Better reasoning, but more latency and battery cost |
+
+## Snapdragon X Elite NPU path (current setup: npurun)
+
+`launcher.py` automatically prefers this path. It runs **[npurun](https://github.com/bpbonker/npurun)**, an open-source Rust runtime built for Snapdragon X-series, which wraps Qualcomm's Genie SDK behind an Ollama-class CLI and an OpenAI-compatible HTTP server.
+
+Model: **`qwen3-4b-instruct-2507`** (w4a16, ~2.5 GB). Chosen over the alternatives in npurun's registry (`phi-3.5-mini`, `qwen-2-5-7b`, `qwen-2-5-vl-7b-instruct`, `llama-v3-1-8b-instruct`) because it leads on agentic/tool-calling benchmarks (BFCLv3 65.9, MultiIF 66.3), matches or beats `Qwen2.5-7B-Instruct` despite half the parameter count, has a much larger context window (262K vs 32K tokens), and is the only model in the registry with confirmed-working performance on this exact hardware (~15 tok/s).
+
+### One-time setup
+
+1. Clone npurun and build it (Rust + LLVM + MSVC ARM64 build tools required):
+   ```powershell
+   git clone https://github.com/bpbonker/npurun
+   cd npurun
+   cargo install --path crates\npurun-cli
+   ```
+   On this machine, builds must run with MSVC's `link.exe` first on PATH (Git Bash's coreutils `link.exe` shadows it and breaks the build) — see `npurun/scripts/dev-shell-local.bat` for a working build shell.
+2. Download the **QAIRT SDK** from the Qualcomm developer portal (requires a free Qualcomm account; not redistributable) and install it, e.g. at `C:\Qualcomm\AIStack\QAIRT_2.47.0`.
+3. Set `QNN_SDK_ROOT` to that path, and **`ADSP_LIBRARY_PATH`** to `<QNN_SDK_ROOT>\lib\hexagon-v73\unsigned`. Without `ADSP_LIBRARY_PATH`, npurun crashes with `STATUS_STACK_BUFFER_OVERRUN` inside libGenie.
+4. Pull the model: `npurun pull qwen3-4b-instruct-2507`
+
+`launcher.py` checks for the npurun binary + QAIRT SDK and auto-pulls the model on first run if it's missing, then starts `npurun serve` on `127.0.0.1:11435` and points `shellai` at it via `shellai_npurun.json`.
+
+### Fallback paths
+
+If npurun/QAIRT isn't set up, `launcher.py` falls back to:
+
+1. **Phi-4-mini via DirectML** (Adreno GPU) — `npu_server.py` / `setup_npu.py`, needs a conda environment.
+2. **Ollama on CPU** — simplest, but no NPU/GPU offload on Windows ARM today.
+
+| Goal | Best choice |
+| --- | --- |
+| True NPU use, best agentic quality | npurun + `qwen3-4b-instruct-2507` (default) |
+| No QAIRT SDK set up yet | Phi-4-mini via DirectML |
+| Fastest zero-setup fallback | Ollama + `qwen2.5-coder:1.5b` or `qwen2.5-coder:3b` (CPU only) |
+
+## Usage
+
+Autopilot REPL:
+
+```powershell
+python .\shellai.py
+```
+
+Built-in controls:
+
+```text
+/help
+/history
+/new
+/resume 2
+/clear
+/mode autopilot
+/mode agent
+/mode chat
+/mode command
+/exit
+```
+
+History is stored locally in `C:\Users\Natha\local-shell-ai\history.json`. Sessions get an automatic title from your first prompt and show **Summary**, **Modified**, and **Created** in the history list. Chats older than 30 days are deleted automatically based on their last modified time.
+
+Press **Esc** while the CLI is thinking or while an autopilot command is still running to cancel the current step and return to the prompt.
+
+One-shot agent question:
+
+```powershell
+python .\shellai.py "what can you do?"
+```
+
+Interactive command suggestion:
+
+```powershell
+?? "find all Python files modified today"
+```
+
+Copy only:
+
+```powershell
+?? --copy "compress everything in Downloads older than 30 days"
+```
+
+Execute immediately:
+
+```powershell
+?? --command-only --execute "show my IPv4 address"
+```
+
+## Notes
+
+- The CLI uses only the Python standard library.
+- The command always stops for **Execute / Copy / Abort** unless you pass `--copy` or `--execute`.
+- If your NPU runtime already exposes an OpenAI-style endpoint, you only need to switch the config from `ollama` to `openai`.
