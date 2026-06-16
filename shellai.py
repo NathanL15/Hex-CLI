@@ -37,6 +37,7 @@ from uuid import uuid4
 
 import shellai_ui as ui
 import shellai_telemetry as telemetry
+import shellai_memory as memory
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and shellai_ui print. Force UTF-8 so output
@@ -162,6 +163,13 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
        have made 3 attempts, then explain the remaining issue in finish. Never call verify_syntax
        on a file you did not just edit or write in this conversation — that would be unnecessary
        tool use.
+    14. If the user explicitly references something from a prior session (e.g. "earlier",
+       "last time", "previously", "the file I fixed before", "what error did I get"), you MUST
+       run search_memory first to pull that context before executing any live-state commands.
+       This does NOT override rule 12 — a bare ambiguous request with no reference to a past
+       action (e.g. "fix my code", "update the file") still gets 0 tool calls and a clarifying
+       question, never a search_memory call. It also does NOT override rule 10 — never call
+       search_memory just because a general-knowledge question happens to sound open-ended.
 
     TOOLS:
 
@@ -197,6 +205,12 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     immediately after editing/writing any code file, per rule 13):
     {{"action":"verify_syntax","args":{{"path":"src/main.py","language":"python"}}}}
 
+    Search past session memory for relevant prior context (required first step when the user
+    references a past action or error, per rule 14). Write the query as a short restatement of
+    the user's own request, keeping their concrete nouns (file names, error text, task verbs) —
+    do not paraphrase those away into generic terms:
+    {{"action":"search_memory","args":{{"query":"<short restatement of the user's request, keeping its concrete nouns>","top_k":3}}}}
+
     Finish — always the last action:
     {{"action":"finish","message":"Done. Brief summary of what was accomplished."}}
 """).strip()
@@ -225,6 +239,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "shell_exe": "",
     "use_streaming": True,
     "telemetry_enabled": True,
+    "memory_enabled": True,
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -237,7 +252,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
-    "verify_syntax",
+    "verify_syntax", "search_memory",
 })
 
 REFUSAL_PHRASES = (
@@ -1230,6 +1245,12 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
             raise RuntimeError("verify_syntax requires 'path'.")
         language = str(args.get("language", "")).strip()
         return verify_syntax_tool(path, language, shell_exe)
+    if tool == "search_memory":
+        query_text = str(args.get("query", "")).strip()
+        if not query_text:
+            raise RuntimeError("search_memory requires 'query'.")
+        top_k = int(args.get("top_k", 3) or 3)
+        return memory.search_memory_tool(config, query_text, top_k)
 
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
@@ -1357,6 +1378,8 @@ def run_autopilot(
     output_limit = int(config.get("tool_output_limit", 12000))
     last_tool_output = ""
     total_eval = 0
+    tools_used: list[str] = []
+    touched_paths: list[str] = []
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
@@ -1405,6 +1428,7 @@ def run_autopilot(
             result = msg or last_tool_output or "Done."
             if session and last_tool_output:
                 store_observation(session, query, last_tool_output)
+            memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
             if total_eval:
                 cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
             return result
@@ -1413,6 +1437,10 @@ def run_autopilot(
             return action.get("message", "") or last_tool_output or "Done."
 
         tool_name = action["tool"]
+        tools_used.append(tool_name)
+        tool_path = action.get("args", {}).get("path") if isinstance(action.get("args"), dict) else None
+        if tool_path:
+            touched_paths.append(str(tool_path))
         ui.tool_header(tool_name)
         tool_start = time.monotonic()
         try:

@@ -193,6 +193,7 @@ TOOLS_HELP = textwrap.dedent("""
       search_files(pattern, path, glob)           Grep — search across files.
       find_files(glob, path)                      Find files by glob pattern.
       verify_syntax(path, language)               Non-destructive syntax check on a code file.
+      search_memory(query, top_k)                 Recall relevant prior session context.
 """).strip()
 
 
