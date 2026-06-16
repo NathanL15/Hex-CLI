@@ -15,7 +15,9 @@ It supports two local backends:
 
 ## Files
 
-- `shellai.py` - main CLI
+- `shellai.py` - main CLI (config, sessions, backends, tools, agent loop)
+- `shellai_ui.py` - presentation layer (colors, spinner, banners, rendering) imported by `shellai.py`
+- `shellai_telemetry.py` - silent structured session logger (see "Telemetry" below) imported by `shellai.py`
 - `shellai.cmd` - Windows launcher
 - `Ollama CLI.cmd` - Start Menu-friendly launcher name, runs `launcher.py`
 - `launcher.py` - picks the best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
@@ -49,6 +51,15 @@ Or force command-only mode:
 
 ```powershell
 python .\shellai.py --command-only "list the ten largest files here"
+```
+
+Other flags:
+
+```powershell
+python .\shellai.py --version       # print version and exit
+python .\shellai.py --debug ...     # full tracebacks on error instead of a clean error box
+python .\shellai.py --fast ...      # skip token-by-token streaming for quicker turnaround
+python .\shellai.py --raw ...       # disable ANSI colour/styling, plain stdout only
 ```
 
 Or use the launcher:
@@ -121,6 +132,7 @@ The tool auto-creates `shellai.json` on first run. The most important keys are:
   "tool_output_limit": 12000,
   "stream_delay_ms": 8,
   "history_retention_days": 30,
+  "telemetry_enabled": true,
   "ollama": {
     "host": "http://127.0.0.1:11434"
   },
@@ -187,6 +199,79 @@ If npurun/QAIRT isn't set up, `launcher.py` falls back to:
 | True NPU use, best agentic quality | npurun + `qwen3-4b-instruct-2507` (default) |
 | No QAIRT SDK set up yet | Phi-4-mini via DirectML |
 | Fastest zero-setup fallback | Ollama + `qwen2.5-coder:1.5b` or `qwen2.5-coder:3b` (CPU only) |
+
+## Syntax verification
+
+Autopilot mode has a `verify_syntax(path, language)` tool — a non-destructive syntax check
+(never executes the file) for Python (`ast.parse`), JSON (`json.loads`), PowerShell
+(`[System.Management.Automation.Language.Parser]::ParseFile`), and JS/TS-family files
+(`node --check`, skipped gracefully if `node` isn't on PATH). The autopilot system prompt
+requires the model to call it immediately after any `edit_file`/`write_file` touching a code
+file, and to read the error and retry the edit (up to 3 attempts) if it fails — a
+self-correcting loop that catches syntax mistakes before they reach disk-confirmed "done".
+
+## Telemetry
+
+`shellai_telemetry.py` silently logs structured session data to
+`.shellai/logs/session_<timestamp>_<id>.json` — one file per process run, written via an
+atomic temp-file replace, completely separate from `shellai_ui.py`'s terminal rendering (no
+telemetry code ever touches stdout/stderr). Disable it by setting `"telemetry_enabled": false`
+in `shellai.json`. Each turn records: the prompt, execution path (`direct` vs `agentic`), every
+tool call (with bulky args like file `content` redacted to a length placeholder), per-call and
+total latency, tokens generated, and completion status (`completed` / `cancelled` / `error`).
+`.shellai/` is gitignored.
+
+## Testing
+
+The autopilot system prompt (`_AUTOPILOT_TEMPLATE` in `shellai.py`) is the actual production
+tool-routing logic — it's validated against the live local endpoint, not just read for sanity.
+
+### Fast CI/CD smoke test — `eval_harness.py`
+
+```powershell
+python .\eval_harness.py                # run all 9 cases, save + print report
+python .\eval_harness.py --case casual-1 # run a single case by id
+python .\eval_harness.py --no-save       # skip writing eval_results.json
+```
+
+This is the **required gate before merging any change to `_AUTOPILOT_TEMPLATE` or the tool
+dispatch in `shellai.py`**. It hits the live OpenAI-compatible endpoint with the same JSON-action
+system prompt and parsing `run_autopilot()` uses in production, and drives a real (sandboxed)
+tool-execution loop for the agentic cases — file contents are verified on disk, not trusted from
+the model's own claims. 9 cases across casual / factual / agentic. Must pass with:
+- **0 tool hallucinations** — casual/factual questions get 0 tool calls.
+- **Strict adherence to the literal-output constraint** — counts and facts in agentic results
+  must match the literal tool output (e.g. an actual file count), never an estimate.
+- **0 findings** in the printed report.
+
+### Deep regression & edge-case suite — `eval_extended.py`
+
+```powershell
+python .\eval_extended.py                  # run the full 30+ case matrix
+python .\eval_extended.py --case trap-1     # run a single case by id
+python .\eval_extended.py --no-save         # skip writing eval_extended_results.json
+```
+
+Builds on `eval_harness.py`'s fixtures and runner (imports it, doesn't duplicate it) and adds
+categories for pressure-testing tool-routing beyond the fast smoke test:
+
+| Category | What it checks |
+| --- | --- |
+| `regression` | Fresh phrasings of bugs already fixed once (knowledge vs. live-state, literal file counts, single-line-anchor edits) — guards against silent reintroduction. |
+| `negative` | "Do nothing" conversational turns — strict assertion of EXACTLY 0 tool calls and 0 tool-name tokens anywhere in the raw output. |
+| `trap` | Prompts that explicitly instruct the model to use a tool for something answerable directly (e.g. "use write_file to tell me a poem") — model should refuse the bait. |
+| `error_recovery` | A fabricated tool-error turn (`[Permission Denied]`, `[File Not Found]`) is pre-seeded into the conversation; the model must pivot strategy, not crash or hallucinate success. |
+| `ambiguous` | Underspecified requests ("fix my code") — model should ask for specifics rather than guess and act. |
+| `self_correct` | A `.py` file is seeded with a deliberate syntax error; model must fix it and call `verify_syntax` to confirm before finishing. |
+
+Run this after any prompt change for deeper confidence than the fast smoke test gives alone; it's
+slower and intentionally adversarial, not a merge gate.
+
+**Known model limitation:** on `trap` cases that literally name a tool in the instruction (e.g.
+"use run_command to calculate the factorial of 5"), `qwen3-4b-instruct-2507` still complies with
+the bait roughly 1 in 3 runs despite an explicit rule against it — a ceiling of the 4B model's
+instruction-following, not a harness or prompt bug. Other categories are stable across repeated
+runs.
 
 ## Usage
 
