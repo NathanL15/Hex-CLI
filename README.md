@@ -18,6 +18,7 @@ It supports two local backends:
 - `shellai.py` - main CLI (config, sessions, backends, tools, agent loop)
 - `shellai_ui.py` - presentation layer (colors, spinner, banners, rendering) imported by `shellai.py`
 - `shellai_telemetry.py` - silent structured session logger (see "Telemetry" below) imported by `shellai.py`
+- `shellai_memory.py` - on-device semantic memory / vector store (see "Semantic memory" below) imported by `shellai.py`
 - `shellai.cmd` - Windows launcher
 - `Ollama CLI.cmd` - Start Menu-friendly launcher name, runs `launcher.py`
 - `launcher.py` - picks the best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
@@ -221,6 +222,30 @@ tool call (with bulky args like file `content` redacted to a length placeholder)
 total latency, tokens generated, and completion status (`completed` / `cancelled` / `error`).
 `.shellai/` is gitignored.
 
+## Semantic memory
+
+`shellai_memory.py` gives autopilot mode persistent recall of past sessions without bloating
+the prompt's context window. It's a pure-NumPy cosine-similarity vector index — no ChromaDB,
+FAISS, or LangChain — over local sentence embeddings from
+`sentence-transformers/all-MiniLM-L6-v2`'s ARM64-quantized ONNX export
+(`onnx/model_qint8_arm64.onnx`, int8, ~23MB), run via `onnxruntime` on CPU (chosen because
+neither the Ollama nor npurun backend currently exposes a working embeddings endpoint).
+Embedding/tokenizer loading happens lazily on first actual use via a process-wide singleton, so
+REPL startup latency is unaffected; a cold load takes ~0.2s, warm inference ~3ms.
+
+Whenever an agentic turn finishes with at least one tool call, a short summary of the prompt
+plus its tool sequence and touched file paths is embedded and appended to
+`.shellai/vector_store/` (`vectors.npz` + `metadata.json`, both written via atomic temp-file
+replace, capped at 500 entries with FIFO eviction). The `search_memory(query, top_k)` tool lets
+the model query that store by cosine similarity (results below a 0.15 similarity floor are
+dropped as noise). The autopilot system prompt requires the model to call `search_memory` first
+whenever the user explicitly references a prior session ("earlier", "last time", "the file I
+fixed before") — but this never overrides the existing rules for bare ambiguous requests (still
+0 tool calls, just a clarifying question) or trap prompts naming an unneeded tool. Disable memory
+entirely with `"memory_enabled": false` in `shellai.json`; like telemetry, `.shellai/` is
+gitignored and every public method in the module swallows its own exceptions, so an offline or
+failed model load degrades to a silent no-op rather than blocking a turn.
+
 ## Testing
 
 The autopilot system prompt (`_AUTOPILOT_TEMPLATE` in `shellai.py`) is the actual production
@@ -263,6 +288,7 @@ categories for pressure-testing tool-routing beyond the fast smoke test:
 | `error_recovery` | A fabricated tool-error turn (`[Permission Denied]`, `[File Not Found]`) is pre-seeded into the conversation; the model must pivot strategy, not crash or hallucinate success. |
 | `ambiguous` | Underspecified requests ("fix my code") — model should ask for specifics rather than guess and act. |
 | `self_correct` | A `.py` file is seeded with a deliberate syntax error; model must fix it and call `verify_syntax` to confirm before finishing. |
+| `semantic_memory` | A past session is pre-seeded directly into `.shellai/vector_store/`; the model must call `search_memory` to recall the right file path/tool sequence rather than guessing or claiming no memory exists. |
 
 Run this after any prompt change for deeper confidence than the fast smoke test gives alone; it's
 slower and intentionally adversarial, not a merge gate.

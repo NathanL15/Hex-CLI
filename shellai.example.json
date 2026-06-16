@@ -11,6 +11,7 @@
   "stream_delay_ms": 8,
   "history_retention_days": 30,
   "telemetry_enabled": true,
+  "memory_enabled": true,
   "shell_exe": "",
   "system_prompt": "You are a Windows PowerShell command generator. Convert the user's request into one safe, concrete PowerShell command that can run on Windows on ARM. Return exactly one command with no markdown. Always quote Windows paths that contain spaces. For local inspection tasks, prefer commands that produce direct evidence immediately.",
   "chat_system_prompt": "You are Ollama CLI, a local terminal assistant for Windows PowerShell. Return JSON with {\"message\":\"short helpful response\",\"command\":\"one safe PowerShell command or empty string\"}.",
