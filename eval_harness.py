@@ -53,6 +53,7 @@ class TestCase:
     verify: Any = None  # callable(sandbox: Path, result: dict) -> tuple[bool, str]
     tag: str | None = None  # optional reporting label, e.g. "regression" — defaults to category
     pre_seed: list[dict[str, str]] | None = None  # fabricated turns injected before the loop starts
+    memory_seed: list[dict[str, Any]] | None = None  # entries pre-loaded into the vector store
 
 
 def _verify_notes_txt(sandbox: Path, _result: dict[str, Any]) -> tuple[bool, str]:
@@ -252,6 +253,13 @@ def run_case_sandboxed(config: dict[str, Any], case: TestCase) -> dict[str, Any]
             (sandbox / name).write_text(content, encoding="utf-8")
         os.chdir(sandbox)
         try:
+            if case.memory_seed:
+                import shellai_memory as mem
+                store = mem.VectorStore(config)
+                for entry in case.memory_seed:
+                    entry = dict(entry)
+                    text = entry.pop("text")
+                    store.add(text, entry)
             result = run_case(config, case)
             result["tag"] = case.tag or case.category
             result["expected_tools"] = list(case.expected_tools)
