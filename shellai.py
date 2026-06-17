@@ -224,9 +224,9 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     immediately after editing/writing any code file, per rule 13):
     {{"action":"verify_syntax","args":{{"path":"src/main.py","language":"python"}}}}
 
-    Run a script and capture its output (only for scripts you just wrote or edited in this task;
-    workspace-only; .py .ps1 .js supported; always call verify_syntax first — per rule 15):
-    {{"action":"run_code","args":{{"path":"src/script.py","args":[],"timeout":10}}}}
+    Run a script and capture its output (workspace-only; .py .ps1 .js/.mjs/.cjs supported;
+    use for runtime-bug diagnosis — follow the exact sequence in rule 15):
+    {{"action":"run_code","args":{{"path":"script.py","args":[],"timeout":10}}}}
 
     Search past session memory for relevant prior context (required first step when the user
     references a past action or error, per rule 14). Write the query as a short restatement of
@@ -1322,7 +1322,7 @@ def run_code_tool(
     shell_exe: str,
     output_limit: int,
 ) -> str:
-    cwd = Path.cwd()
+    cwd = Path.cwd().resolve()
     path = resolve_path(path_text)
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
@@ -1344,10 +1344,13 @@ def run_code_tool(
                 "Allowed: .py .ps1 .js .mjs .cjs"
             )
     cmd = [*cmd_prefix, str(path), *[str(a) for a in run_args]]
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except (PermissionError, FileNotFoundError, OSError) as exc:
+        raise RuntimeError(f"Failed to launch interpreter for {path.name}: {exc}") from exc
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

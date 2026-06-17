@@ -234,6 +234,78 @@ parse-retry loop (up to 2 retries on malformed agent output, rule-driven anchore
 avoid multi-line JSON-escaping mistakes) remains the actual correctness backstop, not the
 backend flag.
 
+### Hexagon NPU recovery — FastRPC skeleton hang and BSOD
+
+The nominal inference path is `shellai.py → npurun serve → GenieDialog_create() → CDSP`. Every
+`npurun serve` invocation creates a Qualcomm FastRPC skeleton process — `QcSkExt8380` — that
+bridges Windows user-mode to the Compute DSP (CDSP) via a shared DMA buffer. Under clean
+shutdown this process exits with npurun. Under force-kill (Task Manager, `pkill`, or an eval
+harness terminating the process) it gets re-parented to `smss.exe` and stays alive, holding the
+CDSP session open.
+
+**Hang symptom:** the next `npurun serve` invocation prints the model-manifest line, then blocks
+indefinitely inside `GenieDialog_create()` (Genie SDK FFI call, Genie config has
+`"allow-async-init": false`, so this is synchronous). No timeout. No error. The process just
+stops progressing.
+
+**What not to do:** stopping the `qcdpps` DSP power-proxy service while the orphaned
+`QcSkExt8380` still holds a live DMA mapping triggers `DRIVER_VERIFIER_DMA_VIOLATION`
+(BSOD 0xE6, subtype `DMA_ILLEGAL_MEMORY_TYPE`). This produces the characteristic Windows
+driver-verifier crash screen with bugcheck code 0xE6.
+
+**Two failure modes, two recovery paths:**
+
+| Symptom after the bad event | Root cause | Recovery |
+|---|---|---|
+| `npurun serve` fails immediately with `"Failed to create device: 14001"` / `ERROR_GENERAL` | BSOD reset the CDSP but put `ACPI\QCOM0D0A\2&DABA3FF&2` (Hexagon NPU) into `CM_PROB_DISABLED` (Code 22) | Run in elevated PowerShell: `Enable-PnpDevice -InstanceId 'ACPI\QCOM0D0A\2&DABA3FF&2' -Confirm:$false` then `Restart-Service qcdpps` |
+| `npurun serve` prints the manifest then hangs forever | Orphaned `QcSkExt8380` skeleton process is holding the CDSP session | **Cold boot only** — hold **Shift** while clicking Shut Down (not Restart), then power on. A normal restart leaves NPU firmware state intact due to Windows Fast Startup (hiberboot), and the orphan persists. |
+
+The device instance ID `ACPI\QCOM0D0A\2&DABA3FF&2` is specific to this laptop; confirm with
+`Get-PnpDevice | Where-Object { $_.FriendlyName -like "*Hexagon*" -or $_.FriendlyName -like "*NPU*" }`.
+
+### Execution sandbox (`run_code`) — design and prompt engineering
+
+A useful agentic loop for runtime debugging requires: observe the error, edit the cause, confirm
+the fix runs clean. `run_code` closes the last mile — without it, the model has to trust its own
+code reading to decide whether a fix worked, which introduces false positives.
+
+**Security model:**
+
+- `resolve_path()` calls `Path.resolve()`, dereferencing all symlinks before the workspace
+  boundary check. `cwd` is similarly resolved with `Path.cwd().resolve()` so both sides of
+  the `is_relative_to()` comparison are in the same canonical space — a CWD that is itself a
+  symlink cannot produce a false "in-bounds" result.
+- Subprocess invocation uses the list form (no `shell=True`), so the model-controlled `path`
+  argument is passed as a literal argv element, not interpolated into a shell command string.
+- Extension allowlist (`.py .ps1 .js .mjs .cjs`) is enforced before `Popen` is reached.
+- Hard timeout with `proc.kill()` ensures a runaway script cannot block the agent loop.
+- `encoding="utf-8", errors="replace"` handles scripts that emit non-UTF-8 bytes without
+  raising a decode exception.
+- OS-level `Popen` failures (`PermissionError`, `FileNotFoundError`, `OSError`) are caught
+  and re-raised as `RuntimeError` so the agent receives a clean, human-readable error string.
+
+**Prompt engineering — why the 5-step loop is explicit:**
+
+A 4B model can reliably call a single tool when asked. Chaining five specific tools in a
+non-obvious order across multiple turns is harder — the model tends to skip steps (reading the
+code and fixing without running it first), call tools in the wrong order (`verify_syntax` before
+`edit_file`), or substitute a different tool (`run_command` instead of `run_code`) when a rule
+is ambiguous about scope.
+
+Rule 15 addresses this by spelling out the exact ordered sequence as lettered sub-steps:
+*(a) locate file → (b) run_code to see the error → (c) edit_file to fix it →
+(d) verify_syntax to confirm the edit → (e) run_code to confirm exit code 0.*
+This eliminates the multi-hop inference burden — at each step the model follows the next lettered
+instruction rather than reconstructing the full sequence from first principles.
+
+Three bug designs were tried before finding one the 4B model could reliably execute end-to-end:
+
+| Bug | Failure mode | Why it failed |
+|---|---|---|
+| `KeyError` — missing dict key | No-op edit (`old_string` == `new_string`) | 4B model identifies the right line but cannot infer what the missing value should be |
+| `NameError` typo in `greet.py` | Model read the file and spotted the fix visually, skipping `run_code` | Bug was top-level and trivially visible; model also hallucinated a `src/` path prefix |
+| `NameError` typo (`conut`) inside a function body in `report.py` | **Passes consistently** | Python's own `"Did you mean: 'count'?"` gives the model exact replacement text; indented placement is less trivially visible; non-generic filename avoids `src/` path hallucination |
+
 ### Telemetry
 
 `shellai_telemetry.py` silently logs structured session data to
