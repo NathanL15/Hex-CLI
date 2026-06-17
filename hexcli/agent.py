@@ -231,12 +231,22 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
 """).strip()
 
 
+_LINT_TOOL_SCHEMA = textwrap.dedent("""
+    Lint a Python file with ruff (faster than verify_syntax for catching unused imports,
+    undefined names, and style issues; complements but does not replace verify_syntax):
+    {{"action":"lint_code","args":{{"path":"src/main.py"}}}}
+""").strip()
+
+
 def build_autopilot_prompt(cwd: str, max_steps: int) -> str:
-    return _AUTOPILOT_TEMPLATE.format(
+    prompt = _AUTOPILOT_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%d"),
         cwd=cwd,
         max_steps=max_steps,
     )
+    if _RUFF:
+        prompt += "\n\n    " + _LINT_TOOL_SCHEMA
+    return prompt
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -264,11 +274,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+# ruff is an optional hard dependency: if present, lint_code is registered as a
+# live tool and injected into the system prompt. If absent, the tool simply does
+# not appear — no fallback needed since verify_syntax covers the critical path.
+_RUFF: str | None = shutil.which("ruff")
+
 TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
     "verify_syntax", "search_memory", "run_code",
+    *(["lint_code"] if _RUFF else []),
 })
+
+# Per-session file snapshots for agentic /undo. Keyed by session UUID, value is
+# a {resolved_path_str: original_content_or_None} dict captured before the
+# first mutation of each path in a given agentic turn.  None = file was created
+# fresh (undo = delete).  Stored in-process only — not persisted to history.json
+# because snapshots are only useful within the current session.
+_SESSION_UNDO_SNAPSHOTS: dict[str, dict[str, str | None]] = {}
 
 REFUSAL_PHRASES = (
     "i don't have access", "i do not have access", "i cannot access",
@@ -1337,6 +1360,25 @@ def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
     return detail
 
 
+def lint_code_tool(path_text: str) -> str:
+    if not _RUFF:
+        raise RuntimeError("ruff is not on PATH — lint_code is unavailable.")
+    path = resolve_path(path_text)
+    if not path.exists():
+        raise RuntimeError(f"File not found: {path}")
+    try:
+        result = subprocess.run(
+            [_RUFF, "check", "--output-format=text", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"ruff failed: {exc}") from exc
+    output = (result.stdout + result.stderr).strip()
+    status = "clean" if result.returncode == 0 else f"{result.returncode} issue(s)"
+    ui.tool_event("lint", f"{path}  ({status})")
+    return output if output else f"OK: no issues in {path}"
+
+
 _RUN_CODE_INTERPRETERS: dict[str, list[str]] = {
     ".py":  [sys.executable],
     ".ps1": [],           # filled in at call time with shell_exe
@@ -1481,6 +1523,12 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         timeout = max(1, min(int(args.get("timeout", 10) or 10), 60))
         return run_code_tool(path, run_args, timeout, shell_exe, limit)
 
+    if tool == "lint_code":
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("lint_code requires 'path'.")
+        return lint_code_tool(path)
+
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
 
@@ -1491,8 +1539,13 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
 def compact_history(
     config: dict[str, Any],
     session: dict[str, Any],
+    *,
+    quiet: bool = False,
 ) -> list[dict[str, str]]:
-    """Summarise the current message history and replace it with a compact version."""
+    """Summarise the current message history and replace it with a compact version.
+
+    quiet=True suppresses the printed summary (used by auto-compact).
+    """
     messages: list[dict[str, str]] = list(session.get("messages", []))
     if len(messages) < 4:
         print("Nothing to compact yet (fewer than 4 messages).")
@@ -1529,10 +1582,11 @@ def compact_history(
     touch_session(session)
 
     n_removed = len(messages) - len(new_messages)
-    cprint(f"\nCompacted: {len(messages)} → {len(new_messages)} messages (removed ~{n_removed}).", C.BCYAN)
-    cprint("Summary:", C.BOLD)
-    print(summary)
-    print()
+    if not quiet:
+        cprint(f"\nCompacted: {len(messages)} → {len(new_messages)} messages (removed ~{n_removed}).", C.BCYAN)
+        cprint("Summary:", C.BOLD)
+        print(summary)
+        print()
     return new_messages
 
 
@@ -1621,6 +1675,9 @@ def run_autopilot(
     total_eval = 0
     tools_used: list[str] = []
     touched_paths: list[str] = []
+    # Snapshot original file content before first mutation per path so /undo
+    # can restore the exact pre-turn state. None means file was created fresh.
+    _turn_snapshots: dict[str, str | None] = {}
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
@@ -1647,7 +1704,7 @@ def run_autopilot(
                 and any(name in raw for name in TOOL_NAMES)
                 and not parse_json_object(raw)
             ):
-                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({
                     "role": "user",
                     "content": (
@@ -1662,7 +1719,7 @@ def run_autopilot(
             msg = action.get("message", "")
             # Nudge once if the model refused to use tools
             if step == 0 and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES):
-                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({
                     "role": "user",
                     "content": "You have run_command and other tools available. Use them. Output JSON only.",
@@ -1674,9 +1731,13 @@ def run_autopilot(
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
             if total_eval:
                 cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
+            if session:
+                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             return result
 
         if action["action"] != "tool" or not action.get("tool"):
+            if session:
+                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             return action.get("message", "") or last_tool_output or "Done."
 
         tool_name = action["tool"]
@@ -1684,6 +1745,17 @@ def run_autopilot(
         tool_path = action.get("args", {}).get("path") if isinstance(action.get("args"), dict) else None
         if tool_path:
             touched_paths.append(str(tool_path))
+
+        # Capture file state before first mutation so /undo can restore it.
+        if tool_name in {"edit_file", "write_file", "append_file"} and tool_path:
+            try:
+                snap_key = str(resolve_path(tool_path))
+                if snap_key not in _turn_snapshots:
+                    p = Path(snap_key)
+                    _turn_snapshots[snap_key] = p.read_text(encoding="utf-8") if p.exists() else None
+            except Exception:
+                pass
+
         ui.tool_header(tool_name)
         tool_start = time.monotonic()
         try:
@@ -1691,6 +1763,8 @@ def run_autopilot(
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
         except (UserCancelled, KeyboardInterrupt):
+            if session:
+                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             raise
         except Exception as exc:
             tool_output = f"Error: {exc}"
@@ -1699,13 +1773,15 @@ def run_autopilot(
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
 
         last_tool_output = tool_output
-        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "assistant", "content": strip_thinking(raw)})
         messages.append({"role": "user", "content": f"Tool output:\n{trim_text(tool_output, output_limit)}"})
 
     if session and last_tool_output:
         store_observation(session, query, last_tool_output)
     if total_eval:
         cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
+    if session:
+        _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
     return last_tool_output or "Done."
 
 
@@ -1796,27 +1872,40 @@ def one_shot_command_mode(
 # ---------------------------------------------------------------------------
 
 # Eval showed Rule 15 degradation onset at ~2,600 total input tokens, of which
-# the system prompt accounts for ~1,200 tokens. Warn when session history alone
-# approaches that margin.
-_CONTEXT_WARN_TOKENS  = 1_400
-_CONTEXT_CRIT_TOKENS  = 1_700
+# the system prompt accounts for ~1,200 tokens. Auto-compact when session history
+# alone approaches that margin so the user never manually hits the cliff.
+_CONTEXT_WARN_TOKENS = 1_400
+_CONTEXT_CRIT_TOKENS = 1_700
 
 
-def _maybe_warn_context(session: dict[str, Any]) -> None:
+def _maybe_auto_compact(
+    config: dict[str, Any],
+    session: dict[str, Any],
+    sessions: list[dict[str, Any]],
+) -> None:
+    """Silently compact history when it approaches the 4B instruction-following cliff.
+
+    Fires after each autopilot turn. At ≥1,400 history tokens the compact runs
+    automatically so TTFT never crosses the degradation threshold. The full
+    summary is suppressed (quiet=True); only a one-line notice is printed.
+    """
     msgs = session.get("messages", [])
     est = sum(len(m.get("content", "")) for m in msgs) // 4
+    if est < _CONTEXT_WARN_TOKENS:
+        return
+    label = f"~{est:,} tokens"
     if est >= _CONTEXT_CRIT_TOKENS:
-        cprint(
-            f"  Context ~{est:,} history tokens — past 4B degradation threshold. "
-            "Run /compact now.",
-            C.BRED,
-        )
-    elif est >= _CONTEXT_WARN_TOKENS:
-        cprint(
-            f"  Context ~{est:,} history tokens — approaching 4B degradation threshold. "
-            "Consider /compact.",
-            C.BYELLOW,
-        )
+        label += " — past degradation threshold"
+    cprint(f"  Context {label} — auto-compacting…", C.BCYAN)
+    try:
+        compact_history(config, session, quiet=True)
+        sync_session_store(sessions, session)
+        n_after = len(session.get("messages", []))
+        cprint(f"  Auto-compacted. {n_after} active messages; past context indexed to memory.", C.DIM)
+    except UserCancelled:
+        cprint("  Auto-compact cancelled. Run /compact manually when ready.", C.YELLOW)
+    except Exception as exc:  # noqa: BLE001
+        cprint(f"  Auto-compact failed ({exc}). Run /compact manually.", C.YELLOW)
 
 
 # ---------------------------------------------------------------------------
@@ -1911,11 +2000,33 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             if len(msgs) >= 2:
                 current_session["messages"] = msgs[:-2]
                 touch_session(current_session)
+                # Restore any files mutated during the last agentic turn.
+                snapshots = _SESSION_UNDO_SNAPSHOTS.pop(current_session.get("id", ""), {})
+                if snapshots:
+                    restored: list[str] = []
+                    failed: list[str] = []
+                    for path_str, original in snapshots.items():
+                        try:
+                            p = Path(path_str)
+                            if original is None:
+                                if p.exists():
+                                    p.unlink()
+                                restored.append(f"deleted {p.name}")
+                            else:
+                                p.write_text(original, encoding="utf-8")
+                                restored.append(p.name)
+                        except Exception as exc:
+                            failed.append(f"{Path(path_str).name}: {exc}")
+                    if restored:
+                        cprint(f"  Files restored: {', '.join(restored)}", C.BCYAN)
+                    if failed:
+                        cprint(f"  Could not restore: {', '.join(failed)}", C.YELLOW)
                 sync_session_store(sessions, current_session)
                 cprint("Removed last exchange.", C.DIM)
             elif len(msgs) == 1:
                 current_session["messages"] = []
                 touch_session(current_session)
+                _SESSION_UNDO_SNAPSHOTS.pop(current_session.get("id", ""), None)
                 cprint("Removed last message.", C.DIM)
             else:
                 print("Nothing to undo.")
@@ -2027,7 +2138,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             append_session_message(current_session, "assistant", message)
             sync_session_store(sessions, current_session)
             tel.record_turn(turn)
-            _maybe_warn_context(current_session)
+            _maybe_auto_compact(config, current_session, sessions)
         except (UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
