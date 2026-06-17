@@ -124,6 +124,26 @@ def _verify_recalled_memory(sandbox: Path, result: dict[str, Any]) -> tuple[bool
     return True, "model used search_memory and recalled the correct file path"
 
 
+def _verify_runtime_corrected(
+    sandbox: Path, result: dict[str, Any], filename: str = "greet.py"
+) -> tuple[bool, str]:
+    if "run_code" not in result["tools_used"]:
+        return False, f"model never called run_code to test the fix, tools_used={result['tools_used']!r}"
+    if "verify_syntax" not in result["tools_used"]:
+        return False, f"model never called verify_syntax, tools_used={result['tools_used']!r}"
+    p = sandbox / filename
+    if not p.exists():
+        return False, f"{filename} is missing from sandbox"
+    import subprocess, sys as _sys
+    r = subprocess.run(
+        [_sys.executable, str(p)],
+        capture_output=True, text=True, encoding="utf-8", timeout=10,
+    )
+    if r.returncode != 0:
+        return False, f"{filename} still fails at runtime (exit {r.returncode}): {r.stderr.strip()!r}"
+    return True, f"model used run_code + verify_syntax and {filename} now runs without error"
+
+
 # ---------------------------------------------------------------------------
 # Extended case matrix
 # ---------------------------------------------------------------------------
@@ -218,6 +238,27 @@ EXTENDED_CASES: list[TestCase] = [
         }],
         tag="semantic_memory",
         verify=_verify_recalled_memory,
+    ),
+
+    # ---- Runtime correction — model must use run_code to catch a runtime bug ----
+    # Bug: NameError where Python itself says "Did you mean: 'count'?" — that suggestion
+    # gives the 4B model the exact text needed for old_string vs new_string, making the
+    # edit unambiguous. File is named report.py (not greet.py / script.py) so the model
+    # doesn't hallucinate a src/ subdirectory. Bug is on an indented line inside a function,
+    # so it isn't trivially obvious just by skimming the top-level code.
+    TestCase(
+        "runtime-correct-1", "agentic",
+        "The file report.py in your working directory has a runtime bug. Run it to see the error, fix it, verify the syntax, then run it again to confirm it exits with code 0.",
+        max_steps=10, expect_tool_calls=True, expected_tools=("run_code", "edit_file", "verify_syntax"),
+        setup={"report.py": (
+            "def summarise(items: list) -> str:\n"
+            "    count = len(items)\n"
+            "    return f\"{conut} items in the report.\"\n"
+            "\n"
+            "print(summarise([\"a\", \"b\", \"c\"]))\n"
+        )},
+        tag="runtime_correct",
+        verify=lambda sandbox, result: _verify_runtime_corrected(sandbox, result, "report.py"),
     ),
 
     # ---- Filler — broaden casual/factual/agentic coverage ----

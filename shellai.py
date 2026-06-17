@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import http.client
+import io
 import json
 import msvcrt
 import os
@@ -28,6 +30,7 @@ import textwrap
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
@@ -51,6 +54,14 @@ DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
 VERSION = "2.0.0"
+
+# Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
+# the start of each run_autopilot call so the server can detect intra-loop
+# continuations (same session, messages only appended) and skip reset_dialog(),
+# letting Genie re-prefill only the new tokens via SentenceCode::Rewind.
+# Cleared to None when no autopilot loop is active so non-agent calls get the
+# safe default full-reset behaviour.
+_CURRENT_SESSION_ID: str | None = None
 
 # ---------------------------------------------------------------------------
 # Presentation layer — re-exported from shellai_ui for existing call sites.
@@ -170,6 +181,14 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
        action (e.g. "fix my code", "update the file") still gets 0 tool calls and a clarifying
        question, never a search_memory call. It also does NOT override rule 10 — never call
        search_memory just because a general-knowledge question happens to sound open-ended.
+    15. run_code executes a script inside the working directory. Use it when the task involves
+       running, testing, or diagnosing a script file. For a runtime-bug task follow this exact
+       sequence: (a) use find_files or list_directory to confirm the file's exact path if you
+       are not already certain; (b) run_code with that confirmed path to see the error output;
+       (c) edit_file to apply the fix; (d) verify_syntax to confirm the edit is syntactically
+       valid; (e) run_code again to confirm exit code 0. Repeat steps c–e up to 3 times if
+       still failing, then explain the remaining issue in finish. Do not use run_command as a
+       substitute for run_code when the task involves executing a script file.
 
     TOOLS:
 
@@ -204,6 +223,10 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     Verify a code file has no syntax errors (non-destructive — never executes the file; required
     immediately after editing/writing any code file, per rule 13):
     {{"action":"verify_syntax","args":{{"path":"src/main.py","language":"python"}}}}
+
+    Run a script and capture its output (only for scripts you just wrote or edited in this task;
+    workspace-only; .py .ps1 .js supported; always call verify_syntax first — per rule 15):
+    {{"action":"run_code","args":{{"path":"src/script.py","args":[],"timeout":10}}}}
 
     Search past session memory for relevant prior context (required first step when the user
     references a past action or error, per rule 14). Write the query as a short restatement of
@@ -252,7 +275,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
-    "verify_syntax", "search_memory",
+    "verify_syntax", "search_memory", "run_code",
 })
 
 REFUSAL_PHRASES = (
@@ -497,23 +520,95 @@ def parse_args() -> argparse.Namespace:
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
+#
+# A single keep-alive connection per backend host:port is cached for the
+# life of the process and reused across every agent-loop step, instead of
+# opening/closing a fresh TCP connection on every call (the previous
+# urllib.request.urlopen()-per-call behaviour). The agent loop only ever has
+# one LLM call in flight at a time, so a single cached connection per host
+# is safe without locking around request/response pairs. Stays stdlib-only
+# (http.client), matching the project's no-heavy-deps design.
 # ---------------------------------------------------------------------------
+
+_HTTP_CONNECTIONS: dict[tuple[str, str, int], http.client.HTTPConnection] = {}
+_HTTP_CONN_LOCK = threading.Lock()
+
+
+def _connection_key(url: str) -> tuple[str, str, int]:
+    parsed = urllib.parse.urlsplit(url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return (scheme, host, port)
+
+
+def _get_connection(url: str, timeout_s: float) -> tuple[http.client.HTTPConnection, str]:
+    parsed = urllib.parse.urlsplit(url)
+    scheme, host, port = _connection_key(url)
+    path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    with _HTTP_CONN_LOCK:
+        conn = _HTTP_CONNECTIONS.get((scheme, host, port))
+        if conn is None:
+            conn_cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+            conn = conn_cls(host, port, timeout=timeout_s)
+            _HTTP_CONNECTIONS[(scheme, host, port)] = conn
+        else:
+            conn.timeout = timeout_s
+    return conn, path
+
+
+def _http_request(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout_s: float,
+) -> http.client.HTTPResponse:
+    """POST/GET over a cached keep-alive connection, with one transparent
+    reconnect if the server dropped an idle connection (RemoteDisconnected /
+    broken pipe) before we noticed.
+
+    Raises urllib.error.URLError / urllib.error.HTTPError on connection
+    failure / non-2xx status, matching what urllib.request.urlopen() used to
+    raise, so the existing top-level error handling keeps working unchanged.
+    """
+    conn, path = _get_connection(url, timeout_s)
+    try:
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+    except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        conn.close()
+        try:
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+        except OSError as exc:
+            raise urllib.error.URLError(exc) from exc
+    except OSError as exc:
+        raise urllib.error.URLError(exc) from exc
+
+    if resp.status >= 400:
+        body_bytes = resp.read()
+        raise urllib.error.HTTPError(
+            url, resp.status, resp.reason, dict(resp.getheaders()), io.BytesIO(body_bytes)
+        )
+    return resp
+
 
 def http_json_request(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout_s: int
 ) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    for k, v in headers.items():
-        req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    req_headers = {"Content-Type": "application/json"}
+    req_headers.update(headers)
+    resp = _http_request("POST", url, req_headers, body, timeout_s)
+    data = resp.read()
+    return json.loads(data.decode("utf-8"))
 
 
 def http_json_get(url: str, timeout_s: int = 10) -> Any:
-    with urllib.request.urlopen(url, timeout=timeout_s) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    resp = _http_request("GET", url, {}, None, timeout_s)
+    data = resp.read()
+    return json.loads(data.decode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +620,7 @@ def _ollama_stream_chat(
     messages: list[dict[str, str]],
     token_key: str,
     label: str = "thinking",
+    json_format: bool = False,
 ) -> tuple[str, int]:
     """Stream from Ollama /api/chat. Returns (content, eval_count)."""
     host = config["ollama"]["host"].rstrip("/")
@@ -538,6 +634,8 @@ def _ollama_stream_chat(
             "num_predict": int(config.get(token_key, 2048)),
         },
     }
+    if json_format:
+        payload["format"] = "json"
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -558,6 +656,11 @@ def _ollama_stream_chat(
     eval_count = 0
     tok = 0
 
+    # A dedicated connection per call, not the shared keep-alive pool used by
+    # the non-streaming helpers below: the response body here is read by a
+    # background thread and can be abandoned mid-stream (cancel, or the
+    # "done" line arriving before the socket reaches EOF), which would leave
+    # a shared connection in an indeterminate state for the next reuse.
     with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
         reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
         with CancelMonitor() as monitor:
@@ -619,7 +722,12 @@ def ollama_chat_non_stream(
     return str((resp.get("message") or {}).get("content", "")).strip()
 
 
-def openai_chat(config: dict[str, Any], messages: list[dict[str, str]], token_key: str) -> str:
+def openai_chat(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    token_key: str,
+    json_format: bool = False,
+) -> str:
     base_url = config["openai_compatible"]["base_url"].rstrip("/")
     api_key = config["openai_compatible"].get("api_key", "local")
     payload: dict[str, Any] = {
@@ -627,7 +735,12 @@ def openai_chat(config: dict[str, Any], messages: list[dict[str, str]], token_ke
         "temperature": config["temperature"],
         "max_tokens": int(config.get(token_key, 2048)),
         "messages": messages,
+        "stop": ["<|im_end|>", "<|im_start|>"],
     }
+    if json_format:
+        payload["response_format"] = {"type": "json_object"}
+    if _CURRENT_SESSION_ID is not None:
+        payload["session_id"] = _CURRENT_SESSION_ID
     resp = http_json_request(
         f"{base_url}/chat/completions", payload,
         {"Authorization": f"Bearer {api_key}"}, int(config["timeout_seconds"])
@@ -643,6 +756,7 @@ def _openai_stream_chat(
     messages: list[dict[str, str]],
     token_key: str,
     label: str = "thinking",
+    json_format: bool = False,
 ) -> tuple[str, int]:
     """Stream from an OpenAI-compatible SSE endpoint. Returns (content, token_count).
 
@@ -659,7 +773,12 @@ def _openai_stream_chat(
         "max_tokens": int(config.get(token_key, 2048)),
         "messages": messages,
         "stream": True,
+        "stop": ["<|im_end|>", "<|im_start|>"],
     }
+    if json_format:
+        payload["response_format"] = {"type": "json_object"}
+    if _CURRENT_SESSION_ID is not None:
+        payload["session_id"] = _CURRENT_SESSION_ID
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -680,6 +799,8 @@ def _openai_stream_chat(
     parts: list[str] = []
     tok = 0
 
+    # Dedicated per-call connection — see _ollama_stream_chat for why the
+    # shared keep-alive pool isn't used here.
     with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
         reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
         with CancelMonitor() as monitor:
@@ -773,10 +894,10 @@ def call_llm(
     console input buffer. Non-streaming path uses run_cancellable + Spinner.
     """
     if config["backend"] == "ollama" and config.get("use_streaming", True):
-        return _ollama_stream_chat(config, messages, token_key, label=label)
+        return _ollama_stream_chat(config, messages, token_key, label=label, json_format=json_format)
 
     if config["backend"] == "openai" and config.get("use_streaming", True):
-        return _openai_stream_chat(config, messages, token_key, label=label)
+        return _openai_stream_chat(config, messages, token_key, label=label, json_format=json_format)
 
     result_box: dict[str, Any] = {}
     error_box: dict[str, BaseException] = {}
@@ -786,7 +907,7 @@ def call_llm(
             if config["backend"] == "ollama":
                 content = ollama_chat_non_stream(config, messages, token_key, json_format=json_format)
             elif config["backend"] == "openai":
-                content = openai_chat(config, messages, token_key)
+                content = openai_chat(config, messages, token_key, json_format=json_format)
             else:
                 raise RuntimeError(f"Unsupported backend: {config['backend']}")
             result_box["value"] = (content, 0)
@@ -1185,6 +1306,71 @@ def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
     return detail
 
 
+_RUN_CODE_INTERPRETERS: dict[str, list[str]] = {
+    ".py":  [sys.executable],
+    ".ps1": [],           # filled in at call time with shell_exe
+    ".js":  ["node"],
+    ".mjs": ["node"],
+    ".cjs": ["node"],
+}
+
+
+def run_code_tool(
+    path_text: str,
+    run_args: list[str],
+    timeout: int,
+    shell_exe: str,
+    output_limit: int,
+) -> str:
+    cwd = Path.cwd()
+    path = resolve_path(path_text)
+    if not path.exists():
+        raise RuntimeError(f"File not found: {path}")
+    if not path.is_relative_to(cwd):
+        raise RuntimeError(
+            f"run_code is restricted to files under the working directory ({cwd}). "
+            f"Resolved path was: {path}"
+        )
+    ext = path.suffix.lower()
+    if ext in {".js", ".mjs", ".cjs"} and not shutil.which("node"):
+        raise RuntimeError("node not found on PATH — cannot run .js/.mjs/.cjs files")
+    if ext == ".ps1":
+        cmd_prefix = [shell_exe, "-NoLogo", "-NoProfile", "-File"]
+    else:
+        cmd_prefix = _RUN_CODE_INTERPRETERS.get(ext)
+        if cmd_prefix is None:
+            raise RuntimeError(
+                f"Unsupported extension {ext!r} for run_code. "
+                "Allowed: .py .ps1 .js .mjs .cjs"
+            )
+    cmd = [*cmd_prefix, str(path), *[str(a) for a in run_args]]
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        out = trim_text(stdout, output_limit)
+        err = trim_text(stderr, output_limit)
+        ui.tool_event("run", f"{path}  (TIMEOUT after {timeout}s)")
+        return (
+            f"Exit code: TIMEOUT ({timeout}s exceeded)\n\n"
+            f"[stdout]\n{out or '(empty)'}\n\n"
+            f"[stderr]\n{err or '(empty)'}"
+        )
+    out = trim_text(stdout, output_limit)
+    err = trim_text(stderr, output_limit)
+    ui.tool_event("run", f"{path}  (exit {proc.returncode})")
+    return (
+        f"Exit code: {proc.returncode}\n\n"
+        f"[stdout]\n{out or '(empty)'}\n\n"
+        f"[stderr]\n{err or '(empty)'}"
+    )
+
+
 def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
     tool = str(action.get("tool", "")).strip()
     args = action.get("args")
@@ -1251,6 +1437,15 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
             raise RuntimeError("search_memory requires 'query'.")
         top_k = int(args.get("top_k", 3) or 3)
         return memory.search_memory_tool(config, query_text, top_k)
+    if tool == "run_code":
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("run_code requires 'path'.")
+        run_args = args.get("args") or []
+        if not isinstance(run_args, list):
+            run_args = [str(run_args)]
+        timeout = max(1, min(int(args.get("timeout", 10) or 10), 60))
+        return run_code_tool(path, run_args, timeout, shell_exe, limit)
 
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
@@ -1353,6 +1548,8 @@ def run_autopilot(
     session: dict[str, Any] | None = None,
     turn: telemetry.TurnRecorder | None = None,
 ) -> str:
+    global _CURRENT_SESSION_ID
+    _CURRENT_SESSION_ID = None  # clear before early-return paths
     if is_help_request(query):
         return HELP_TEXT
     meta = local_meta_response(query, config)
@@ -1360,6 +1557,11 @@ def run_autopilot(
         return meta
     if is_small_talk(query):
         return "Hi — what would you like me to do?"
+
+    # Fresh UUID for this agent loop: lets the npurun server detect
+    # continuation turns (messages only appended) and skip reset_dialog(),
+    # so Genie re-prefills only the new tokens via SentenceCode::Rewind.
+    _CURRENT_SESSION_ID = str(uuid4())
 
     cwd = str(Path.cwd())
     max_steps = int(config.get("max_agent_steps", 15))
@@ -1390,7 +1592,9 @@ def run_autopilot(
         action: dict[str, Any] = {}
         for attempt in range(3):
             llm_start = time.monotonic()
-            raw, eval_count = call_llm(config, messages, "autopilot_max_output_tokens", label=step_label)
+            raw, eval_count = call_llm(
+                config, messages, "autopilot_max_output_tokens", label=step_label, json_format=True
+            )
             if turn:
                 turn.record_llm(time.monotonic() - llm_start, eval_count)
             total_eval += eval_count
