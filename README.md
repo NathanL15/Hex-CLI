@@ -11,7 +11,7 @@ It now works in three styles:
 It supports two local backends:
 
 1. **Ollama** for the simplest setup today.
-2. **OpenAI-compatible local endpoints** for Snapdragon NPU-backed runtimes built on Windows ML / ONNX Runtime QNN.
+2. **OpenAI-compatible local endpoints** for Snapdragon NPU-backed runtimes (npurun uses Qualcomm's Genie SDK via Rust FFI; the Phi-4-mini fallback uses ONNX Runtime DirectML).
 
 ## Files
 
@@ -26,6 +26,8 @@ It supports two local backends:
 - `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored into this repo — see setup below)
 - `shellai.example.json` - config example
 - `examples\onnx_qnn_provider_example.py` - minimal QNN provider example for Hexagon NPU routing
+- `eval_harness.py` - fast 9-case CI/CD smoke test (required gate before any `_AUTOPILOT_TEMPLATE` or tool-dispatch change)
+- `eval_extended.py` - 35-case deep regression and adversarial suite (trap, negative, error-recovery, ambiguous, runtime-correct categories)
 
 ## Quick start
 
@@ -201,15 +203,25 @@ If npurun/QAIRT isn't set up, `launcher.py` falls back to:
 | No QAIRT SDK set up yet | Phi-4-mini via DirectML |
 | Fastest zero-setup fallback | Ollama + `qwen2.5-coder:1.5b` or `qwen2.5-coder:3b` (CPU only) |
 
-## Syntax verification
+## Syntax verification and script execution
 
-Autopilot mode has a `verify_syntax(path, language)` tool — a non-destructive syntax check
-(never executes the file) for Python (`ast.parse`), JSON (`json.loads`), PowerShell
+Autopilot mode has two complementary tools for code correctness:
+
+**`verify_syntax(path, language)`** — non-destructive syntax check (never executes the file)
+for Python (`ast.parse`), JSON (`json.loads`), PowerShell
 (`[System.Management.Automation.Language.Parser]::ParseFile`), and JS/TS-family files
 (`node --check`, skipped gracefully if `node` isn't on PATH). The autopilot system prompt
 requires the model to call it immediately after any `edit_file`/`write_file` touching a code
-file, and to read the error and retry the edit (up to 3 attempts) if it fails — a
-self-correcting loop that catches syntax mistakes before they reach disk-confirmed "done".
+file, and to retry the edit up to 3 times on failure — catching syntax mistakes before
+reaching disk-confirmed "done".
+
+**`run_code(path, args, timeout)`** — sandboxed script execution (.py .ps1 .js/.mjs/.cjs)
+for runtime-bug diagnosis and fix verification. The workspace boundary is enforced via
+resolved-path comparison (symlinks fully dereferenced on both sides); the extension allowlist
+and list-form subprocess invocation (no `shell=True`) prevent interpreter injection. The
+autopilot system prompt enforces an explicit 5-step self-correction loop for runtime bugs:
+*(a) locate file → (b) run to see the error → (c) edit to fix it → (d) verify_syntax →
+(e) run again to confirm exit code 0*.
 
 ## Telemetry
 
@@ -272,7 +284,7 @@ the model's own claims. 9 cases across casual / factual / agentic. Must pass wit
 ### Deep regression & edge-case suite — `eval_extended.py`
 
 ```powershell
-python .\eval_extended.py                  # run the full 30+ case matrix
+python .\eval_extended.py                  # run the full 35-case matrix
 python .\eval_extended.py --case trap-1     # run a single case by id
 python .\eval_extended.py --no-save         # skip writing eval_extended_results.json
 ```
@@ -289,6 +301,7 @@ categories for pressure-testing tool-routing beyond the fast smoke test:
 | `ambiguous` | Underspecified requests ("fix my code") — model should ask for specifics rather than guess and act. |
 | `self_correct` | A `.py` file is seeded with a deliberate syntax error; model must fix it and call `verify_syntax` to confirm before finishing. |
 | `semantic_memory` | A past session is pre-seeded directly into `.shellai/vector_store/`; the model must call `search_memory` to recall the right file path/tool sequence rather than guessing or claiming no memory exists. |
+| `runtime_correct` | A `.py` file with a deliberate runtime bug is seeded; model must use `run_code` to observe the error, `edit_file` to fix it, `verify_syntax` to confirm the edit, and `run_code` again to confirm exit code 0. |
 
 Run this after any prompt change for deeper confidence than the fast smoke test gives alone; it's
 slower and intentionally adversarial, not a merge gate.
