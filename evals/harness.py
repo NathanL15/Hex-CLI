@@ -27,6 +27,7 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent.parent  # project root
 sys.path.insert(0, str(APP_DIR))
 import hexcli.agent as sa  # noqa: E402
+import shutil
 
 CONFIG_PATH = APP_DIR / "shellai_npurun.json"
 RESULTS_PATH = Path(__file__).resolve().parent / "results" / "harness_results.json"
@@ -91,6 +92,15 @@ def _verify_config_json(sandbox: Path, _result: dict[str, Any]) -> tuple[bool, s
     return True, "config.json updated with version 1.0"
 
 
+def _verify_lint_report(sandbox: Path, result: dict[str, Any]) -> tuple[bool, str]:
+    if "lint_code" not in result["tools_used"]:
+        return False, f"model never called lint_code, tools_used={result['tools_used']!r}"
+    msg = result["finished_message"]
+    if not any(kw in msg.lower() for kw in ("f401", "unused", "import", "os")):
+        return False, f"model called lint_code but didn't surface unused-import finding: {msg!r}"
+    return True, "model used lint_code and reported the unused-import issue"
+
+
 TEST_CASES: list[TestCase] = [
     # ---- Casual / short — expect a direct response, 0 tool calls ----
     TestCase("casual-1", "casual", "Hey, how's it going?", max_steps=2),
@@ -137,6 +147,18 @@ TEST_CASES: list[TestCase] = [
         expected_tools=("read_file", "edit_file"),
         setup={"config.json": '{\n  "name": "demo"\n}\n'},
         verify=_verify_config_json,
+    ),
+    # ---- lint_code — only included when ruff is on PATH ----
+    *(
+        [TestCase(
+            "lint-1", "agentic",
+            "Run the linter on bad_imports.py and tell me what issues it found.",
+            max_steps=4, expect_tool_calls=True, expected_tools=("lint_code",),
+            setup={"bad_imports.py": "import os\nimport sys\n\nx = 1\n"},
+            tag="lint",
+            verify=_verify_lint_report,
+        )]
+        if shutil.which("ruff") else []
     ),
 ]
 

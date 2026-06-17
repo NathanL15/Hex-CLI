@@ -155,7 +155,7 @@ HELP_TEXT = textwrap.dedent("""
       /resume <n>                   resume session #n from /history
       /clear                        clear the current session (keep in history)
       /compact                      summarise + compress history (saves context)
-      /undo                         remove the last user/assistant exchange
+      /undo                         remove last exchange; restores files if the turn wrote any
       /context                      show estimated context usage
       /models                       list available Ollama models
       /mode autopilot|chat|command  switch mode
@@ -287,9 +287,9 @@ def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
     print(f"  Model:            {config.get('model', 'unknown')}")
     print(f"  Backend:          {config.get('backend', 'ollama')}")
     if est_tokens >= 1700:
-        cprint("  ✗ Past 4B degradation threshold — run /compact now.", C.BRED)
+        cprint("  ✗ Past 4B degradation threshold — auto-compact will fire after the next turn.", C.BRED)
     elif est_tokens >= 1400:
-        cprint("  ⚠ Approaching 4B degradation threshold — consider /compact.", C.BYELLOW)
+        cprint("  ⚠ Approaching 4B degradation threshold — auto-compact fires after this turn.", C.BYELLOW)
     print()
 
 
