@@ -363,6 +363,9 @@ def _start_dml_server(conda: Path, model_dir: Path) -> None:
 
 def run_dml_path(conda: Path) -> int:
     """DirectML / Phi-4-mini path. Returns exit code."""
+    if not DML_SERVER.exists():
+        warn("DirectML server script not found — falling back to Ollama CPU.")
+        return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
     print()
     print(bold("  ─── Phi-4-mini on Adreno GPU (DirectML) ──────────────────"))
     print(f"  Model:  {bold('Phi-4-mini')}  4.2B INT4  (~2.5 GB)")

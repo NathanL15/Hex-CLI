@@ -3,6 +3,9 @@ history.json
 shellai.json
 shellai_npurun.json
 *.log
+evals/results/harness_results.json
+evals/results/extended_results.json
+# Legacy root-level result files from pre-restructure runs
 eval_results.json
 eval_extended_results.json
 .shellai/

@@ -13,20 +13,28 @@ It supports two local backends:
 1. **Ollama** for the simplest setup today.
 2. **OpenAI-compatible local endpoints** for Snapdragon NPU-backed runtimes (npurun uses Qualcomm's Genie SDK via Rust FFI; the Phi-4-mini fallback uses ONNX Runtime DirectML).
 
-## Files
+## Project layout
 
-- `shellai.py` - main CLI (config, sessions, backends, tools, agent loop)
-- `shellai_ui.py` - presentation layer (colors, spinner, banners, rendering) imported by `shellai.py`
-- `shellai_telemetry.py` - silent structured session logger (see "Telemetry" below) imported by `shellai.py`
-- `shellai_memory.py` - on-device semantic memory / vector store (see "Semantic memory" below) imported by `shellai.py`
-- `shellai.cmd` - stable `shellai` alias (backward-compat)
-- `Hex CLI.cmd` - primary Windows / Start Menu launcher, runs `launcher.py`
-- `launcher.py` - detects best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
-- `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored — see setup below)
-- `shellai.example.json` - config template
-- `eval_harness.py` - 9-case smoke test (required gate before any `_AUTOPILOT_TEMPLATE` or tool-dispatch change)
-- `eval_extended.py` - 35-case deep regression suite (trap, negative, error-recovery, ambiguous, runtime-correct)
-- `eval_multiturn.py` - multi-turn adversarial suite: context scaling, routing flip, deep-context injection
+```
+hexcli/                  Python package — the agent runtime
+  agent.py               core agent: config, sessions, tools, autopilot loop
+  ui.py                  presentation layer: colours, spinner, banners
+  telemetry.py           silent structured session logger
+  memory.py              on-device semantic vector store
+
+evals/                   evaluation suite (not needed to run the CLI)
+  harness.py             9-case smoke test — required gate before prompt/tool changes
+  extended.py            35-case regression suite (trap, negative, ambiguous, runtime-correct)
+  multiturn.py           multi-turn adversarial suite: context scaling + injection
+  results/               saved run snapshots (most are gitignored)
+
+shellai.py               entry-point shim — delegates to hexcli.agent (keeps launcher compat)
+launcher.py              backend detection: npurun NPU → Phi-4-mini DirectML → Ollama CPU
+Hex CLI.cmd              primary Windows / Start Menu launcher
+shellai.cmd              stable shellai alias (backward-compat)
+shellai.example.json     config template
+npurun/                  Rust NPU runtime (not vendored — see setup)
+```
 
 ## Quick start
 
@@ -262,16 +270,16 @@ failed model load degrades to a silent no-op rather than blocking a turn.
 The autopilot system prompt (`_AUTOPILOT_TEMPLATE` in `shellai.py`) is the actual production
 tool-routing logic — it's validated against the live local endpoint, not just read for sanity.
 
-### Fast CI/CD smoke test — `eval_harness.py`
+### Fast CI/CD smoke test — `evals/harness.py`
 
 ```powershell
-python .\eval_harness.py                # run all 9 cases, save + print report
-python .\eval_harness.py --case casual-1 # run a single case by id
-python .\eval_harness.py --no-save       # skip writing eval_results.json
+python .\evals\harness.py                # run all 9 cases, save + print report
+python .\evals\harness.py --case casual-1 # run a single case by id
+python .\evals\harness.py --no-save       # skip writing results file
 ```
 
 This is the **required gate before merging any change to `_AUTOPILOT_TEMPLATE` or the tool
-dispatch in `shellai.py`**. It hits the live OpenAI-compatible endpoint with the same JSON-action
+dispatch in `hexcli/agent.py`**. It hits the live OpenAI-compatible endpoint with the same JSON-action
 system prompt and parsing `run_autopilot()` uses in production, and drives a real (sandboxed)
 tool-execution loop for the agentic cases — file contents are verified on disk, not trusted from
 the model's own claims. 9 cases across casual / factual / agentic. Must pass with:
@@ -280,15 +288,15 @@ the model's own claims. 9 cases across casual / factual / agentic. Must pass wit
   must match the literal tool output (e.g. an actual file count), never an estimate.
 - **0 findings** in the printed report.
 
-### Deep regression & edge-case suite — `eval_extended.py`
+### Deep regression & edge-case suite — `evals/extended.py`
 
 ```powershell
-python .\eval_extended.py                  # run the full 35-case matrix
-python .\eval_extended.py --case trap-1     # run a single case by id
-python .\eval_extended.py --no-save         # skip writing eval_extended_results.json
+python .\evals\extended.py                  # run the full 35-case matrix
+python .\evals\extended.py --case trap-1     # run a single case by id
+python .\evals\extended.py --no-save         # skip writing results file
 ```
 
-Builds on `eval_harness.py`'s fixtures and runner (imports it, doesn't duplicate it) and adds
+Builds on `evals/harness.py`'s fixtures and runner (imports it, doesn't duplicate it) and adds
 categories for pressure-testing tool-routing beyond the fast smoke test:
 
 | Category | What it checks |
