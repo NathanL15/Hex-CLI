@@ -422,7 +422,7 @@ def run_dml_path(conda: Path) -> int:
 
 def main() -> int:
     print()
-    print(bold(cyan("  Local Shell AI")))
+    print(bold(cyan("  Hex CLI")))
     print(dim("  Qwen3-4B (Hexagon NPU) → Phi-4-mini (Adreno GPU) → Ollama CPU"))
     print()
 

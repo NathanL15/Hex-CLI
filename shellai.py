@@ -1475,11 +1475,16 @@ def compact_history(
         print("Nothing to compact yet (fewer than 4 messages).")
         return messages
 
+    # /no_think disables Qwen3's chain-of-thought block so the token budget
+    # goes to the actual summary rather than being consumed by <think> tags.
     summary_messages: list[dict[str, str]] = [
         {"role": "system", "content": COMPACT_SYSTEM_PROMPT},
         *messages,
+        {"role": "user", "content": "Produce the compact summary now. /no_think"},
     ]
-    summary, _ = call_llm(config, summary_messages, "chat_max_output_tokens", label="compacting")
+    compact_tokens = max(512, int(config.get("compact_max_output_tokens", 512)))
+    config_with_compact = {**config, "_compact_tokens": compact_tokens}
+    summary, _ = call_llm(config_with_compact, summary_messages, "_compact_tokens", label="compacting")
     summary = strip_thinking(summary).strip()
 
     new_messages: list[dict[str, str]] = [
@@ -1821,7 +1826,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             continue
 
         # ── resume ────────────────────────────────────────────────────────
-        if norm.startswith("/resume ") or norm.startswith("/open "):
+        if norm in {"/resume", "/open"} or norm.startswith("/resume ") or norm.startswith("/open "):
             sync_session_store(sessions, current_session)
             sessions = load_history_store(config)
             parts = norm.split()
