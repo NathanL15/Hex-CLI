@@ -10,9 +10,9 @@ Every turn is fully instrumented: estimated input tokens, first-response latency
 (proxy for TTFT + prefill cost), tool sequence, schema compliance, correctness.
 
 Usage:
-    python eval_multiturn.py               # run all three use cases
-    python eval_multiturn.py --uc uc1      # run a single use case
-    python eval_multiturn.py --no-save
+    python evals/multiturn.py               # run all three use cases
+    python evals/multiturn.py --uc uc1      # run a single use case
+    python evals/multiturn.py --no-save
 """
 from __future__ import annotations
 

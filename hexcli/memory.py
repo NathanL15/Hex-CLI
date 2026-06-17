@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""shellai_memory — lightweight on-device semantic memory for shellai.
+"""hexcli.memory — lightweight on-device semantic memory for Hex CLI.
 
 Pure NumPy vector index over a local ONNX sentence-embedding model
 (sentence-transformers/all-MiniLM-L6-v2, ARM64-quantized). No FAISS/
-ChromaDB/LangChain. One-way dependency, mirroring shellai_ui.py and
-shellai_telemetry.py: shellai.py imports this module, never the reverse.
+ChromaDB/LangChain. One-way dependency, mirroring hexcli.ui and
+hexcli.telemetry: hexcli.agent imports this module, never the reverse.
 
 Every public method swallows its own exceptions — an embedding/model
 load failure (e.g. offline on first use) must degrade to a silent

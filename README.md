@@ -143,6 +143,7 @@ The tool auto-creates `shellai.json` on first run. The most important keys are:
   "stream_delay_ms": 8,
   "history_retention_days": 30,
   "telemetry_enabled": true,
+  "compact_max_output_tokens": 512,
   "ollama": {
     "host": "http://127.0.0.1:11434"
   },
@@ -232,9 +233,9 @@ autopilot system prompt enforces an explicit 5-step self-correction loop for run
 
 ## Telemetry
 
-`shellai_telemetry.py` silently logs structured session data to
+`hexcli/telemetry.py` silently logs structured session data to
 `.shellai/logs/session_<timestamp>_<id>.json` — one file per process run, written via an
-atomic temp-file replace, completely separate from `shellai_ui.py`'s terminal rendering (no
+atomic temp-file replace, completely separate from `hexcli/ui.py`'s terminal rendering (no
 telemetry code ever touches stdout/stderr). Disable it by setting `"telemetry_enabled": false`
 in `shellai.json`. Each turn records: the prompt, execution path (`direct` vs `agentic`), every
 tool call (with bulky args like file `content` redacted to a length placeholder), per-call and
@@ -243,7 +244,7 @@ total latency, tokens generated, and completion status (`completed` / `cancelled
 
 ## Semantic memory
 
-`shellai_memory.py` gives autopilot mode persistent recall of past sessions without bloating
+`hexcli/memory.py` gives autopilot mode persistent recall of past sessions without bloating
 the prompt's context window. It's a pure-NumPy cosine-similarity vector index — no ChromaDB,
 FAISS, or LangChain — over local sentence embeddings from
 `sentence-transformers/all-MiniLM-L6-v2`'s ARM64-quantized ONNX export
@@ -267,7 +268,7 @@ failed model load degrades to a silent no-op rather than blocking a turn.
 
 ## Testing
 
-The autopilot system prompt (`_AUTOPILOT_TEMPLATE` in `shellai.py`) is the actual production
+The autopilot system prompt (`_AUTOPILOT_TEMPLATE` in `hexcli/agent.py`) is the actual production
 tool-routing logic — it's validated against the live local endpoint, not just read for sanity.
 
 ### Fast CI/CD smoke test — `evals/harness.py`

@@ -161,7 +161,7 @@ def run_case(config: dict[str, Any], case: TestCase) -> dict[str, Any]:
     total_latency = 0.0
 
     for step in range(case.max_steps):
-        # Mirrors shellai.run_autopilot's up-to-2-retries-on-malformed-JSON behaviour,
+        # Mirrors hexcli.agent.run_autopilot's up-to-2-retries-on-malformed-JSON behaviour,
         # so the harness measures the same effective tool-routing the real CLI gets.
         raw = ""
         action: dict[str, Any] = {}
