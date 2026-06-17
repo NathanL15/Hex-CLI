@@ -10,6 +10,11 @@ eval_extended_results.json
 # Third-party clone with its own git history; see README for setup
 npurun/
 
+# Dev / diagnostic scripts — local use only, not part of the product
+debug_eos_probe.py
+make_icon.py
+rewind_bench.py
+
 # Python
 __pycache__/
 *.pyc
