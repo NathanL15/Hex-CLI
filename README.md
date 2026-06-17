@@ -38,7 +38,7 @@ npurun/                  Rust NPU runtime (not vendored — see setup)
 
 ## Quick start
 
-From `C:\Users\Natha\local-shell-ai`:
+From the project folder:
 
 ```powershell
 Copy-Item .\shellai.example.json .\shellai.json
@@ -83,7 +83,7 @@ Or use the launcher:
 This install also supports an app-style launcher named **Hex CLI**.
 
 - Start Menu name: **Hex CLI**
-- Backing launcher: `C:\Users\Natha\local-shell-ai\Hex CLI.cmd`
+- Backing launcher: `Hex CLI.cmd` in the project folder
 
 You can open it from Start and use it like a local CLI agent with statuses, streaming text, shell execution, and file actions.
 
@@ -99,7 +99,7 @@ notepad $PROFILE
 Paste this in the profile:
 
 ```powershell
-$ShellAiRoot = "$HOME\local-shell-ai"   # update if you move the folder
+$ShellAiRoot = "C:\path\to\Hex-CLI"   # update to your clone location
 
 function shellai {
     python "$ShellAiRoot\shellai.py" @Args
@@ -342,7 +342,7 @@ Built-in controls:
 /exit
 ```
 
-History is stored locally in `C:\Users\Natha\local-shell-ai\history.json`. Sessions get an automatic title from your first prompt and show **Summary**, **Modified**, and **Created** in the history list. Chats older than 30 days are deleted automatically based on their last modified time.
+History is stored locally in `history.json` in the project folder. Sessions get an automatic title from your first prompt and show **Summary**, **Modified**, and **Created** in the history list. Chats older than 30 days are deleted automatically based on their last modified time.
 
 Press **Esc** while the CLI is thinking or while an autopilot command is still running to cancel the current step and return to the prompt.
 

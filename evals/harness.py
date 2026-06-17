@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""eval_harness.py — E2E evaluation suite for the local LLM behind shellai.
+"""evals/harness.py — 9-case E2E smoke test for Hex CLI.
 
 Hits the configured OpenAI-compatible endpoint directly using the same
-autopilot system prompt and JSON-action parsing shellai.py uses in production,
-so results reflect real tool-routing behaviour. Drives a real (sandboxed)
-tool-execution loop for agentic cases — file contents are verified on disk,
-not just trusted from the model's own claims.
+autopilot system prompt and JSON-action parsing hexcli.agent uses in
+production, so results reflect real tool-routing behaviour. Drives a real
+(sandboxed) tool-execution loop for agentic cases — file contents are
+verified on disk, not trusted from the model's own claims.
 
 Usage:
-    python eval_harness.py                # run full matrix, save + print report
-    python eval_harness.py --case casual-1 # run a single case by id
-    python eval_harness.py --no-save       # run without writing eval_results.json
+    python evals/harness.py                 # run full matrix, save + print report
+    python evals/harness.py --case casual-1 # run a single case by id
+    python evals/harness.py --no-save       # skip writing results file
 """
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = Path(__file__).resolve().parent.parent  # project root
 sys.path.insert(0, str(APP_DIR))
-import shellai as sa  # noqa: E402
+import hexcli.agent as sa  # noqa: E402
 
 CONFIG_PATH = APP_DIR / "shellai_npurun.json"
-RESULTS_PATH = APP_DIR / "eval_results.json"
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "harness_results.json"
 
 # Thresholds used to flag latency problems in the analysis step.
 CASUAL_LATENCY_BUDGET_S = 8.0
@@ -254,7 +254,7 @@ def run_case_sandboxed(config: dict[str, Any], case: TestCase) -> dict[str, Any]
         os.chdir(sandbox)
         try:
             if case.memory_seed:
-                import shellai_memory as mem
+                from hexcli import memory as mem
                 store = mem.VectorStore(config)
                 for entry in case.memory_seed:
                     entry = dict(entry)
