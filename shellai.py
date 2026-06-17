@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""shellai — local Ollama/OpenAI-compatible CLI agent.
+"""shellai — Hex CLI, local Hexagon NPU terminal agent.
 
 Improvements over v1:
   - Streaming with live token counter (Ollama backend)
@@ -1123,22 +1123,30 @@ def run_command_tool(
 
     t = threading.Thread(target=reader, daemon=True)
     t.start()
-    parts: list[str] = []
-    with CancelMonitor() as monitor:
-        while t.is_alive() or not out_q.empty() or process.poll() is None:
-            if monitor.cancelled.is_set():
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                raise UserCancelled()
+    def _terminate() -> None:
+        if process.poll() is None:
+            process.terminate()
             try:
-                line = out_q.get(timeout=0.05)
-            except queue.Empty:
-                continue
-            print(line, end="")
-            parts.append(line)
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+    parts: list[str] = []
+    try:
+        with CancelMonitor() as monitor:
+            while t.is_alive() or not out_q.empty() or process.poll() is None:
+                if monitor.cancelled.is_set():
+                    _terminate()
+                    raise UserCancelled()
+                try:
+                    line = out_q.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                print(line, end="")
+                parts.append(line)
+    except KeyboardInterrupt:
+        _terminate()
+        raise UserCancelled()
     process.wait()
     output = "".join(parts)
     return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
@@ -1654,7 +1662,7 @@ def run_autopilot(
             tool_output = execute_tool_call(config, action, shell_exe)
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
-        except UserCancelled:
+        except (UserCancelled, KeyboardInterrupt):
             raise
         except Exception as exc:
             tool_output = f"Error: {exc}"
@@ -1772,10 +1780,13 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         prompt = repl_prompt(config, mode)
         try:
             query = input(prompt).strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             print()
             sync_session_store(sessions, current_session)
             return 0
+        except KeyboardInterrupt:
+            print()
+            continue
 
         if not query:
             continue
@@ -1916,7 +1927,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 append_session_message(current_session, "assistant", f"Command: {command}")
                 sync_session_store(sessions, current_session)
                 tel.record_turn(turn)
-            except UserCancelled:
+            except (UserCancelled, KeyboardInterrupt):
                 print("\nCancelled.\n")
                 tel.record_turn(turn, status="cancelled")
             except Exception as exc:  # noqa: BLE001
@@ -1941,7 +1952,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 append_session_message(current_session, "assistant", assistant_content)
                 sync_session_store(sessions, current_session)
                 tel.record_turn(turn)
-            except UserCancelled:
+            except (UserCancelled, KeyboardInterrupt):
                 print("\nCancelled.\n")
                 tel.record_turn(turn, status="cancelled")
             except Exception as exc:  # noqa: BLE001
@@ -1960,7 +1971,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             append_session_message(current_session, "assistant", message)
             sync_session_store(sessions, current_session)
             tel.record_turn(turn)
-        except UserCancelled:
+        except (UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
         except Exception as exc:  # noqa: BLE001
@@ -1982,7 +1993,7 @@ def main() -> int:
     args = parse_args()
 
     if args.version:
-        print(f"shellai {VERSION}")
+        print(f"Hex CLI {VERSION}")
         return 0
 
     if args.raw:
@@ -2028,7 +2039,7 @@ def main() -> int:
                 act_on_command(response["command"], shell_exe, args.copy, args.execute)
             return 0
         return one_shot_autopilot(config, query, shell_exe)
-    except UserCancelled:
+    except (UserCancelled, KeyboardInterrupt):
         cprint("Cancelled.", C.YELLOW, file=sys.stderr)
         return 130
     except urllib.error.HTTPError as error:

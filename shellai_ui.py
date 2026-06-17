@@ -122,7 +122,7 @@ def error_box(message: str, *, file: Any = None) -> None:
 
 
 def print_banner(model: str, backend: str, mode: str) -> None:
-    title = "LOCAL SHELL AI"
+    title = "HEX CLI"
     width = max(len(title) + 4, 44)
     print()
     cprint("┌" + "─" * width + "┐", C.BCYAN)
@@ -141,7 +141,7 @@ def print_banner(model: str, backend: str, mode: str) -> None:
 # ---------------------------------------------------------------------------
 
 HELP_TEXT = textwrap.dedent("""
-    Local Shell AI  —  Ollama / OpenAI-compatible local agent
+    Hex CLI  —  local Hexagon NPU terminal agent
 
     MODES:
       autopilot   full agent with tools, loops until done  (default)
@@ -166,13 +166,13 @@ HELP_TEXT = textwrap.dedent("""
       Esc                           cancel the current agent step
 
     AGENT TOOLS (autopilot):
-      run_command     read_file     edit_file    write_file
+      run_command     read_file     edit_file    write_file    run_code
       append_file     list_directory             search_files  find_files
 
     NPU NOTE:
-      Ollama runs on CPU on Windows ARM. For Hexagon NPU inference, set
-      backend=openai and point openai_compatible.base_url at an ONNX Runtime
-      QNN server (onnxruntime-qnn + QNNExecutionProvider/HTP). See README.md.
+      Primary path: npurun + qwen3-4b-instruct-2507 on the Hexagon NPU (~15 tok/s).
+      Fallback: Phi-4-mini via DirectML (Adreno GPU) or Ollama on CPU.
+      See README.md for setup. launcher.py auto-selects the best available backend.
 
     GOOD MODELS (ollama pull <model>):
       qwen2.5-coder:7b    ~4 GB   best default for agent tasks
