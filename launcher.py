@@ -39,7 +39,7 @@ SHELLAI_SCRIPT = APP_DIR / "shellai.py"
 
 # npurun — Qwen3-4B on Hexagon NPU via Qualcomm Genie SDK
 NPURUN_EXE       = Path.home() / ".cargo" / "bin" / "npurun.exe"
-QNN_SDK_ROOT     = Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
+QNN_SDK_ROOT     = Path(os.environ.get("QNN_SDK_ROOT", "C:/Qualcomm/AIStack/QAIRT_2.47.0"))
 NPURUN_MODEL     = "qwen3-4b-instruct-2507"
 NPURUN_MODEL_DIR = Path.home() / "AppData" / "Local" / "npurun" / "models" / NPURUN_MODEL
 NPURUN_PORT      = 11435

@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""shellai — Hex CLI, local Hexagon NPU terminal agent.
+"""hexcli.agent — Hex CLI, local Hexagon NPU terminal agent.
 
-Improvements over v1:
-  - Streaming with live token counter (Ollama backend)
-  - ANSI colour output (auto-detected, respects NO_COLOR)
-  - /compact  /undo  /context  /models  /cwd  slash commands
-  - Git branch shown in REPL prompt
-  - <think>...</think> stripping for reasoning models
-  - JSON parse retry on malformed agent output (up to 2 retries)
-  - Higher defaults: max_agent_steps=15, autopilot_max_output_tokens=2048
-  - Date + CWD injected into the autopilot system prompt each turn
-  - Better output formatting with labelled sections
+Core module: config loading, session management, LLM backends, tool
+execution sandbox, autopilot agent loop, and REPL.
 """
 from __future__ import annotations
 
@@ -38,9 +30,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import shellai_ui as ui
-import shellai_telemetry as telemetry
-import shellai_memory as memory
+from hexcli import ui
+from hexcli import telemetry
+from hexcli import memory
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and shellai_ui print. Force UTF-8 so output
@@ -49,7 +41,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one level down)
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300

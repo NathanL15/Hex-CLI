@@ -18,7 +18,7 @@ interactive latency.
 The production inference path is:
 
 ```
-shellai.py  ──HTTP (OpenAI-compatible)──>  npurun serve (Rust)  ──FFI──>  Qualcomm Genie SDK  ──>  Hexagon NPU
+hexcli/agent.py  ──HTTP (OpenAI-compatible)──>  npurun serve (Rust)  ──FFI──>  Qualcomm Genie SDK  ──>  Hexagon NPU
 ```
 
 **`npurun`** ([bpbonker/npurun](https://github.com/bpbonker/npurun)) is an open-source Rust
@@ -38,7 +38,7 @@ seconds for most turns, which matters for a CLI tool people expect to interrupt 
 constantly — but a 4B model is also the source of most of the interesting behavioral
 problems documented in this overview.
 
-`shellai.py` itself talks to the backend over plain HTTP using only `urllib`/`http.client`
+`hexcli/agent.py` itself talks to the backend over plain HTTP using only `urllib`/`http.client`
 from the standard library — no `requests`, no `httpx`. Two backends are supported
 (Ollama for the simplest local setup, and any OpenAI-compatible endpoint for npurun or a
 DirectML/Phi-4-mini fallback), selected by a one-line config change.
@@ -51,7 +51,7 @@ knows. A 4B model will happily call `run_command` to answer "what's the syntax f
 list comprehension," burning 5-10 seconds of NPU inference on a question that needed zero
 tool calls.
 
-The fix is entirely in the system prompt (`_AUTOPILOT_TEMPLATE` in `shellai.py`), not in code.
+The fix is entirely in the system prompt (`_AUTOPILOT_TEMPLATE` in `hexcli/agent.py`), not in code.
 The model emits exactly one JSON action per turn (`{"action": "<tool>", "args": {...}}` or
 `{"action": "finish", "message": "..."}`), and the routing rules draw a hard line between two
 categories of request:
@@ -76,7 +76,7 @@ calls, and is explicitly forbidden from opening the response with "Done" or clai
 was completed.
 
 These three rules are tested directly by the `trap`, `negative`, and `ambiguous` categories
-in `eval_extended.py` (see §3) — and the trap category in particular exposed a real ceiling
+in `evals/extended.py` (see §3) — and the trap category in particular exposed a real ceiling
 in the model's instruction-following that no amount of prompt tuning fully closed (§5).
 
 ## 3. Testing Infrastructure
@@ -88,12 +88,12 @@ not mocks — driving the same JSON-action parsing and tool-dispatch loop used i
 with file-system side effects verified on disk rather than trusted from the model's own
 claims.
 
-### Tier 1 — `eval_harness.py` (CI/CD smoke gate)
+### Tier 1 — `evals/harness.py` (CI/CD smoke gate)
 
 ```powershell
-python eval_harness.py                # run all 9 cases, save + print report
-python eval_harness.py --case casual-1
-python eval_harness.py --no-save
+python evals/harness.py                # run all 9 cases, save + print report
+python evals/harness.py --case casual-1
+python evals/harness.py --no-save
 ```
 
 Nine cases across `casual` / `factual` / `agentic`. This is the **required merge gate** for
@@ -104,11 +104,11 @@ any change to `_AUTOPILOT_TEMPLATE` or the tool dispatch logic. It must pass wit
   back to the literal tool output already in the conversation, never an estimate.
 - **0 findings** in the printed report.
 
-### Tier 2 — `eval_extended.py` (deep regression & adversarial suite)
+### Tier 2 — `evals/extended.py` (deep regression & adversarial suite)
 
 ```powershell
-python eval_extended.py                  # full 30+ case matrix
-python eval_extended.py --case trap-1
+python evals/extended.py                  # full 30+ case matrix
+python evals/extended.py --case trap-1
 ```
 
 Builds on the Tier 1 fixtures and runner (imports, doesn't duplicate) and adds categories
@@ -137,7 +137,7 @@ error did I get") without bloating every prompt with raw conversation history, a
 adding ChromaDB, FAISS, or LangChain to a project that otherwise depends on nothing but the
 standard library.
 
-`shellai_memory.py` implements a **pure-NumPy cosine-similarity vector index** — no external
+`hexcli/memory.py` implements a **pure-NumPy cosine-similarity vector index** — no external
 vector database, just a `.npz` array and a `.json` metadata sidecar:
 
 ```
@@ -170,17 +170,17 @@ file I fixed before") — but this is deliberately scoped narrowly so it never o
 existing ambiguous-request rule (§2, rule 12) or causes the model to call it just because an
 unrelated question happens to sound open-ended (rule 10's bait-compliance protection).
 
-**Failure mode by design:** every public method in `shellai_memory.py` swallows its own
+**Failure mode by design:** every public method in `hexcli/memory.py` swallows its own
 exceptions. An offline first run, a missing model cache, or a corrupted store degrades to a
 silent no-op rather than blocking or crashing a turn that doesn't strictly need memory —
 matching the same one-way-dependency, fail-silent convention already established by
-`shellai_telemetry.py` and `shellai_ui.py`.
+`hexcli/telemetry.py` and `hexcli/ui.py`.
 
 ## 5. System Limitations & Telemetry
 
 ### TTFT: the real bottleneck vs. the obvious one
 
-The natural hypothesis going into a latency investigation was that `shellai.py` was paying
+The natural hypothesis going into a latency investigation was that `hexcli/agent.py` was paying
 for a fresh TCP connection on every single agent-loop step (`urllib.request.urlopen()` opens
 and tears down a new socket per call). Measured on loopback, that overhead is real but
 small — about **8.5ms per connect** — and reusing a keep-alive connection across the
@@ -212,7 +212,7 @@ shared-socket race.
 
 ### The trap-prompt ceiling
 
-`eval_extended.py`'s `trap` category exists specifically to test rule 10 (§2) — prompts that
+`evals/extended.py`'s `trap` category exists specifically to test rule 10 (§2) — prompts that
 name a tool for something answerable directly. Despite an explicit, worked-example rule
 against this, `qwen3-4b-instruct-2507` still complies with the bait roughly **1 in 3 runs**
 on prompts that literally name a tool in the instruction (e.g. "use `run_command` to
@@ -229,7 +229,7 @@ its behavior.
 server, but only as a **prompt-injection hint** (`augment_for_json_mode()` on the Rust
 side) — not grammar-constrained or token-masked sampling. The model can still produce
 invalid JSON even with this flag set. The practical implication: the agent's JSON-action
-protocol cannot rely on the backend to guarantee well-formed output, so `shellai.py`'s own
+protocol cannot rely on the backend to guarantee well-formed output, so `hexcli/agent.py`'s own
 parse-retry loop (up to 2 retries on malformed agent output, rule-driven anchored edits to
 avoid multi-line JSON-escaping mistakes) remains the actual correctness backstop, not the
 backend flag.
@@ -308,7 +308,7 @@ Three bug designs were tried before finding one the 4B model could reliably exec
 
 ### Telemetry
 
-`shellai_telemetry.py` silently logs structured session data to
+`hexcli/telemetry.py` silently logs structured session data to
 `.shellai/logs/session_<timestamp>_<id>.json` (atomic temp-file replace, one file per process
 run) — completely separate from the UI's terminal rendering. Each turn records the prompt,
 execution path (`direct` vs `agentic`), every tool call (bulky args like file `content`

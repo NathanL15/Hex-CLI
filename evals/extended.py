@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""eval_extended.py — deep regression & edge-case suite for the local LLM behind shellai.
+"""evals/extended.py — 35-case deep regression & adversarial suite for Hex CLI.
 
-Builds on eval_harness.py's fixtures, runner, and analysis (imported, not duplicated) and
+Builds on evals/harness.py's fixtures, runner, and analysis (imported, not duplicated) and
 adds the categories that matter once the core 9-case smoke test is stable:
 
   - regression : fresh phrasings of the 3 bugs already fixed in _AUTOPILOT_TEMPLATE,
@@ -17,20 +17,23 @@ adds the categories that matter once the core 9-case smoke test is stable:
                   clarifying question rather than guess and act.
 
 Usage:
-    python eval_extended.py                  # run full 30+ case matrix
-    python eval_extended.py --case trap-1     # run a single case by id
-    python eval_extended.py --no-save         # skip writing eval_extended_results.json
+    python evals/extended.py                  # run full 35-case matrix
+    python evals/extended.py --case trap-1    # run a single case by id
+    python evals/extended.py --no-save        # skip writing results file
 """
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any
 
-import eval_harness as base
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # project root
 
-APP_DIR = Path(__file__).resolve().parent
-RESULTS_PATH = APP_DIR / "eval_extended_results.json"
+from evals import harness as base  # noqa: E402
+
+APP_DIR = Path(__file__).resolve().parent.parent  # project root
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "extended_results.json"
 
 TestCase = base.TestCase
 
