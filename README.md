@@ -1,6 +1,6 @@
-# Local Shell AI
+# Hex CLI
 
-`shellai` is a local terminal agent for Windows on ARM.
+`shellai` is a local terminal agent for Windows on ARM, running on the Hexagon NPU.
 
 It now works in three styles:
 
@@ -20,7 +20,7 @@ It supports two local backends:
 - `shellai_telemetry.py` - silent structured session logger (see "Telemetry" below) imported by `shellai.py`
 - `shellai_memory.py` - on-device semantic memory / vector store (see "Semantic memory" below) imported by `shellai.py`
 - `shellai.cmd` - Windows launcher
-- `Ollama CLI.cmd` - Start Menu-friendly launcher name, runs `launcher.py`
+- `Hex CLI.cmd` - Start Menu launcher, runs `launcher.py`
 - `launcher.py` - picks the best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
 - `npu_server.py` / `setup_npu.py` / `npu_server.cmd` - DirectML/ONNX Runtime GenAI fallback server (Adreno GPU path, used when npurun isn't available)
 - `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored into this repo — see setup below)
@@ -73,10 +73,10 @@ Or use the launcher:
 
 ## Start Menu launcher
 
-This install also supports an app-style launcher named **Ollama CLI**.
+This install also supports an app-style launcher named **Hex CLI**.
 
-- Start Menu name: **Ollama CLI**
-- Backing launcher: `C:\Users\Natha\local-shell-ai\Ollama CLI.cmd`
+- Start Menu name: **Hex CLI**
+- Backing launcher: `C:\Users\Natha\local-shell-ai\Hex CLI.cmd`
 
 You can open it from Start and use it like a local CLI agent with statuses, streaming text, shell execution, and file actions.
 
@@ -92,7 +92,7 @@ notepad $PROFILE
 Paste this in the profile:
 
 ```powershell
-$ShellAiRoot = "$HOME\local-shell-ai"
+$ShellAiRoot = "$HOME\local-shell-ai"   # update if you move the folder
 
 function shellai {
     python "$ShellAiRoot\shellai.py" @Args

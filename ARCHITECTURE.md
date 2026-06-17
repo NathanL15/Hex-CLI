@@ -1,4 +1,4 @@
-# Architecture Overview — Local Shell AI
+# Architecture Overview — Hex CLI
 
 A local-first, agentic CLI for Windows on ARM. The design goal throughout was to push as
 much capability as possible onto a small, NPU-resident model and a thin Python orchestration
