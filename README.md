@@ -19,15 +19,14 @@ It supports two local backends:
 - `shellai_ui.py` - presentation layer (colors, spinner, banners, rendering) imported by `shellai.py`
 - `shellai_telemetry.py` - silent structured session logger (see "Telemetry" below) imported by `shellai.py`
 - `shellai_memory.py` - on-device semantic memory / vector store (see "Semantic memory" below) imported by `shellai.py`
-- `shellai.cmd` - Windows launcher
-- `Hex CLI.cmd` - Start Menu launcher, runs `launcher.py`
-- `launcher.py` - picks the best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
-- `npu_server.py` / `setup_npu.py` / `npu_server.cmd` - DirectML/ONNX Runtime GenAI fallback server (Adreno GPU path, used when npurun isn't available)
-- `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored into this repo — see setup below)
-- `shellai.example.json` - config example
-- `examples\onnx_qnn_provider_example.py` - minimal QNN provider example for Hexagon NPU routing
-- `eval_harness.py` - fast 9-case CI/CD smoke test (required gate before any `_AUTOPILOT_TEMPLATE` or tool-dispatch change)
-- `eval_extended.py` - 35-case deep regression and adversarial suite (trap, negative, error-recovery, ambiguous, runtime-correct categories)
+- `shellai.cmd` - stable `shellai` alias (backward-compat)
+- `Hex CLI.cmd` - primary Windows / Start Menu launcher, runs `launcher.py`
+- `launcher.py` - detects best available backend (npurun NPU → Phi-4-mini DirectML → Ollama CPU) and starts `shellai.py` pointed at it
+- `npurun/` - clone of [bpbonker/npurun](https://github.com/bpbonker/npurun), the Rust NPU runtime used for the primary Hexagon NPU path (not vendored — see setup below)
+- `shellai.example.json` - config template
+- `eval_harness.py` - 9-case smoke test (required gate before any `_AUTOPILOT_TEMPLATE` or tool-dispatch change)
+- `eval_extended.py` - 35-case deep regression suite (trap, negative, error-recovery, ambiguous, runtime-correct)
+- `eval_multiturn.py` - multi-turn adversarial suite: context scaling, routing flip, deep-context injection
 
 ## Quick start
 
@@ -194,7 +193,7 @@ Model: **`qwen3-4b-instruct-2507`** (w4a16, ~2.5 GB). Chosen over the alternativ
 
 If npurun/QAIRT isn't set up, `launcher.py` falls back to:
 
-1. **Phi-4-mini via DirectML** (Adreno GPU) — `npu_server.py` / `setup_npu.py`, needs a conda environment.
+1. **Phi-4-mini via DirectML** (Adreno GPU) — requires ONNX Runtime GenAI + a conda environment; `launcher.py` detects and launches automatically if the model is present.
 2. **Ollama on CPU** — simplest, but no NPU/GPU offload on Windows ARM today.
 
 | Goal | Best choice |
