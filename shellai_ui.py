@@ -286,8 +286,10 @@ def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
     print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
     print(f"  Model:            {config.get('model', 'unknown')}")
     print(f"  Backend:          {config.get('backend', 'ollama')}")
-    if est_tokens > 6000:
-        cprint("  Tip: run /compact to save context.", C.BYELLOW)
+    if est_tokens >= 1700:
+        cprint("  ✗ Past 4B degradation threshold — run /compact now.", C.BRED)
+    elif est_tokens >= 1400:
+        cprint("  ⚠ Approaching 4B degradation threshold — consider /compact.", C.BYELLOW)
     print()
 
 

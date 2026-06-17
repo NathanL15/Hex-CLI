@@ -993,6 +993,32 @@ def resolve_path(raw: str) -> Path:
     return Path(expanded).resolve()
 
 
+_SENSITIVE_HOME_DIRS = frozenset({".ssh", ".gnupg", ".gpg"})
+_HOME = Path.home().resolve()
+
+
+def _check_sensitive_path(path: Path, op: str) -> None:
+    """Block file operations on SSH/GPG key dirs and Windows credential stores."""
+    try:
+        rel = path.relative_to(_HOME)
+        top = rel.parts[0].lower() if rel.parts else ""
+    except ValueError:
+        top = ""
+    if top in _SENSITIVE_HOME_DIRS:
+        raise RuntimeError(
+            f"{op} is blocked for paths under ~/{rel.parts[0]} "
+            "(SSH/GPG keys and config). Use run_command for direct access."
+        )
+    path_str = str(path).lower()
+    if "appdata" in path_str and any(
+        s in path_str for s in ("\\microsoft\\credentials", "\\microsoft\\protect")
+    ):
+        raise RuntimeError(
+            f"{op} is blocked for Windows credential store paths. "
+            "Use run_command for direct access."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -1154,6 +1180,7 @@ def run_command_tool(
 
 def read_file_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text)
+    _check_sensitive_path(path, "read_file")
     content = path.read_text(encoding="utf-8", errors="replace")
     ui.tool_event("read", str(path))
     return trim_text(content, output_limit)
@@ -1161,6 +1188,7 @@ def read_file_tool(path_text: str, output_limit: int) -> str:
 
 def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     path = resolve_path(path_text)
+    _check_sensitive_path(path, "edit_file")
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
     content = path.read_text(encoding="utf-8")
@@ -1175,6 +1203,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
 
 def write_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
+    _check_sensitive_path(path, "write_file")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     ui.tool_event("write", f"{path}  ({len(content)} chars)")
@@ -1183,6 +1212,7 @@ def write_file_tool(path_text: str, content: str) -> str:
 
 def append_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
+    _check_sensitive_path(path, "append_file")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(content)
@@ -1202,6 +1232,7 @@ def list_directory_tool(path_text: str, output_limit: int) -> str:
 
 def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_limit: int) -> str:
     search_path = resolve_path(path_text or ".")
+    _check_sensitive_path(search_path, "search_files")
     glob_pattern = glob_pattern or "*"
     results: list[str] = []
     try:
@@ -1769,6 +1800,34 @@ def one_shot_command_mode(
 
 
 # ---------------------------------------------------------------------------
+# Context warning
+# ---------------------------------------------------------------------------
+
+# Eval showed Rule 15 degradation onset at ~2,600 total input tokens, of which
+# the system prompt accounts for ~1,200 tokens. Warn when session history alone
+# approaches that margin.
+_CONTEXT_WARN_TOKENS  = 1_400
+_CONTEXT_CRIT_TOKENS  = 1_700
+
+
+def _maybe_warn_context(session: dict[str, Any]) -> None:
+    msgs = session.get("messages", [])
+    est = sum(len(m.get("content", "")) for m in msgs) // 4
+    if est >= _CONTEXT_CRIT_TOKENS:
+        cprint(
+            f"  Context ~{est:,} history tokens — past 4B degradation threshold. "
+            "Run /compact now.",
+            C.BRED,
+        )
+    elif est >= _CONTEXT_WARN_TOKENS:
+        cprint(
+            f"  Context ~{est:,} history tokens — approaching 4B degradation threshold. "
+            "Consider /compact.",
+            C.BYELLOW,
+        )
+
+
+# ---------------------------------------------------------------------------
 # REPL
 # ---------------------------------------------------------------------------
 
@@ -1976,6 +2035,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             append_session_message(current_session, "assistant", message)
             sync_session_store(sessions, current_session)
             tel.record_turn(turn)
+            _maybe_warn_context(current_session)
         except (UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
