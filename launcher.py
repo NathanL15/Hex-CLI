@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """launcher.py — Self-bootstrapping launcher for shellai with NPU/GPU acceleration.
 
-Run by  Ollama CLI.cmd  on every launch.
+Run by  Hex CLI.cmd  on every launch.
 
 Priority order:
   1. Qwen3-4B via npurun (Genie/QNN, Hexagon NPU) — ~15 tok/s, requires QAIRT SDK

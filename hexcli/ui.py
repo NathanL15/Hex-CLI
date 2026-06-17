@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""shellai_ui — presentation layer for shellai.
+"""hexcli.ui — presentation layer for Hex CLI.
 
-Pure rendering/formatting: no imports from shellai.py (one-way dependency,
-shellai.py -> shellai_ui.py). Functions here take plain data (dicts, strings,
+Pure rendering/formatting: no imports from hexcli.agent (one-way dependency,
+hexcli.agent -> hexcli.ui). Functions here take plain data (dicts, strings,
 lists) rather than calling back into the data/backend layer.
 """
 from __future__ import annotations

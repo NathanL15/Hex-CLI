@@ -35,7 +35,7 @@ from hexcli import telemetry
 from hexcli import memory
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
-# and braille glyphs this script and shellai_ui print. Force UTF-8 so output
+# and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
 # doesn't crash regardless of the caller's console codepage (mirrors launcher.py).
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -45,7 +45,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "2.0.0"
+VERSION = "1.0.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -56,7 +56,7 @@ VERSION = "2.0.0"
 _CURRENT_SESSION_ID: str | None = None
 
 # ---------------------------------------------------------------------------
-# Presentation layer — re-exported from shellai_ui for existing call sites.
+# Presentation layer — re-exported from hexcli.ui for existing call sites.
 # ---------------------------------------------------------------------------
 
 C = ui.C

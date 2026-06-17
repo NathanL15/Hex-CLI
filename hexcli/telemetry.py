@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""shellai_telemetry — silent structured session logging for shellai.
+"""hexcli.telemetry — silent structured session logging for Hex CLI.
 
-One-way dependency, mirroring shellai_ui.py: shellai.py imports this module,
+One-way dependency, mirroring hexcli.ui: hexcli.agent imports this module,
 never the reverse. Every public method swallows its own exceptions — a
 telemetry failure must never surface in the terminal UI or interrupt the
 agent loop.
