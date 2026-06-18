@@ -161,6 +161,9 @@ HELP_TEXT = textwrap.dedent("""
       /mode autopilot|chat|command  switch mode
       /model <name>                 switch model  e.g. /model qwen2.5-coder:14b
       /cwd [path]                   show or change working directory
+      /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
+      /memory [status|list|search|clear]  inspect or manage the memory store
+      /profile                      show backend, model, session and memory status
       /tools                        list agent tools
       /exit  /quit                  exit
       Esc                           cancel the current agent step
@@ -194,6 +197,9 @@ TOOLS_HELP = textwrap.dedent("""
       find_files(glob, path)                      Find files by glob pattern.
       verify_syntax(path, language)               Non-destructive syntax check on a code file.
       search_memory(query, top_k)                 Recall relevant prior session context.
+      fetch_url(url)                              Fetch a web page (online only).
+      batch(actions)                              Run up to 8 read-only tools in parallel.
+      delegate(task)                              Spawn a focused sub-agent (max 5 steps).
 """).strip()
 
 
