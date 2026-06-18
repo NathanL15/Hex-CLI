@@ -33,6 +33,7 @@ from uuid import uuid4
 from hexcli import ui
 from hexcli import telemetry
 from hexcli import memory
+from hexcli import safety
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -45,7 +46,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -265,6 +266,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "use_streaming": True,
     "telemetry_enabled": True,
     "memory_enabled": True,
+    "autopilot_confirm_destructive": True,
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -530,6 +532,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Verbose error output (full tracebacks).")
     parser.add_argument("--fast", action="store_true", help="Trim spinner/streaming overhead for quicker turnaround.")
     parser.add_argument("--raw", action="store_true", help="Disable ANSI colour/styling; plain stdout only.")
+    parser.add_argument("--yolo", action="store_true", help="Skip destructive-command confirmation (CI/automation use only).")
     return parser.parse_args()
 
 
@@ -624,6 +627,30 @@ def http_json_get(url: str, timeout_s: int = 10) -> Any:
     resp = _http_request("GET", url, {}, None, timeout_s)
     data = resp.read()
     return json.loads(data.decode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Backend health probe
+# ---------------------------------------------------------------------------
+
+def ping_backend(config: dict[str, Any]) -> bool:
+    """Return True if the configured backend responds to a quick health probe."""
+    try:
+        if config["backend"] == "ollama":
+            host = config["ollama"]["host"].rstrip("/")
+            http_json_get(f"{host}/api/tags", timeout_s=3)
+        elif config["backend"] == "openai":
+            base_url = config["openai_compatible"]["base_url"].rstrip("/")
+            _http_request("GET", f"{base_url}/models", {}, None, 3.0)
+        return True
+    except Exception:
+        return False
+
+
+def _backend_url(config: dict[str, Any]) -> str:
+    if config.get("backend") == "ollama":
+        return str(config["ollama"]["host"])
+    return str(config["openai_compatible"]["base_url"])
 
 
 # ---------------------------------------------------------------------------
@@ -1458,7 +1485,23 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         cmd = str(args.get("command", "")).strip()
         if not cmd:
             raise RuntimeError("run_command requires 'command'.")
-        return run_command_tool(cmd, shell_exe, limit)
+        classification = safety.classify_command(cmd)
+        confirm = config.get("autopilot_confirm_destructive", True)
+        if classification == "destructive" and confirm:
+            if not ui.confirm_destructive_command(cmd):
+                safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "blocked")
+                return "Blocked by user."
+        result = run_command_tool(cmd, shell_exe, limit)
+        # Parse exit code from the first line of run_command_tool output for the audit log.
+        exit_code: int | str | None = None
+        try:
+            first = result.strip().splitlines()[0]
+            if first.startswith("Exit code:"):
+                exit_code = int(first.split(":", 1)[1].strip())
+        except Exception:
+            pass
+        safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, exit_code)
+        return result
     if tool == "read_file":
         path = str(args.get("path", "")).strip()
         if not path:
@@ -1678,6 +1721,8 @@ def run_autopilot(
     # Snapshot original file content before first mutation per path so /undo
     # can restore the exact pre-turn state. None means file was created fresh.
     _turn_snapshots: dict[str, str | None] = {}
+    # Rolling window for error-loop detection: (tool_name, output) tuples.
+    _loop_tracker: list[tuple[str, str]] = []
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
@@ -1773,6 +1818,16 @@ def run_autopilot(
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
 
         last_tool_output = tool_output
+        # Error-loop detection: if the last 3 (tool, output) pairs are identical,
+        # the agent is cycling — stop early rather than burning the full step budget.
+        _loop_tracker.append((tool_name, tool_output))
+        if len(_loop_tracker) > 3:
+            _loop_tracker.pop(0)
+        if len(_loop_tracker) == 3 and len(set(_loop_tracker)) == 1:
+            cprint("\n  ⚠ Agent appears stuck in a repeat loop (3 identical results). Stopping.", C.BYELLOW)
+            if session:
+                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+            return last_tool_output or "Done."
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
         messages.append({"role": "user", "content": f"Tool output:\n{trim_text(tool_output, output_limit)}"})
 
@@ -2142,6 +2197,13 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         except (UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
+        except urllib.error.URLError:
+            if not ping_backend(config):
+                cprint(f"\n  Backend at {_backend_url(config)} is not responding.", C.BRED)
+                cprint("  Restart it with: python launcher.py", C.DIM)
+            else:
+                ui.error_box("Network error — backend returned an unexpected response.")
+            tel.record_turn(turn, status="error")
         except Exception as exc:  # noqa: BLE001
             ui.error_box(str(exc))
             tel.record_turn(turn, status="error")
@@ -2167,9 +2229,14 @@ def main() -> int:
     if args.raw:
         ui.set_color_enabled(False)
     DEBUG = args.debug
+    if args.yolo:
+        config_overrides = {"autopilot_confirm_destructive": False}
+    else:
+        config_overrides = {}
 
     config_path = Path(args.config).expanduser().resolve()
     config = load_config(config_path)
+    config = deep_merge(config, config_overrides)
 
     if args.backend:
         config["backend"] = args.backend
@@ -2219,8 +2286,14 @@ def main() -> int:
         if DEBUG:
             raise
         return 2
-    except urllib.error.URLError as error:
-        ui.error_box(f"Cannot reach Ollama. Is it running?  ollama serve\n{error}")
+    except urllib.error.URLError:
+        if not ping_backend(config):
+            ui.error_box(
+                f"Backend at {_backend_url(config)} is not responding.\n"
+                "Restart it with: python launcher.py"
+            )
+        else:
+            ui.error_box("Network error — backend returned an unexpected response.")
         if DEBUG:
             raise
         return 2
