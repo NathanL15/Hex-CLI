@@ -162,7 +162,7 @@ HELP_TEXT = textwrap.dedent("""
       /model <name>                 switch model  e.g. /model qwen2.5-coder:14b
       /cwd [path]                   show or change working directory
       /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
-      /memory [status|list|search|clear]  inspect or manage the memory store
+      /memory [status|list|search|clear|prune]  inspect or manage the memory store
       /profile                      show backend, model, session and memory status
       /tools                        list agent tools
       /exit  /quit                  exit
