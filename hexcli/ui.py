@@ -338,6 +338,19 @@ def repl_prompt(config: dict[str, Any], mode: str) -> str:
 # Result rendering
 # ---------------------------------------------------------------------------
 
+def confirm_destructive_command(cmd: str) -> bool:
+    """Print a destructive-command warning and return True only if the user types y/yes."""
+    print()
+    cprint("⚠  Agent wants to run a destructive command:", C.BYELLOW, bold=True)
+    cprint(f"   {cmd}", C.RED)
+    print()
+    try:
+        answer = input("Allow? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes"}
+
+
 def render_result(title: str, body: str) -> None:
     print()
     cprint(f"── {title} ", C.BOLD + C.BCYAN)
