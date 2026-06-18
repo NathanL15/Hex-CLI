@@ -36,6 +36,7 @@ from hexcli import telemetry
 from hexcli import memory
 from hexcli import safety
 from hexcli import network
+from hexcli import lockfile
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -48,7 +49,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -255,6 +256,19 @@ _BATCH_SCHEMA = textwrap.dedent("""
     Max 8 actions. Mutations (edit_file, write_file, run_command) are NOT allowed in batch.
 """).strip()
 
+_DELEGATE_SCHEMA = textwrap.dedent("""
+    Spawn a focused sub-agent for a bounded, self-contained sub-task (max 5 steps).
+    Use when isolating a sub-problem produces a cleaner result than inline tool calls —
+    for example, summarising a large file, diagnosing an isolated script, or reading a
+    set of config files as a unit. The delegate has access to all the same tools and
+    returns its final message as this tool's output. Delegates cannot spawn further
+    delegates (no recursion).
+    {{"action":"delegate","args":{{"task":"<concise description of the sub-task>"}}}}
+""").strip()
+
+# Flag set while a delegate sub-loop is running — blocks nested delegate calls.
+_in_delegate: bool = False
+
 # Keyword sets for conditional injection heuristics.
 _MEMORY_KW = frozenset({"earlier", "last time", "before", "previously", "you said", "we did", "i told", "last session", "prior session", "what error"})
 _FETCH_KW   = frozenset({"look up", "lookup", "latest version", "documentation", "docs", "check the site", "from the web", "online", "fetch", "download the"})
@@ -304,6 +318,10 @@ def build_autopilot_prompt(
     if any(kw in q for kw in _BATCH_KW) or q.count(".py") >= 2 or q.count(".ts") >= 2:
         prompt += "\n\n    " + _BATCH_SCHEMA
 
+    # delegate — inject in outer loop only (not inside a delegate run)
+    if not _in_delegate:
+        prompt += "\n\n    " + _DELEGATE_SCHEMA
+
     return prompt
 
 
@@ -342,7 +360,7 @@ TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
     "verify_syntax", "search_memory", "run_code",
-    "fetch_url", "batch",
+    "fetch_url", "batch", "delegate",
     *(["lint_code"] if _RUFF else []),
 })
 
@@ -1640,6 +1658,210 @@ def _run_batch(config: dict[str, Any], actions: list[Any], shell_exe: str) -> st
     return "\n\n---\n\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Delegate sub-agent
+# ---------------------------------------------------------------------------
+
+def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
+    """Run a focused sub-agent with a fresh context. Blocked inside a delegate (no recursion)."""
+    global _CURRENT_SESSION_ID, _in_delegate
+    if _in_delegate:
+        raise RuntimeError("delegate cannot be called from within a delegate (no recursion).")
+
+    parent_sid = _CURRENT_SESSION_ID
+    _in_delegate = True
+    _CURRENT_SESSION_ID = str(uuid4())
+
+    cprint(f"\n  ⟶ delegate: {task[:100]}", C.BCYAN)
+    delegate_config = dict(config)
+    delegate_config["max_agent_steps"] = min(int(config.get("max_agent_steps", 15)), 5)
+    try:
+        result = run_autopilot(
+            delegate_config,
+            [],
+            task,
+            shell_exe,
+            session=None,
+        )
+    finally:
+        _CURRENT_SESSION_ID = parent_sid
+        _in_delegate = False
+
+    cap = 1500
+    if len(result) > cap:
+        result = result[:cap] + f"\n...[delegate output truncated to {cap} chars]"
+    cprint(f"  ⟶ delegate done", C.DIM)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# /config, /memory, /profile REPL helpers
+# ---------------------------------------------------------------------------
+
+_CONFIG_SETTABLE: dict[str, str] = {
+    "model":                          "str",
+    "temperature":                    "float",
+    "timeout_seconds":                "int",
+    "max_output_tokens":              "int",
+    "chat_max_output_tokens":         "int",
+    "autopilot_max_output_tokens":    "int",
+    "max_agent_steps":                "int",
+    "tool_output_limit":              "int",
+    "stream_delay_ms":                "int",
+    "history_retention_days":         "int",
+    "use_streaming":                  "bool",
+    "telemetry_enabled":              "bool",
+    "memory_enabled":                 "bool",
+    "autopilot_confirm_destructive":  "bool",
+}
+
+
+def _coerce_config_value(value: str, kind: str) -> Any:
+    if kind == "bool":
+        return value.lower() in ("1", "true", "yes", "on")
+    if kind == "int":
+        return int(value)
+    if kind == "float":
+        return float(value)
+    return value
+
+
+def _handle_config_cmd(query: str, config: dict[str, Any]) -> None:
+    parts = query.split(None, 2)
+    if len(parts) == 1:
+        print()
+        for key, kind in sorted(_CONFIG_SETTABLE.items()):
+            val = config.get(key, "(unset)")
+            print(f"  {key:<42}  {str(val):<18}  [{kind}]")
+        print()
+        return
+    key = parts[1]
+    if key not in _CONFIG_SETTABLE:
+        cprint(f"  Unknown config key: {key!r}. Run /config to see all settable keys.", C.YELLOW)
+        return
+    if len(parts) == 2:
+        cprint(f"  {key} = {config.get(key, '(unset)')!r}  [{_CONFIG_SETTABLE[key]}]", C.DIM)
+        return
+    value_str = parts[2]
+    try:
+        new_val = _coerce_config_value(value_str, _CONFIG_SETTABLE[key])
+    except (ValueError, TypeError) as exc:
+        cprint(f"  Cannot set {key!r}: {exc}", C.RED)
+        return
+    config[key] = new_val
+    cprint(f"  {key} = {new_val!r}", C.BCYAN)
+
+
+def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
+    parts = query.split(None, 2)
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+
+    if sub == "status":
+        enabled = bool(config.get("memory_enabled", True))
+        if not enabled:
+            cprint("  Memory disabled  (memory_enabled = false).", C.YELLOW)
+            return
+        meta_path = Path.cwd() / ".shellai" / "vector_store" / "metadata.json"
+        if not meta_path.exists():
+            cprint("  Memory store: empty (no entries indexed yet).", C.DIM)
+            return
+        try:
+            entries = json.loads(meta_path.read_text(encoding="utf-8"))
+            size_kb = meta_path.stat().st_size // 1024
+            cprint(f"  Memory store: {len(entries)} entries, ~{size_kb} KB", C.BCYAN)
+            if entries:
+                oldest = entries[0].get("created_at", "?")[:16]
+                newest = entries[-1].get("created_at", "?")[:16]
+                cprint(f"  Oldest: {oldest}  →  Newest: {newest}", C.DIM)
+        except Exception as exc:
+            cprint(f"  Memory store: error reading metadata ({exc})", C.YELLOW)
+
+    elif sub == "list":
+        n = 10
+        if len(parts) > 2:
+            try:
+                n = int(parts[2])
+            except ValueError:
+                pass
+        meta_path = Path.cwd() / ".shellai" / "vector_store" / "metadata.json"
+        if not meta_path.exists():
+            print("  No memory entries.")
+            return
+        try:
+            entries = json.loads(meta_path.read_text(encoding="utf-8"))
+            shown = entries[-n:]
+            offset = max(0, len(entries) - n)
+            print()
+            for i, e in enumerate(shown, start=offset + 1):
+                ts = e.get("created_at", "?")[:16]
+                text = e.get("text", "")[:80]
+                tools = ", ".join(e.get("tool_sequence", []) or [])
+                print(f"  #{i:>3}  [{ts}]  {text}")
+                if tools:
+                    print(f"         tools: {tools}")
+            print()
+        except Exception as exc:
+            cprint(f"  Error reading memory: {exc}", C.YELLOW)
+
+    elif sub == "search":
+        if len(parts) < 3:
+            print("  Usage: /memory search <query>")
+            return
+        result = memory.search_memory_tool(config, parts[2], top_k=5)
+        print(f"\n{result}\n")
+
+    elif sub == "clear":
+        confirm = input("  Delete all memory entries? [y/N] ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("  Aborted.")
+            return
+        store_dir = Path.cwd() / ".shellai" / "vector_store"
+        deleted: list[str] = []
+        for fname in ("vectors.npz", "metadata.json"):
+            f = store_dir / fname
+            if f.exists():
+                try:
+                    f.unlink()
+                    deleted.append(fname)
+                except Exception as exc:
+                    cprint(f"  Could not delete {fname}: {exc}", C.YELLOW)
+        if deleted:
+            cprint(f"  Cleared: {', '.join(deleted)}", C.BCYAN)
+        else:
+            print("  Nothing to clear.")
+
+    else:
+        print("  Usage: /memory [status|list [n]|search <query>|clear]")
+
+
+def _show_profile(config: dict[str, Any], mode: str, session: dict[str, Any]) -> None:
+    print()
+    cprint("  Hex CLI Profile", C.BOLD)
+    print(f"  Version         {VERSION}")
+    print(f"  Mode            {mode}")
+    backend = config.get("backend", "?")
+    print(f"  Backend         {backend}  →  {_backend_url(config)}")
+    print(f"  Model           {config.get('model', '?')}")
+    print(f"  Temperature     {config.get('temperature', '?')}")
+    print(f"  Max steps       {config.get('max_agent_steps', '?')}")
+    mem_state = "enabled" if config.get("memory_enabled", True) else "disabled"
+    tel_state = "enabled" if config.get("telemetry_enabled", True) else "disabled"
+    print(f"  Memory          {mem_state}")
+    print(f"  Telemetry       {tel_state}")
+    try:
+        alive = ping_backend(config)
+        status_str = "online" if alive else "offline"
+        status_col = C.BGREEN if alive else C.YELLOW
+    except Exception:
+        status_str, status_col = "unknown", C.DIM
+    cprint(f"  Backend status  {status_str}", status_col)
+    msgs = session.get("messages", [])
+    title = session.get("title", "New Chat")
+    est = sum(len(m.get("content", "")) for m in msgs) // 4
+    print(f"  Session         {title!r}  ({len(msgs)} messages, ~{est:,} tokens)")
+    print()
+
+
 def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
     tool = str(action.get("tool", "")).strip()
     args = action.get("args")
@@ -1749,6 +1971,12 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         if not isinstance(actions, list):
             raise RuntimeError("batch requires 'actions' list.")
         return _run_batch(config, actions, shell_exe)
+
+    if tool == "delegate":
+        task = str(args.get("task", "")).strip()
+        if not task:
+            raise RuntimeError("delegate requires 'task'.")
+        return _run_delegate(config, task, shell_exe)
 
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
@@ -2317,6 +2545,21 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 cprint(f"cwd: {Path.cwd()}", C.DIM)
             continue
 
+        # ── config ────────────────────────────────────────────────────────
+        if norm == "/config" or norm.startswith("/config "):
+            _handle_config_cmd(query.strip(), config)
+            continue
+
+        # ── memory ────────────────────────────────────────────────────────
+        if norm == "/memory" or norm.startswith("/memory "):
+            _handle_memory_cmd(query.strip(), config)
+            continue
+
+        # ── profile ───────────────────────────────────────────────────────
+        if norm == "/profile":
+            _show_profile(config, mode, current_session)
+            continue
+
         # ── dispatch to mode ──────────────────────────────────────────────
         history: list[dict[str, str]] = current_session.get("messages", [])
 
@@ -2419,6 +2662,11 @@ def main() -> int:
     config_path = Path(args.config).expanduser().resolve()
     config = load_config(config_path)
     config = deep_merge(config, config_overrides)
+
+    # Advisory process lock — warns if another shellai instance is already running.
+    lock_warning = lockfile.acquire(Path.cwd() / ".shellai")
+    if lock_warning:
+        cprint(lock_warning, C.YELLOW)
 
     if args.backend:
         config["backend"] = args.backend
