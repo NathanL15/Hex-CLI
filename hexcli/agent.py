@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 import http.client
 import io
 import json
@@ -34,6 +35,7 @@ from hexcli import ui
 from hexcli import telemetry
 from hexcli import memory
 from hexcli import safety
+from hexcli import network
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -46,7 +48,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -167,14 +169,7 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
        have made 3 attempts, then explain the remaining issue in finish. Never call verify_syntax
        on a file you did not just edit or write in this conversation — that would be unnecessary
        tool use.
-    14. If the user explicitly references something from a prior session (e.g. "earlier",
-       "last time", "previously", "the file I fixed before", "what error did I get"), you MUST
-       run search_memory first to pull that context before executing any live-state commands.
-       This does NOT override rule 12 — a bare ambiguous request with no reference to a past
-       action (e.g. "fix my code", "update the file") still gets 0 tool calls and a clarifying
-       question, never a search_memory call. It also does NOT override rule 10 — never call
-       search_memory just because a general-knowledge question happens to sound open-ended.
-    15. run_code executes a script inside the working directory. Use it when the task involves
+    14. run_code executes a script inside the working directory. Use it when the task involves
        running, testing, or diagnosing a script file. For a runtime-bug task follow this exact
        sequence: (a) use find_files or list_directory to confirm the file's exact path if you
        are not already certain; (b) run_code with that confirmed path to see the error output;
@@ -221,12 +216,6 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     use for runtime-bug diagnosis — follow the exact sequence in rule 15):
     {{"action":"run_code","args":{{"path":"script.py","args":[],"timeout":10}}}}
 
-    Search past session memory for relevant prior context (required first step when the user
-    references a past action or error, per rule 14). Write the query as a short restatement of
-    the user's own request, keeping their concrete nouns (file names, error text, task verbs) —
-    do not paraphrase those away into generic terms:
-    {{"action":"search_memory","args":{{"query":"<short restatement of the user's request, keeping its concrete nouns>","top_k":3}}}}
-
     Finish — always the last action:
     {{"action":"finish","message":"Done. Brief summary of what was accomplished."}}
 """).strip()
@@ -238,15 +227,83 @@ _LINT_TOOL_SCHEMA = textwrap.dedent("""
     {{"action":"lint_code","args":{{"path":"src/main.py"}}}}
 """).strip()
 
+# Conditional schemas — injected by build_autopilot_prompt only when the heuristic fires.
 
-def build_autopilot_prompt(cwd: str, max_steps: int) -> str:
+_SEARCH_MEMORY_SCHEMA = textwrap.dedent("""
+    RULE 14: If the user explicitly references something from a prior session (e.g. "earlier",
+    "last time", "previously", "the file I fixed before", "what error did I get"), you MUST
+    run search_memory first before executing any live-state commands. This does NOT override
+    rule 12 (bare ambiguous request still gets a clarifying question, not a memory search).
+
+    Search past session memory for relevant prior context:
+    {{"action":"search_memory","args":{{"query":"<short restatement keeping concrete nouns>","top_k":3}}}}
+""").strip()
+
+_FETCH_URL_SCHEMA = textwrap.dedent("""
+    Fetch and read a web page (http/https only; private IPs and file:// are blocked):
+    {{"action":"fetch_url","args":{{"url":"https://example.com/docs/api"}}}}
+""").strip()
+
+_BATCH_SCHEMA = textwrap.dedent("""
+    Run multiple read-only tools in parallel (faster than sequential calls when you need
+    several files or directory listings at once):
+    {{"action":"batch","args":{{"actions":[
+      {{"tool":"read_file","args":{{"path":"a.py"}}}},
+      {{"tool":"read_file","args":{{"path":"b.py"}}}}
+    ]}}}}
+    Allowed in batch: read_file, list_directory, find_files, search_files, search_memory.
+    Max 8 actions. Mutations (edit_file, write_file, run_command) are NOT allowed in batch.
+""").strip()
+
+# Keyword sets for conditional injection heuristics.
+_MEMORY_KW = frozenset({"earlier", "last time", "before", "previously", "you said", "we did", "i told", "last session", "prior session", "what error"})
+_FETCH_KW   = frozenset({"look up", "lookup", "latest version", "documentation", "docs", "check the site", "from the web", "online", "fetch", "download the"})
+_BATCH_KW   = frozenset({"multiple files", "all files", "each file", "all the files", "several files", "read all", "read each"})
+_LINT_KW    = frozenset({"lint", "style", "format", "pep8", "ruff", "flake", "unused import"})
+
+
+def build_autopilot_prompt(
+    cwd: str,
+    max_steps: int,
+    query: str = "",
+    recent_tools: list[str] | None = None,
+) -> str:
+    """Build the autopilot system prompt, injecting conditional tool schemas based on query
+    content and recently-used tools to stay within the token budget."""
+    if recent_tools is None:
+        recent_tools = []
+
     prompt = _AUTOPILOT_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%d"),
         cwd=cwd,
         max_steps=max_steps,
     )
-    if _RUFF:
+    q = query.lower()
+
+    # search_memory — inject when query references past sessions
+    if any(kw in q for kw in _MEMORY_KW):
+        prompt += "\n\n    " + _SEARCH_MEMORY_SCHEMA
+
+    # lint_code — inject when ruff present and query/context suggests linting
+    if _RUFF and (
+        any(kw in q for kw in _LINT_KW)
+        or any(t in ("edit_file", "write_file") for t in recent_tools)
+    ):
         prompt += "\n\n    " + _LINT_TOOL_SCHEMA
+
+    # fetch_url — inject when online and query suggests web lookup
+    fetch_relevant = bool(re.search(r"https?://", q) or any(kw in q for kw in _FETCH_KW))
+    if fetch_relevant:
+        try:
+            if network.is_online():
+                prompt += "\n\n    " + _FETCH_URL_SCHEMA
+        except Exception:
+            pass
+
+    # batch — inject when query suggests reading multiple files in parallel
+    if any(kw in q for kw in _BATCH_KW) or q.count(".py") >= 2 or q.count(".ts") >= 2:
+        prompt += "\n\n    " + _BATCH_SCHEMA
+
     return prompt
 
 
@@ -285,6 +342,7 @@ TOOL_NAMES = frozenset({
     "run_command", "read_file", "edit_file", "write_file",
     "append_file", "list_directory", "search_files", "find_files",
     "verify_syntax", "search_memory", "run_code",
+    "fetch_url", "batch",
     *(["lint_code"] if _RUFF else []),
 })
 
@@ -1474,6 +1532,114 @@ def run_code_tool(
     )
 
 
+def workspace_snapshot(cwd: str) -> str:
+    """Return a compact ≤150-token workspace context line prepended to each agent turn."""
+    p = Path(cwd)
+    parts: list[str] = []
+
+    # Project type detection via marker files
+    proj = "dir"
+    if (p / "pyproject.toml").exists() or (p / "setup.py").exists() or (p / "requirements.txt").exists():
+        proj = "python"
+    elif (p / "package.json").exists():
+        proj = "node"
+    elif (p / "Cargo.toml").exists():
+        proj = "rust"
+    elif (p / "go.mod").exists():
+        proj = "go"
+    elif list(p.glob("*.sln")) or list(p.glob("*.csproj")):
+        proj = "csharp"
+    parts.append(f"workspace:{proj}")
+
+    # Git branch + dirty flag (0.5 s timeout — fast enough, safe on slow NTFS)
+    try:
+        br = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, timeout=0.5,
+        )
+        if br.returncode == 0:
+            branch = br.stdout.strip()
+            dirty = subprocess.run(
+                ["git", "diff", "--quiet"],
+                cwd=cwd, capture_output=True, timeout=0.5,
+            ).returncode != 0
+            parts.append(f"git:{branch}{'*' if dirty else ''}")
+    except Exception:
+        pass
+
+    # Primary entry point
+    for name in ("shellai.py", "main.py", "app.py", "index.js", "main.rs", "main.go", "main.cs"):
+        if (p / name).exists():
+            parts.append(f"entry:{name}")
+            break
+
+    # Test directory
+    for tdir in ("tests", "test", "evals", "spec"):
+        if (p / tdir).is_dir():
+            parts.append(f"tests:{tdir}/")
+            break
+
+    return "[" + " | ".join(parts) + "]"
+
+
+def _extract_tools_from_history(history: list[dict[str, str]], last_n: int = 4) -> list[str]:
+    """Return tool names used in the last N assistant history messages."""
+    tools: list[str] = []
+    for msg in history[-last_n:]:
+        if msg.get("role") != "assistant":
+            continue
+        for match in re.finditer(r'"action"\s*:\s*"(\w+)"', msg.get("content", "")):
+            tool = match.group(1)
+            if tool in TOOL_NAMES:
+                tools.append(tool)
+    return tools
+
+
+# ---------------------------------------------------------------------------
+# Batch tool implementation
+# ---------------------------------------------------------------------------
+
+_BATCH_ALLOWED = frozenset({"read_file", "list_directory", "find_files", "search_files", "search_memory"})
+_BATCH_MAX = 8
+
+
+def _run_batch(config: dict[str, Any], actions: list[Any], shell_exe: str) -> str:
+    """Execute read-only tools in parallel; return indexed results (partial failure OK)."""
+    if len(actions) > _BATCH_MAX:
+        raise RuntimeError(f"batch: max {_BATCH_MAX} actions, got {len(actions)}.")
+
+    results: list[dict[str, Any]] = [{}] * len(actions)
+
+    def run_one(idx: int, act: Any) -> tuple[int, dict[str, Any]]:
+        if not isinstance(act, dict):
+            return idx, {"error": "action must be a JSON object"}
+        tool = str(act.get("tool", "")).strip()
+        if tool not in _BATCH_ALLOWED:
+            return idx, {"error": f"tool {tool!r} not allowed in batch (read-only tools only)"}
+        sub = {"action": "tool", "tool": tool, "args": act.get("args") or {}}
+        try:
+            output = execute_tool_call(config, sub, shell_exe)
+            return idx, {"tool": tool, "result": output}
+        except Exception as exc:
+            return idx, {"tool": tool, "error": str(exc)}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(run_one, i, act): i for i, act in enumerate(actions)}
+        for fut in concurrent.futures.as_completed(futs):
+            idx, result = fut.result()
+            results[idx] = result
+
+    parts: list[str] = []
+    for i, r in enumerate(results):
+        if not r:
+            parts.append(f"[{i}] (no result)")
+        elif "error" in r:
+            parts.append(f"[{i}] ERROR ({r.get('tool', '?')}): {r['error']}")
+        else:
+            parts.append(f"[{i}] {r.get('tool', '?')}:\n{r.get('result', '')}")
+    return "\n\n---\n\n".join(parts)
+
+
 def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
     tool = str(action.get("tool", "")).strip()
     args = action.get("args")
@@ -1571,6 +1737,18 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         if not path:
             raise RuntimeError("lint_code requires 'path'.")
         return lint_code_tool(path)
+
+    if tool == "fetch_url":
+        url = str(args.get("url", "")).strip()
+        if not url:
+            raise RuntimeError("fetch_url requires 'url'.")
+        return network.fetch_url(url)
+
+    if tool == "batch":
+        actions = args.get("actions")
+        if not isinstance(actions, list):
+            raise RuntimeError("batch requires 'actions' list.")
+        return _run_batch(config, actions, shell_exe)
 
     raise RuntimeError(f"Unknown tool: {tool!r}")
 
@@ -1701,12 +1879,14 @@ def run_autopilot(
 
     cwd = str(Path.cwd())
     max_steps = int(config.get("max_agent_steps", 15))
-    system_prompt = build_autopilot_prompt(cwd=cwd, max_steps=max_steps)
+    recent_tools = _extract_tools_from_history(history)
+    system_prompt = build_autopilot_prompt(cwd=cwd, max_steps=max_steps, query=query, recent_tools=recent_tools)
     config_system = config.get("autopilot_system_prompt", "").strip()
     if config_system:
         system_prompt = config_system
 
-    user_content = f"Working directory: {cwd}\n\nRequest: {query.strip()}"
+    ws = workspace_snapshot(cwd)
+    user_content = f"{ws}\nWorking directory: {cwd}\n\nRequest: {query.strip()}"
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system_prompt},
         *history,
@@ -1929,8 +2109,10 @@ def one_shot_command_mode(
 # Eval showed Rule 15 degradation onset at ~2,600 total input tokens, of which
 # the system prompt accounts for ~1,200 tokens. Auto-compact when session history
 # alone approaches that margin so the user never manually hits the cliff.
-_CONTEXT_WARN_TOKENS = 1_400
-_CONTEXT_CRIT_TOKENS = 1_700
+# Recalibrated for v1.3: base prompt ~1,000 tokens (search_memory/fetch_url/batch are
+# conditional). Warn at 1,300 history tokens → total ~2,450 (under 2,600 cliff).
+_CONTEXT_WARN_TOKENS = 1_300
+_CONTEXT_CRIT_TOKENS = 1_600
 
 
 def _maybe_auto_compact(

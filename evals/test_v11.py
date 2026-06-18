@@ -105,11 +105,16 @@ def test_lint_code_registration() -> None:
 
 
 def test_lint_code_prompt_injection() -> None:
-    prompt = sa.build_autopilot_prompt(cwd=".", max_steps=15)
+    # Generic query: lint_code must NOT be injected (saves tokens regardless of ruff).
+    prompt_generic = sa.build_autopilot_prompt(cwd=".", max_steps=15, query="list the files")
+    assert "lint_code" not in prompt_generic, "lint_code must not appear for generic queries"
+
+    # Lint-related query: injected only when ruff is present.
+    prompt_lint = sa.build_autopilot_prompt(cwd=".", max_steps=15, query="lint my Python code")
     if sa._RUFF:
-        assert "lint_code" in prompt, "lint_code schema must appear in system prompt when ruff present"
+        assert "lint_code" in prompt_lint, "lint_code must appear for lint queries when ruff present"
     else:
-        assert "lint_code" not in prompt, "lint_code schema must not appear when ruff absent"
+        assert "lint_code" not in prompt_lint, "lint_code must not appear when ruff absent"
 
 
 def test_lint_code_tool_clean_file() -> None:
