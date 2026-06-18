@@ -36,7 +36,7 @@ from hexcli import telemetry
 from hexcli import memory
 from hexcli import safety
 from hexcli import network
-from hexcli import lockfile
+from hexcli import escalate, lockfile
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -49,7 +49,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -349,6 +349,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "base_url": "http://127.0.0.1:8000/v1",
         "api_key": "local",
     },
+    "anthropic_api_key": "",
+    "escalation_model": "claude-haiku-4-5-20251001",
 }
 
 # ruff is an optional hard dependency: if present, lint_code is registered as a
@@ -462,7 +464,17 @@ def load_config(path: Path) -> dict[str, Any]:
     ensure_default_config(path)
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
-    return deep_merge(DEFAULT_CONFIG, data)
+    config = deep_merge(DEFAULT_CONFIG, data)
+    # Per-project override: .shellai/config.json in cwd deep-merges on top.
+    project_cfg = Path.cwd() / ".shellai" / "config.json"
+    if project_cfg != path and project_cfg.exists():
+        try:
+            with project_cfg.open("r", encoding="utf-8") as fh:
+                project_data = json.load(fh)
+            config = deep_merge(config, project_data)
+        except Exception:
+            pass
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -1702,6 +1714,63 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Checkpoints (Feature 17 — /save, /load, /checkpoints)
+# ---------------------------------------------------------------------------
+
+def _checkpoint_dir() -> Path:
+    return Path.cwd() / ".shellai" / "checkpoints"
+
+
+def _safe_checkpoint_name(name: str) -> str:
+    return re.sub(r"[^\w\-.]", "_", name)[:60]
+
+
+def _save_checkpoint(name: str, session: dict[str, Any], cwd: str) -> Path:
+    cp_dir = _checkpoint_dir()
+    cp_dir.mkdir(parents=True, exist_ok=True)
+    cp_path = cp_dir / f"{_safe_checkpoint_name(name)}.json"
+    cp_data = {
+        "name": name,
+        "created_at": iso_now(),
+        "cwd": cwd,
+        "message_count": len(session.get("messages", [])),
+        "messages": session.get("messages", []),
+        "workspace_metadata": workspace_snapshot(cwd),
+    }
+    cp_path.write_text(json.dumps(cp_data, indent=2), encoding="utf-8")
+    return cp_path
+
+
+def _load_checkpoint(name: str) -> dict[str, Any] | None:
+    cp_path = _checkpoint_dir() / f"{_safe_checkpoint_name(name)}.json"
+    if not cp_path.exists():
+        return None
+    try:
+        return json.loads(cp_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _list_checkpoints() -> list[dict[str, Any]]:
+    cp_dir = _checkpoint_dir()
+    if not cp_dir.exists():
+        return []
+    checkpoints: list[dict[str, Any]] = []
+    for cp_file in sorted(cp_dir.glob("*.json")):
+        try:
+            data = json.loads(cp_file.read_text(encoding="utf-8"))
+            checkpoints.append({
+                "name": data.get("name", cp_file.stem),
+                "created_at": data.get("created_at", "?"),
+                "message_count": data.get("message_count", 0),
+                "cwd": data.get("cwd", "?"),
+            })
+        except Exception:
+            pass
+    return checkpoints
+
+
+# ---------------------------------------------------------------------------
 # /config, /memory, /profile REPL helpers
 # ---------------------------------------------------------------------------
 
@@ -1720,6 +1789,8 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
+    "anthropic_api_key":              "str",
+    "escalation_model":               "str",
 }
 
 
@@ -2247,6 +2318,21 @@ def run_autopilot(
             _loop_tracker.pop(0)
         if len(_loop_tracker) == 3 and len(set(_loop_tracker)) == 1:
             cprint("\n  ⚠ Agent appears stuck in a repeat loop (3 identical results). Stopping.", C.BYELLOW)
+            if escalate.get_api_key(config):
+                try:
+                    answer = input(
+                        "\n  The agent is stuck. Escalate to Claude cloud? [y/N] "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    answer = "n"
+                if answer in ("y", "yes"):
+                    tool_seq = [t for t, _ in _loop_tracker]
+                    suggestion = escalate.escalate(config, messages, tool_seq)
+                    cprint("\n── Cloud suggestion ──────────────────────────────────────────────", C.BCYAN)
+                    print(suggestion)
+                    print()
+            else:
+                cprint("  (set ANTHROPIC_API_KEY to enable cloud escalation)", C.DIM)
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             return last_tool_output or "Done."
@@ -2575,6 +2661,61 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         # ── profile ───────────────────────────────────────────────────────
         if norm == "/profile":
             _show_profile(config, mode, current_session)
+            continue
+
+        # ── checkpoints ───────────────────────────────────────────────────
+        if norm == "/checkpoints":
+            cps = _list_checkpoints()
+            if not cps:
+                print("  No checkpoints saved.")
+            else:
+                print()
+                for cp in cps:
+                    ts = cp["created_at"][:16] if len(cp.get("created_at", "")) >= 16 else cp.get("created_at", "?")
+                    cprint(
+                        f"  {cp['name']:<24}  {ts}  ({cp['message_count']} messages)  {cp['cwd']}",
+                        C.DIM,
+                    )
+                print()
+            continue
+
+        if norm.startswith("/save "):
+            cp_name = query.strip()[len("/save "):].strip()
+            if not cp_name:
+                print("  Usage: /save <name>")
+            else:
+                try:
+                    cp_path = _save_checkpoint(cp_name, current_session, str(Path.cwd()))
+                    cprint(f"  Checkpoint saved: {cp_path.name}", C.BCYAN)
+                except Exception as exc:
+                    cprint(f"  Could not save checkpoint: {exc}", C.YELLOW)
+            continue
+
+        if norm.startswith("/load "):
+            cp_name = query.strip()[len("/load "):].strip()
+            if not cp_name:
+                print("  Usage: /load <name>")
+                continue
+            cp_data = _load_checkpoint(cp_name)
+            if cp_data is None:
+                cprint(f"  No checkpoint named '{cp_name}' found.", C.YELLOW)
+                continue
+            msgs = current_session.get("messages", [])
+            if msgs:
+                try:
+                    confirm = input(
+                        f"  Load '{cp_name}'? This will replace {len(msgs)} current message(s). [y/N] "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    confirm = "n"
+                if confirm not in ("y", "yes"):
+                    print("  Aborted.")
+                    continue
+            current_session["messages"] = cp_data.get("messages", [])
+            touch_session(current_session)
+            sync_session_store(sessions, current_session)
+            n = len(current_session["messages"])
+            cprint(f"  Loaded checkpoint '{cp_name}' ({n} messages).", C.BCYAN)
             continue
 
         # ── dispatch to mode ──────────────────────────────────────────────

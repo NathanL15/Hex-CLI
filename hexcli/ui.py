@@ -164,6 +164,9 @@ HELP_TEXT = textwrap.dedent("""
       /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
       /memory [status|list|search|clear|prune]  inspect or manage the memory store
       /profile                      show backend, model, session and memory status
+      /save <name>                  save a named checkpoint of the current session
+      /load <name>                  restore a checkpoint into the current session
+      /checkpoints                  list all saved checkpoints
       /tools                        list agent tools
       /exit  /quit                  exit
       Esc                           cancel the current agent step
