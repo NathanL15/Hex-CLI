@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -29,8 +31,34 @@ _HF_ONNX_FILE = "onnx/model_qint8_arm64.onnx"
 _HF_TOKENIZER_FILE = "tokenizer.json"
 _EMBED_DIM = 384
 _MAX_ENTRIES = 500
+_GLOBAL_MAX_ENTRIES = 1_000
 _MIN_SIMILARITY = 0.15
 _MAX_SEQ_LEN = 256
+_MAX_RULES = 50
+
+# Global store — cross-project, lives in the user's home dir.
+_GLOBAL_STORE_DIR = Path.home() / ".shellai" / "global_vector_store"
+_RULES_PATH = Path.home() / ".shellai" / "memory_rules.md"
+
+# NPU inference lock — prevents the dreaming daemon from calling the LLM
+# concurrently with the main agent loop. Acquired by call_llm in agent.py
+# and by _consolidate here with a 5-second timeout.
+_NPU_INFERENCE_LOCK: threading.Lock = threading.Lock()
+
+# Idle timer for the dreaming daemon. touch_last_turn() resets it on each
+# user input. _consolidate fires after _IDLE_TIMEOUT seconds of silence.
+_last_turn_time: float = 0.0
+_IDLE_TIMEOUT: float = 300.0  # 5 minutes
+
+# Injected by start_dreaming() from agent.py — avoids a circular import.
+_dream_config_fn: Callable[[], dict[str, Any]] | None = None
+_dream_llm_fn: Callable[[dict[str, Any], str, str], str] | None = None
+
+_DREAM_SYSTEM = (
+    "Extract 3–5 concise factual rules from these session notes. "
+    "Return only a Markdown bullet list (one rule per line, starting with '- '). "
+    "No preamble, no commentary, no numbering."
+)
 
 
 class _Embedder:
@@ -105,15 +133,26 @@ class VectorStore:
     _Embedder singleton carries real load cost, so creating a fresh
     VectorStore per tool call is fine."""
 
-    def __init__(self, config: dict[str, Any] | None = None, cwd: str | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        cwd: str | None = None,
+        *,
+        store_dir: Path | None = None,
+        max_entries: int = _MAX_ENTRIES,
+    ) -> None:
         self.enabled = bool((config or {}).get("memory_enabled", True))
-        base = Path(cwd) if cwd else Path.cwd()
-        self._dir = base / _STORE_DIR_NAME
+        if store_dir is not None:
+            self._dir = store_dir
+        else:
+            base = Path(cwd) if cwd else Path.cwd()
+            self._dir = base / _STORE_DIR_NAME
         self._vectors_path = self._dir / "vectors.npz"
         self._meta_path = self._dir / "metadata.json"
         self._vectors: np.ndarray = np.zeros((0, _EMBED_DIM), dtype=np.float32)
         self._meta: list[dict[str, Any]] = []
         self._loaded = False
+        self._max_entries = max_entries
 
     def _load(self) -> None:
         if self._loaded:
@@ -145,8 +184,8 @@ class VectorStore:
                 **metadata,
             }
             self._meta.append(entry)
-            if len(self._meta) > _MAX_ENTRIES:
-                overflow = len(self._meta) - _MAX_ENTRIES
+            if len(self._meta) > self._max_entries:
+                overflow = len(self._meta) - self._max_entries
                 self._meta = self._meta[overflow:]
                 self._vectors = self._vectors[overflow:]
             self._save()
@@ -204,7 +243,12 @@ def maybe_index_turn(
     if not tools_used:
         return
     try:
-        store = VectorStore(config)
+        # File-touching turns → project store (cwd-scoped).
+        # Non-file-touching turns (preferences, patterns) → global store.
+        if key_paths:
+            store = VectorStore(config)
+        else:
+            store = VectorStore(config, store_dir=_GLOBAL_STORE_DIR, max_entries=_GLOBAL_MAX_ENTRIES)
         summary = prompt.strip()
         if len(summary) > 200:
             summary = summary[:200] + "..."
@@ -220,12 +264,24 @@ def maybe_index_turn(
 def search_memory_tool(config: dict[str, Any], query: str, top_k: int = 3) -> str:
     if not bool(config.get("memory_enabled", True)):
         return "Memory search is disabled."
-    store = VectorStore(config)
-    results = store.search(query, top_k=top_k)
-    if not results:
+
+    project_store = VectorStore(config)
+    global_store = VectorStore(config, store_dir=_GLOBAL_STORE_DIR, max_entries=_GLOBAL_MAX_ENTRIES)
+    combined = project_store.search(query, top_k=top_k) + global_store.search(query, top_k=top_k)
+
+    # Merge: deduplicate by content hash, rank by similarity score.
+    seen: set[int] = set()
+    merged: list[dict[str, Any]] = []
+    for r in sorted(combined, key=lambda x: x.get("score", 0.0), reverse=True):
+        h = hash(r.get("text", ""))
+        if h not in seen:
+            seen.add(h)
+            merged.append(r)
+
+    if not merged:
         return "No relevant memory found."
     lines = []
-    for r in results:
+    for r in merged[:top_k]:
         tools = ", ".join(r.get("tool_sequence", []) or [])
         paths = ", ".join(r.get("key_paths", []) or [])
         lines.append(
@@ -233,3 +289,120 @@ def search_memory_tool(config: dict[str, Any], query: str, top_k: int = 3) -> st
             f"| tools used: {tools or '(none)'} | files: {paths or '(none)'}"
         )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Idle timer
+# ---------------------------------------------------------------------------
+
+def touch_last_turn() -> None:
+    """Reset the idle timer. Called from the REPL on every user input."""
+    global _last_turn_time
+    _last_turn_time = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Memory rules (Feature 15 — rules injection)
+# ---------------------------------------------------------------------------
+
+def read_memory_rules(max_rules: int = 5) -> list[str]:
+    """Return the last max_rules bullet lines from ~/.shellai/memory_rules.md."""
+    try:
+        if not _RULES_PATH.exists():
+            return []
+        lines = _RULES_PATH.read_text(encoding="utf-8").splitlines()
+        rules = [ln.strip() for ln in lines if ln.strip().startswith("- ")]
+        return rules[-max_rules:]
+    except Exception:
+        return []
+
+
+def _append_rules(new_rules: list[str]) -> None:
+    """Append rules to memory_rules.md, evicting oldest if count exceeds _MAX_RULES."""
+    try:
+        _RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        existing: list[str] = []
+        if _RULES_PATH.exists():
+            existing = [
+                ln.strip()
+                for ln in _RULES_PATH.read_text(encoding="utf-8").splitlines()
+                if ln.strip().startswith("- ")
+            ]
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+        stamped = [f"- [{ts}] {r.lstrip('- ').strip()}" for r in new_rules if r.strip()]
+        combined = existing + stamped
+        if len(combined) > _MAX_RULES:
+            combined = combined[-_MAX_RULES:]
+        _RULES_PATH.write_text("\n".join(combined) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def prune_memory_rules() -> int:
+    """Keep only the newest _MAX_RULES rules. Returns the number removed."""
+    try:
+        if not _RULES_PATH.exists():
+            return 0
+        lines = [
+            ln.strip()
+            for ln in _RULES_PATH.read_text(encoding="utf-8").splitlines()
+            if ln.strip().startswith("- ")
+        ]
+        if len(lines) <= _MAX_RULES:
+            return 0
+        removed = len(lines) - _MAX_RULES
+        _RULES_PATH.write_text("\n".join(lines[-_MAX_RULES:]) + "\n", encoding="utf-8")
+        return removed
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Dreaming daemon (Feature 14 — async consolidation)
+# ---------------------------------------------------------------------------
+
+def _consolidate() -> None:
+    """Pull recent global entries, generate rules via LLM, append to rules file."""
+    global _dream_config_fn, _dream_llm_fn
+    if _dream_config_fn is None or _dream_llm_fn is None:
+        return
+    try:
+        store = VectorStore(None, store_dir=_GLOBAL_STORE_DIR, max_entries=_GLOBAL_MAX_ENTRIES)
+        store._load()
+        if not store._meta:
+            return
+        notes = "\n".join(e.get("text", "") for e in store._meta[-20:])
+        if not notes.strip():
+            return
+
+        if not _NPU_INFERENCE_LOCK.acquire(timeout=5):
+            return  # main loop is busy; skip this dreaming cycle
+        try:
+            config = _dream_config_fn()
+            raw = _dream_llm_fn(config, _DREAM_SYSTEM, notes)
+        finally:
+            _NPU_INFERENCE_LOCK.release()
+
+        new_rules = [ln.strip() for ln in raw.splitlines() if ln.strip().startswith("- ")]
+        if new_rules:
+            _append_rules(new_rules)
+    except Exception:
+        pass
+
+
+def _dream_loop() -> None:
+    """Background daemon: check every 30 s; fire consolidation after idle timeout."""
+    while True:
+        time.sleep(30)
+        if _last_turn_time > 0 and (time.monotonic() - _last_turn_time) >= _IDLE_TIMEOUT:
+            _consolidate()
+            touch_last_turn()  # reset so it doesn't re-fire immediately
+
+
+def start_dreaming(config_fn: Callable[[], dict[str, Any]], llm_fn: Callable) -> None:
+    """Start the background consolidation daemon. Called once from run_repl."""
+    global _dream_config_fn, _dream_llm_fn
+    _dream_config_fn = config_fn
+    _dream_llm_fn = llm_fn
+    t = threading.Thread(target=_dream_loop, daemon=True)
+    t.start()

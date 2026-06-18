@@ -49,7 +49,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -1010,39 +1010,42 @@ def call_llm(
     Streaming path (_ollama_stream_chat) manages its own CancelMonitor; calling
     it through run_cancellable would create two competing monitors on the same
     console input buffer. Non-streaming path uses run_cancellable + Spinner.
+    Acquires memory._NPU_INFERENCE_LOCK so the dreaming daemon defers while any
+    inference is in progress.
     """
-    if config["backend"] == "ollama" and config.get("use_streaming", True):
-        return _ollama_stream_chat(config, messages, token_key, label=label, json_format=json_format)
+    with memory._NPU_INFERENCE_LOCK:
+        if config["backend"] == "ollama" and config.get("use_streaming", True):
+            return _ollama_stream_chat(config, messages, token_key, label=label, json_format=json_format)
 
-    if config["backend"] == "openai" and config.get("use_streaming", True):
-        return _openai_stream_chat(config, messages, token_key, label=label, json_format=json_format)
+        if config["backend"] == "openai" and config.get("use_streaming", True):
+            return _openai_stream_chat(config, messages, token_key, label=label, json_format=json_format)
 
-    result_box: dict[str, Any] = {}
-    error_box: dict[str, BaseException] = {}
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
 
-    def _work() -> None:
-        try:
-            if config["backend"] == "ollama":
-                content = ollama_chat_non_stream(config, messages, token_key, json_format=json_format)
-            elif config["backend"] == "openai":
-                content = openai_chat(config, messages, token_key, json_format=json_format)
-            else:
-                raise RuntimeError(f"Unsupported backend: {config['backend']}")
-            result_box["value"] = (content, 0)
-        except BaseException as exc:  # noqa: BLE001
-            error_box["value"] = exc
+        def _work() -> None:
+            try:
+                if config["backend"] == "ollama":
+                    content = ollama_chat_non_stream(config, messages, token_key, json_format=json_format)
+                elif config["backend"] == "openai":
+                    content = openai_chat(config, messages, token_key, json_format=json_format)
+                else:
+                    raise RuntimeError(f"Unsupported backend: {config['backend']}")
+                result_box["value"] = (content, 0)
+            except BaseException as exc:  # noqa: BLE001
+                error_box["value"] = exc
 
-    thread = threading.Thread(target=_work, daemon=True)
-    with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
-        thread.start()
-        while thread.is_alive():
-            if monitor.cancelled.is_set():
-                raise UserCancelled()
-            thread.join(0.05)
+        thread = threading.Thread(target=_work, daemon=True)
+        with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
+            thread.start()
+            while thread.is_alive():
+                if monitor.cancelled.is_set():
+                    raise UserCancelled()
+                thread.join(0.05)
 
-    if "value" in error_box:
-        raise error_box["value"]
-    return result_box.get("value", ("", 0))
+        if "value" in error_box:
+            raise error_box["value"]
+        return result_box.get("value", ("", 0))
 
 
 
@@ -1597,7 +1600,11 @@ def workspace_snapshot(cwd: str) -> str:
             parts.append(f"tests:{tdir}/")
             break
 
-    return "[" + " | ".join(parts) + "]"
+    tag_line = "[" + " | ".join(parts) + "]"
+    rules = memory.read_memory_rules(5)
+    if rules:
+        return tag_line + "\nPrior knowledge:\n" + "\n".join(f"  {r}" for r in rules)
+    return tag_line
 
 
 def _extract_tools_from_history(history: list[dict[str, str]], last_n: int = 4) -> list[str]:
@@ -1830,8 +1837,15 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
         else:
             print("  Nothing to clear.")
 
+    elif sub == "prune":
+        removed = memory.prune_memory_rules()
+        if removed:
+            cprint(f"  Pruned {removed} old rule(s) from memory_rules.md.", C.BCYAN)
+        else:
+            cprint("  Rules file is within the cap — nothing pruned.", C.DIM)
+
     else:
-        print("  Usage: /memory [status|list [n]|search <query>|clear]")
+        print("  Usage: /memory [status|list [n]|search <query>|clear|prune]")
 
 
 def _show_profile(config: dict[str, Any], mode: str, session: dict[str, Any]) -> None:
@@ -2385,6 +2399,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     tel = telemetry.SessionTelemetry(config)
 
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")), mode)
+    memory.start_dreaming(lambda: config, llm_generate)
 
     while True:
         prompt = repl_prompt(config, mode)
@@ -2397,6 +2412,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         except KeyboardInterrupt:
             print()
             continue
+
+        memory.touch_last_turn()
 
         if not query:
             continue
