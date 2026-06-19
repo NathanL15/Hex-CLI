@@ -190,17 +190,19 @@ HELP_TEXT = textwrap.dedent("""
 
 TOOLS_HELP = textwrap.dedent("""
     Tools available in autopilot mode:
-      run_command(command)                        Run a PowerShell command.
+      run_command(command)                        Run a PowerShell command (safety-classified).
       read_file(path)                             Read a file's full contents.
-      edit_file(path, old_string, new_string)     Replace a string in a file.
-      write_file(path, content)                   Write or overwrite a file.
+      edit_file(path, old_string, new_string)     Replace a string in a file (undo snapshot).
+      write_file(path, content)                   Write or overwrite a file (undo snapshot).
       append_file(path, content)                  Append text to a file.
       list_directory(path)                        List files and folders.
-      search_files(pattern, path, glob)           Grep — search across files.
+      search_files(pattern, path, glob)           Grep — search across files by content.
       find_files(glob, path)                      Find files by glob pattern.
-      verify_syntax(path, language)               Non-destructive syntax check on a code file.
+      verify_syntax(path, language)               Non-destructive syntax check (.py .json .ps1 .js).
+      run_code(path, args, timeout)               Execute a script in a sandboxed subprocess.
+      lint_code(path)                             Run ruff/pylint/eslint and return findings.
       search_memory(query, top_k)                 Recall relevant prior session context.
-      fetch_url(url)                              Fetch a web page (online only).
+      fetch_url(url)                              Fetch a URL (GET, optional headers).
       batch(actions)                              Run up to 8 read-only tools in parallel.
       delegate(task)                              Spawn a focused sub-agent (max 5 steps).
 """).strip()
