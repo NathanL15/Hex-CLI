@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.4.0.schema.json
+PackageIdentifier: NathanL15.HexCLI
+PackageVersion: "1.7.0"
+PackageLocale: en-US
+Publisher: NathanL15
+PublisherUrl: https://github.com/NathanL15
+PackageName: Hex CLI
+PackageUrl: https://github.com/NathanL15/Hex-CLI
+License: MIT
+LicenseUrl: https://github.com/NathanL15/Hex-CLI/blob/main/LICENSE
+ShortDescription: Local Hexagon NPU terminal agent for Snapdragon X Elite Windows ARM64
+Description: |-
+  Hex CLI is a local agentic terminal assistant that runs entirely on-device using the
+  Snapdragon X Elite Hexagon NPU via the open-source npurun runtime. It supports three
+  interaction modes (autopilot, chat, command-only), a full tool suite (file I/O,
+  PowerShell execution, semantic memory, syntax verification, code execution), persistent
+  cross-session semantic memory with a self-consolidating dreaming daemon, cloud escalation
+  fallback via the Anthropic API with secret redaction, and named session checkpoints.
+  No cloud dependency for normal use; stdlib + NumPy + ONNX Runtime only.
+Moniker: hexcli
+Tags:
+  - ai
+  - agent
+  - arm64
+  - snapdragon
+  - npu
+  - terminal
+  - cli
+  - local-llm
+ReleaseNotesUrl: https://github.com/NathanL15/Hex-CLI/releases/tag/v1.7.0
+ManifestType: defaultLocale
+ManifestVersion: 1.4.0

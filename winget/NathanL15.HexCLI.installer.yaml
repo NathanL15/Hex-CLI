@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.4.0.schema.json
+PackageIdentifier: NathanL15.HexCLI
+PackageVersion: "1.7.0"
+MinimumOSVersion: "10.0.19041.0"
+Platform:
+  - Windows.Desktop
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: install.ps1
+    PortableCommandAlias: hexcli-setup
+Architecture: arm64
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+Installers:
+  - Architecture: arm64
+    InstallerUrl: https://github.com/NathanL15/Hex-CLI/releases/download/v1.7.0/hex-cli-1.7.0-arm64.zip
+    InstallerSha256: REPLACE_WITH_SHA256_AFTER_BUILDING_RELEASE_ZIP
+    InstallerSwitches:
+      Silent: "-NoStartMenu"
+      SilentWithProgress: ""
+    ProductCode: NathanL15.HexCLI
+ManifestType: installer
+ManifestVersion: 1.4.0
