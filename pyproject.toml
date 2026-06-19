@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hexcli"
+version = "1.7.0"
+description = "Local Hexagon NPU terminal agent for Snapdragon X Elite Windows ARM64"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["ai", "agent", "arm64", "snapdragon", "npu", "terminal", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "numpy>=1.26",
+    "onnxruntime>=1.18",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.4"]
+
+[project.scripts]
+hexcli = "hexcli.agent:main"
+
+[project.urls]
+Homepage = "https://github.com/NathanL15/Hex-CLI"
+Repository = "https://github.com/NathanL15/Hex-CLI"
+"Bug Tracker" = "https://github.com/NathanL15/Hex-CLI/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hexcli"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "hexcli/",
+    "evals/",
+    "shellai.example.json",
+    "README.md",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # line length handled by formatter

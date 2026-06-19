@@ -31,6 +31,7 @@ if sys.platform == "win32":
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
+import hexcli.distribution as dist
 import hexcli.safety as safety
 import hexcli.memory as mem
 
@@ -584,7 +585,24 @@ def test_prune_memory_rules_removes_excess() -> None:
 # Runner
 # ============================================================================
 
+# ============================================================================
+# distribution — module-level smoke tests
+# ============================================================================
+
+def test_distribution_module_imports() -> None:
+    assert hasattr(dist, "update")
+    assert hasattr(dist, "uninstall")
+    assert hasattr(dist, "first_run_check")
+
+
+def test_first_run_check_does_not_crash(capsys: Any = None) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        dist.first_run_check(Path(tmp))
+
+
 TESTS = [
+    test_distribution_module_imports,
+    test_first_run_check_does_not_crash,
     test_deep_merge_flat_override,
     test_deep_merge_nested_dict_merges_recursively,
     test_deep_merge_non_dict_value_overwrites_nested_dict,

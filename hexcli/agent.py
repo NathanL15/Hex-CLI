@@ -36,7 +36,7 @@ from hexcli import telemetry
 from hexcli import memory
 from hexcli import safety
 from hexcli import network
-from hexcli import escalate, lockfile
+from hexcli import distribution, escalate, lockfile
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -647,6 +647,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fast", action="store_true", help="Trim spinner/streaming overhead for quicker turnaround.")
     parser.add_argument("--raw", action="store_true", help="Disable ANSI colour/styling; plain stdout only.")
     parser.add_argument("--yolo", action="store_true", help="Skip destructive-command confirmation (CI/automation use only).")
+    parser.add_argument("--update", action="store_true", help="Pull latest source + refresh npurun binary, then exit.")
+    parser.add_argument("--uninstall", action="store_true", help="Remove Start Menu shortcut, optionally purge .shellai/, then exit.")
     return parser.parse_args()
 
 
@@ -2840,6 +2842,12 @@ def main() -> int:
         print(f"Hex CLI {VERSION}")
         return 0
 
+    if args.update:
+        return distribution.update(APP_DIR)
+
+    if args.uninstall:
+        return distribution.uninstall(APP_DIR)
+
     if args.raw:
         ui.set_color_enabled(False)
     DEBUG = args.debug
@@ -2867,6 +2875,8 @@ def main() -> int:
     if args.print_config:
         print(json.dumps(config, indent=2))
         return 0
+
+    distribution.first_run_check(APP_DIR)
 
     query = " ".join(args.query).strip()
     shell_exe = detect_shell(str(config.get("shell_exe", "") or ""))
