@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install numpy onnxruntime ruff
+
+      - name: Syntax compile gate
+        run: python -m compileall hexcli/ evals/ -q
+
+      - name: ruff check
+        run: ruff check hexcli/
+
+      - name: Unit tests — v1.1 suite
+        run: python evals/test_v11.py
+
+      - name: Unit tests — core coverage backfill
+        run: python evals/test_core.py
+
+      - name: Integration tests — agent loop (mock backend)
+        run: python evals/test_agent_loop.py
+
+      - name: Unit tests — v1.2 suite
+        run: python evals/test_v12.py
+
+      - name: Unit tests — v1.3 suite
+        run: python evals/test_v13.py
+
+      - name: Unit tests — v1.4 suite
+        run: python evals/test_v14.py
+
+      - name: Unit tests — v1.5 suite
+        run: python evals/test_v15.py
+
+      - name: Unit tests — v1.6 suite
+        run: python evals/test_v16.py

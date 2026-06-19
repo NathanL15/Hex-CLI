@@ -1,0 +1,685 @@
+#!/usr/bin/env python3
+"""evals/test_core.py — Unit tests for pure functions in agent.py / safety.py / memory.py.
+
+Covers all v1.0-era paths that had no test coverage prior to v1.7:
+  - deep_merge corner cases
+  - session CRUD (create, touch, append, has_messages, generate_title)
+  - load_history_store with retention pruning
+  - parse_json_object edge cases
+  - parse_agent_action routing
+  - _check_sensitive_path
+  - safety.classify_command
+  - memory rule helpers
+
+Usage:
+    python evals/test_core.py
+"""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import threading
+import time
+import unittest.mock
+from pathlib import Path
+from typing import Any
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import hexcli.agent as sa
+import hexcli.safety as safety
+import hexcli.memory as mem
+
+# ============================================================================
+# deep_merge
+# ============================================================================
+
+def test_deep_merge_flat_override() -> None:
+    result = sa.deep_merge({"a": 1, "b": 2}, {"b": 99, "c": 3})
+    assert result == {"a": 1, "b": 99, "c": 3}
+
+
+def test_deep_merge_nested_dict_merges_recursively() -> None:
+    base = {"opts": {"x": 1, "y": 2}}
+    override = {"opts": {"y": 99, "z": 3}}
+    result = sa.deep_merge(base, override)
+    assert result["opts"] == {"x": 1, "y": 99, "z": 3}
+
+
+def test_deep_merge_non_dict_value_overwrites_nested_dict() -> None:
+    base = {"opts": {"x": 1}}
+    override = {"opts": "scalar"}
+    result = sa.deep_merge(base, override)
+    assert result["opts"] == "scalar"
+
+
+def test_deep_merge_empty_override_is_identity() -> None:
+    base = {"a": 1, "b": {"c": 2}}
+    result = sa.deep_merge(base, {})
+    assert result == base
+
+
+def test_deep_merge_does_not_mutate_base() -> None:
+    base = {"a": {"x": 1}}
+    original = json.loads(json.dumps(base))
+    sa.deep_merge(base, {"a": {"x": 99}})
+    assert base == original, "deep_merge must not mutate the base dict"
+
+
+def test_deep_merge_adds_new_nested_keys() -> None:
+    result = sa.deep_merge({"a": 1}, {"b": {"c": {"d": 42}}})
+    assert result["b"]["c"]["d"] == 42
+
+
+def test_deep_merge_three_levels_deep() -> None:
+    base = {"l1": {"l2": {"l3": "base"}}}
+    override = {"l1": {"l2": {"l3": "override", "extra": "new"}}}
+    result = sa.deep_merge(base, override)
+    assert result["l1"]["l2"]["l3"] == "override"
+    assert result["l1"]["l2"]["extra"] == "new"
+
+
+# ============================================================================
+# Session CRUD
+# ============================================================================
+
+def test_create_session_has_required_keys() -> None:
+    session = sa.create_session()
+    for key in ("id", "title", "created_at", "modified_at", "messages", "last_observation"):
+        assert key in session, f"missing key: {key}"
+
+
+def test_create_session_starts_with_empty_messages() -> None:
+    session = sa.create_session()
+    assert session["messages"] == []
+
+
+def test_session_has_messages_empty() -> None:
+    session = sa.create_session()
+    assert not sa.session_has_messages(session)
+
+
+def test_session_has_messages_after_append() -> None:
+    session = sa.create_session()
+    sa.append_session_message(session, "user", "hello")
+    assert sa.session_has_messages(session)
+
+
+def test_append_session_message_sets_title_on_first_user_message() -> None:
+    session = sa.create_session()
+    assert session["title"] == "New Chat"
+    sa.append_session_message(session, "user", "list my files please")
+    assert session["title"] != "New Chat"
+    assert "list" in session["title"].lower() or "files" in session["title"].lower()
+
+
+def test_append_session_message_does_not_reset_title() -> None:
+    session = sa.create_session()
+    sa.append_session_message(session, "user", "first message")
+    first_title = session["title"]
+    sa.append_session_message(session, "user", "second message")
+    assert session["title"] == first_title
+
+
+def test_append_session_message_adds_to_messages_list() -> None:
+    session = sa.create_session()
+    sa.append_session_message(session, "user", "hi")
+    sa.append_session_message(session, "assistant", "hello")
+    assert len(session["messages"]) == 2
+    assert session["messages"][0] == {"role": "user", "content": "hi"}
+    assert session["messages"][1] == {"role": "assistant", "content": "hello"}
+
+
+def test_append_session_message_repairs_corrupted_messages() -> None:
+    session = sa.create_session()
+    session["messages"] = "not a list"  # corrupted state
+    sa.append_session_message(session, "user", "repair")
+    assert isinstance(session["messages"], list)
+    assert len(session["messages"]) == 1
+
+
+def test_touch_session_updates_modified_at() -> None:
+    session = sa.create_session()
+    old_ts = session["modified_at"]
+    time.sleep(0.001)
+    sa.touch_session(session)
+    assert session["modified_at"] >= old_ts
+
+
+def test_generate_session_title_strips_specials() -> None:
+    title = sa.generate_session_title("how do I use git?!")
+    assert "!" not in title
+    assert "?" not in title
+
+
+def test_generate_session_title_empty_input() -> None:
+    title = sa.generate_session_title("")
+    assert title == "New Chat"
+
+
+def test_generate_session_title_all_specials() -> None:
+    title = sa.generate_session_title("!!! ??? ###")
+    assert title == "New Chat"
+
+
+def test_generate_session_title_truncates_to_six_words() -> None:
+    title = sa.generate_session_title("one two three four five six seven eight")
+    assert len(title.split()) <= 6
+
+
+def test_upsert_session_inserts_new() -> None:
+    sessions: list[dict[str, Any]] = []
+    s = sa.create_session()
+    sa.append_session_message(s, "user", "hello")
+    sa.upsert_session(sessions, s)
+    assert len(sessions) == 1
+
+
+def test_upsert_session_replaces_existing_by_id() -> None:
+    s = sa.create_session()
+    sa.append_session_message(s, "user", "hello")
+    sessions = [dict(s)]
+    s["title"] = "Updated Title"
+    sa.upsert_session(sessions, s)
+    assert len(sessions) == 1
+    assert sessions[0]["title"] == "Updated Title"
+
+
+def test_upsert_session_ignores_empty_session() -> None:
+    sessions: list[dict[str, Any]] = []
+    s = sa.create_session()  # no messages
+    sa.upsert_session(sessions, s)
+    assert len(sessions) == 0, "empty sessions must not be persisted"
+
+
+# ============================================================================
+# load_history_store — retention pruning
+# ============================================================================
+
+def test_load_history_store_prunes_old_sessions() -> None:
+    from datetime import datetime, timezone, timedelta
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    new_ts = datetime.now(timezone.utc).isoformat()
+
+    store = {"sessions": [
+        {"id": "old", "title": "Old", "modified_at": old_ts, "messages": [{"role": "user", "content": "hi"}]},
+        {"id": "new", "title": "New", "modified_at": new_ts, "messages": [{"role": "user", "content": "hi"}]},
+    ]}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        hp.write_text(json.dumps(store), encoding="utf-8")
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            cfg = {**sa.DEFAULT_CONFIG, "history_retention_days": 30}
+            sessions = sa.load_history_store(cfg)
+
+    ids = [s["id"] for s in sessions]
+    assert "new" in ids
+    assert "old" not in ids, "sessions older than retention_days must be pruned"
+
+
+def test_load_history_store_keeps_all_when_within_retention() -> None:
+    from datetime import datetime, timezone, timedelta
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    store = {"sessions": [
+        {"id": "a", "title": "A", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
+        {"id": "b", "title": "B", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        hp.write_text(json.dumps(store), encoding="utf-8")
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            sessions = sa.load_history_store({**sa.DEFAULT_CONFIG, "history_retention_days": 30})
+    assert len(sessions) == 2
+
+
+def test_load_history_store_returns_empty_for_missing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "nonexistent.json"
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
+    assert sessions == []
+
+
+def test_load_history_store_skips_invalid_timestamps() -> None:
+    store = {"sessions": [
+        {"id": "bad", "title": "Bad", "modified_at": "NOT_A_DATE", "messages": [{"role": "user", "content": "hi"}]},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        hp.write_text(json.dumps(store), encoding="utf-8")
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
+    assert len(sessions) == 0, "sessions with invalid timestamps must be dropped"
+
+
+def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
+    from datetime import datetime, timezone
+    recent_ts = datetime.now(timezone.utc).isoformat()
+    store = {"sessions": [
+        {"id": "legacy", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        hp.write_text(json.dumps(store), encoding="utf-8")
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
+    s = sessions[0]
+    assert s.get("title") == "New Chat"
+    assert "last_observation" in s
+    assert "compact_count" in s
+
+
+# ============================================================================
+# parse_json_object
+# ============================================================================
+
+def test_parse_json_object_direct_parse() -> None:
+    result = sa.parse_json_object('{"action":"finish","message":"hi"}')
+    assert result == {"action": "finish", "message": "hi"}
+
+
+def test_parse_json_object_strips_markdown_fences() -> None:
+    raw = '```json\n{"action": "finish", "message": "ok"}\n```'
+    result = sa.parse_json_object(raw)
+    assert result is not None
+    assert result["action"] == "finish"
+
+
+def test_parse_json_object_extracts_from_prose() -> None:
+    raw = 'Here is my response: {"action": "finish", "message": "found"}'
+    result = sa.parse_json_object(raw)
+    assert result is not None
+    assert result["message"] == "found"
+
+
+def test_parse_json_object_strips_cot_first() -> None:
+    raw = '<think>some thought</think>{"action":"finish","message":"clear"}'
+    result = sa.parse_json_object(raw)
+    assert result is not None
+    assert result["message"] == "clear"
+
+
+def test_parse_json_object_returns_none_for_array() -> None:
+    result = sa.parse_json_object('["not", "an", "object"]')
+    assert result is None
+
+
+def test_parse_json_object_returns_none_for_plain_text() -> None:
+    result = sa.parse_json_object("No JSON here at all.")
+    assert result is None
+
+
+def test_parse_json_object_returns_none_for_empty_string() -> None:
+    result = sa.parse_json_object("")
+    assert result is None
+
+
+def test_parse_json_object_returns_none_for_cot_only() -> None:
+    result = sa.parse_json_object("<think>Only thinking, no JSON</think>")
+    assert result is None
+
+
+# ============================================================================
+# parse_agent_action
+# ============================================================================
+
+def test_parse_agent_action_tool_by_action_field() -> None:
+    for tool in list(sa.TOOL_NAMES)[:3]:
+        raw = json.dumps({"action": tool, "args": {"path": "."}})
+        result = sa.parse_agent_action(raw)
+        assert result["action"] == "tool"
+        assert result["tool"] == tool
+
+
+def test_parse_agent_action_explicit_tool_field() -> None:
+    result = sa.parse_agent_action('{"action":"tool","tool":"list_directory","args":{"path":"."}}')
+    assert result["action"] == "tool"
+    assert result["tool"] == "list_directory"
+
+
+def test_parse_agent_action_finish_action() -> None:
+    result = sa.parse_agent_action('{"action":"finish","message":"Task done."}')
+    assert result["action"] == "finish"
+    assert result["message"] == "Task done."
+
+
+def test_parse_agent_action_finish_via_message_field() -> None:
+    result = sa.parse_agent_action('{"message":"Inferred finish message."}')
+    assert result["action"] == "finish"
+    assert "Inferred finish message." in result["message"]
+
+
+def test_parse_agent_action_plain_text_becomes_finish() -> None:
+    result = sa.parse_agent_action("I cannot find a JSON block in this response.")
+    assert result["action"] == "finish"
+    assert isinstance(result["message"], str)
+
+
+def test_parse_agent_action_cot_stripped() -> None:
+    result = sa.parse_agent_action('<think>reasoning</think>{"action":"finish","message":"clean"}')
+    assert result["action"] == "finish"
+    assert result["message"] == "clean"
+
+
+def test_parse_agent_action_tool_via_tool_field_fallback() -> None:
+    tool = list(sa.TOOL_NAMES)[0]
+    raw = json.dumps({"action": "invalid_action", "tool": tool, "args": {}})
+    result = sa.parse_agent_action(raw)
+    assert result["action"] == "tool"
+    assert result["tool"] == tool
+
+
+def test_parse_agent_action_args_default_to_empty_dict() -> None:
+    result = sa.parse_agent_action('{"action":"list_directory"}')
+    assert result["args"] == {}
+
+
+def test_parse_agent_action_non_dict_args_replaced_with_empty() -> None:
+    result = sa.parse_agent_action('{"action":"list_directory","args":["not","a","dict"]}')
+    assert result["args"] == {}
+
+
+# ============================================================================
+# _check_sensitive_path
+# ============================================================================
+
+def test_check_sensitive_path_blocks_ssh() -> None:
+    home = Path.home()
+    sensitive = home / ".ssh" / "id_rsa"
+    try:
+        sa._check_sensitive_path(sensitive, "read_file")
+        assert False, "should have raised"
+    except RuntimeError as exc:
+        assert ".ssh" in str(exc)
+
+
+def test_check_sensitive_path_blocks_gnupg() -> None:
+    home = Path.home()
+    sensitive = home / ".gnupg" / "secring.gpg"
+    try:
+        sa._check_sensitive_path(sensitive, "read_file")
+        assert False, "should have raised"
+    except RuntimeError:
+        pass
+
+
+def test_check_sensitive_path_blocks_gpg() -> None:
+    home = Path.home()
+    sensitive = home / ".gpg" / "keyring"
+    try:
+        sa._check_sensitive_path(sensitive, "read_file")
+        assert False, "should have raised"
+    except RuntimeError:
+        pass
+
+
+def test_check_sensitive_path_allows_home_documents() -> None:
+    home = Path.home()
+    safe = home / "Documents" / "notes.txt"
+    sa._check_sensitive_path(safe, "read_file")  # must not raise
+
+
+def test_check_sensitive_path_allows_project_dir() -> None:
+    p = Path.cwd() / "hexcli" / "agent.py"
+    sa._check_sensitive_path(p, "read_file")  # must not raise
+
+
+def test_check_sensitive_path_blocks_windows_credential_store() -> None:
+    home = Path.home()
+    cred_path = home / "AppData" / "Local" / "Microsoft" / "Credentials" / "abc123"
+    try:
+        sa._check_sensitive_path(cred_path, "read_file")
+        assert False, "should have raised for credential store"
+    except RuntimeError as exc:
+        assert "credential" in str(exc).lower()
+
+
+# ============================================================================
+# safety.classify_command
+# ============================================================================
+
+def test_classify_safe_get_commands() -> None:
+    for cmd in ["Get-Process", "Get-ChildItem .", "Get-Content file.txt"]:
+        assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
+
+
+def test_classify_safe_ls_dir() -> None:
+    for cmd in ["ls", "ls -la", "dir .", "dir /b"]:
+        assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
+
+
+def test_classify_safe_git_read() -> None:
+    for cmd in ["git status", "git log --oneline", "git diff HEAD", "git show HEAD"]:
+        assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
+
+
+def test_classify_safe_echo_type() -> None:
+    for cmd in ["echo hello", "type file.txt", "cat file.txt", "pwd", "test-path ."]:
+        assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
+
+
+def test_classify_destructive_remove_item() -> None:
+    for cmd in [
+        "Remove-Item -Recurse C:\\temp",
+        "remove-item foo.txt",
+        "REMOVE-ITEM -Force .",
+    ]:
+        assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
+
+
+def test_classify_destructive_rm() -> None:
+    for cmd in ["rm -rf /", "rm file.txt", "rm -r dir"]:
+        assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
+
+
+def test_classify_destructive_git_force_push() -> None:
+    for cmd in ["git push -f origin main", "git push --force", "git push -f"]:
+        assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
+
+
+def test_classify_destructive_git_clean() -> None:
+    for cmd in ["git clean -f", "git clean -xf", "git clean -df"]:
+        assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
+
+
+def test_classify_destructive_force_recurse() -> None:
+    cmd = "Get-ChildItem . | Remove-Item -Force -Recurse"
+    assert safety.classify_command(cmd) == "destructive"
+
+
+def test_classify_destructive_diskpart() -> None:
+    assert safety.classify_command("diskpart") == "destructive"
+
+
+def test_classify_destructive_format_volume() -> None:
+    assert safety.classify_command("Format-Volume D:") == "destructive"
+
+
+def test_classify_caution_npm_install() -> None:
+    assert safety.classify_command("npm install") == "caution"
+
+
+def test_classify_caution_python_script() -> None:
+    assert safety.classify_command("python script.py") == "caution"
+
+
+def test_classify_caution_generic_pipe() -> None:
+    assert safety.classify_command('Get-Content log.txt | Select-String "error"') in ("safe", "caution")
+
+
+# ============================================================================
+# memory — rule helpers
+# ============================================================================
+
+def test_read_memory_rules_empty_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            result = mem.read_memory_rules(5)
+    assert result == []
+
+
+def test_read_memory_rules_parses_bullet_lines() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        rules_path.write_text("- Rule one\n- Rule two\n- Rule three\n", encoding="utf-8")
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            result = mem.read_memory_rules(5)
+    assert len(result) == 3
+    assert "Rule one" in result[0]
+
+
+def test_read_memory_rules_returns_last_n() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        lines = "\n".join(f"- Rule {i}" for i in range(10))
+        rules_path.write_text(lines, encoding="utf-8")
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            result = mem.read_memory_rules(3)
+    assert len(result) == 3
+    assert "Rule 9" in result[-1], "must return the last N rules"
+
+
+def test_append_rules_creates_file_and_writes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            mem._append_rules(["- First rule", "- Second rule"])
+            result = mem.read_memory_rules(10)
+    assert any("First rule" in r for r in result)
+    assert any("Second rule" in r for r in result)
+
+
+def test_append_rules_enforces_max_cap() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        many_rules = [f"- Rule {i}" for i in range(mem._MAX_RULES + 5)]
+        rules_path.write_text("\n".join(many_rules) + "\n", encoding="utf-8")
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            mem._append_rules(["- New rule"])
+            result = mem.read_memory_rules(mem._MAX_RULES + 10)
+    assert len(result) <= mem._MAX_RULES, (
+        f"rules file must not exceed _MAX_RULES={mem._MAX_RULES}"
+    )
+
+
+def test_prune_memory_rules_removes_excess() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        many_rules = [f"- Rule {i}" for i in range(mem._MAX_RULES + 10)]
+        rules_path.write_text("\n".join(many_rules) + "\n", encoding="utf-8")
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            removed = mem.prune_memory_rules()
+            remaining = mem.read_memory_rules(mem._MAX_RULES + 20)
+    assert removed > 0
+    assert len(remaining) <= mem._MAX_RULES
+
+
+# ============================================================================
+# Runner
+# ============================================================================
+
+TESTS = [
+    test_deep_merge_flat_override,
+    test_deep_merge_nested_dict_merges_recursively,
+    test_deep_merge_non_dict_value_overwrites_nested_dict,
+    test_deep_merge_empty_override_is_identity,
+    test_deep_merge_does_not_mutate_base,
+    test_deep_merge_adds_new_nested_keys,
+    test_deep_merge_three_levels_deep,
+    test_create_session_has_required_keys,
+    test_create_session_starts_with_empty_messages,
+    test_session_has_messages_empty,
+    test_session_has_messages_after_append,
+    test_append_session_message_sets_title_on_first_user_message,
+    test_append_session_message_does_not_reset_title,
+    test_append_session_message_adds_to_messages_list,
+    test_append_session_message_repairs_corrupted_messages,
+    test_touch_session_updates_modified_at,
+    test_generate_session_title_strips_specials,
+    test_generate_session_title_empty_input,
+    test_generate_session_title_all_specials,
+    test_generate_session_title_truncates_to_six_words,
+    test_upsert_session_inserts_new,
+    test_upsert_session_replaces_existing_by_id,
+    test_upsert_session_ignores_empty_session,
+    test_load_history_store_prunes_old_sessions,
+    test_load_history_store_keeps_all_when_within_retention,
+    test_load_history_store_returns_empty_for_missing_file,
+    test_load_history_store_skips_invalid_timestamps,
+    test_load_history_store_sets_defaults_on_legacy_sessions,
+    test_parse_json_object_direct_parse,
+    test_parse_json_object_strips_markdown_fences,
+    test_parse_json_object_extracts_from_prose,
+    test_parse_json_object_strips_cot_first,
+    test_parse_json_object_returns_none_for_array,
+    test_parse_json_object_returns_none_for_plain_text,
+    test_parse_json_object_returns_none_for_empty_string,
+    test_parse_json_object_returns_none_for_cot_only,
+    test_parse_agent_action_tool_by_action_field,
+    test_parse_agent_action_explicit_tool_field,
+    test_parse_agent_action_finish_action,
+    test_parse_agent_action_finish_via_message_field,
+    test_parse_agent_action_plain_text_becomes_finish,
+    test_parse_agent_action_cot_stripped,
+    test_parse_agent_action_tool_via_tool_field_fallback,
+    test_parse_agent_action_args_default_to_empty_dict,
+    test_parse_agent_action_non_dict_args_replaced_with_empty,
+    test_check_sensitive_path_blocks_ssh,
+    test_check_sensitive_path_blocks_gnupg,
+    test_check_sensitive_path_blocks_gpg,
+    test_check_sensitive_path_allows_home_documents,
+    test_check_sensitive_path_allows_project_dir,
+    test_check_sensitive_path_blocks_windows_credential_store,
+    test_classify_safe_get_commands,
+    test_classify_safe_ls_dir,
+    test_classify_safe_git_read,
+    test_classify_safe_echo_type,
+    test_classify_destructive_remove_item,
+    test_classify_destructive_rm,
+    test_classify_destructive_git_force_push,
+    test_classify_destructive_git_clean,
+    test_classify_destructive_force_recurse,
+    test_classify_destructive_diskpart,
+    test_classify_destructive_format_volume,
+    test_classify_caution_npm_install,
+    test_classify_caution_python_script,
+    test_classify_caution_generic_pipe,
+    test_read_memory_rules_empty_file,
+    test_read_memory_rules_parses_bullet_lines,
+    test_read_memory_rules_returns_last_n,
+    test_append_rules_creates_file_and_writes,
+    test_append_rules_enforces_max_cap,
+    test_prune_memory_rules_removes_excess,
+]
+
+
+def _run(fn: Any) -> bool:
+    try:
+        fn()
+        print(f"  PASS  {fn.__name__}")
+        return True
+    except AssertionError as exc:
+        print(f"  FAIL  {fn.__name__}: {exc}")
+        return False
+    except Exception as exc:
+        print(f"  ERROR {fn.__name__}: {type(exc).__name__}: {exc}")
+        return False
+
+
+def main() -> int:
+    print(f"\nevals/test_core.py — {len(TESTS)} unit tests\n")
+    results = [_run(t) for t in TESTS]
+    passed = sum(results)
+    failed = len(results) - passed
+    print(f"\n{passed}/{len(results)} passed", "✓" if failed == 0 else f"— {failed} FAILED")
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

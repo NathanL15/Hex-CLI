@@ -49,7 +49,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = APP_DIR / "history.json"
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
@@ -372,6 +372,32 @@ TOOL_NAMES = frozenset({
 # fresh (undo = delete).  Stored in-process only — not persisted to history.json
 # because snapshots are only useful within the current session.
 _SESSION_UNDO_SNAPSHOTS: dict[str, dict[str, str | None]] = {}
+
+# ---------------------------------------------------------------------------
+# Mock backend (Feature 19) — deterministic offline testing via fixture queues
+# ---------------------------------------------------------------------------
+
+_MOCK_RESPONSE_QUEUE: list[str] = []
+_MOCK_EVAL_COUNT = 0  # synthetic token count returned by mock calls
+
+
+def set_mock_responses(responses: list[str], eval_count: int = 0) -> None:
+    """Load scripted LLM responses. Each call to call_llm pops the next entry.
+
+    Fixture entries are raw strings — identical to what a real LLM would return
+    (JSON action objects, finish messages, plain text, etc.).
+    Pass eval_count to simulate a non-zero token count if a test needs it.
+    """
+    _MOCK_RESPONSE_QUEUE[:] = responses
+    global _MOCK_EVAL_COUNT
+    _MOCK_EVAL_COUNT = eval_count
+
+
+def _pop_mock_response() -> tuple[str, int]:
+    """Return (response_text, eval_count); falls back to a finish action."""
+    if _MOCK_RESPONSE_QUEUE:
+        return (_MOCK_RESPONSE_QUEUE.pop(0), _MOCK_EVAL_COUNT)
+    return ('{"action":"finish","message":"Mock queue exhausted."}', 0)
 
 REFUSAL_PHRASES = (
     "i don't have access", "i do not have access", "i cannot access",
@@ -1002,6 +1028,8 @@ def openai_generate_with_system(config: dict[str, Any], system: str, prompt: str
 
 
 def llm_generate(config: dict[str, Any], system: str, prompt: str) -> str:
+    if config.get("backend") == "mock":
+        return _pop_mock_response()[0]
     if config["backend"] == "ollama":
         return ollama_generate_with_system(config, system, prompt)
     if config["backend"] == "openai":
@@ -1026,6 +1054,9 @@ def call_llm(
     inference is in progress.
     """
     with memory._NPU_INFERENCE_LOCK:
+        if config.get("backend") == "mock":
+            return _pop_mock_response()
+
         if config["backend"] == "ollama" and config.get("use_streaming", True):
             return _ollama_stream_chat(config, messages, token_key, label=label, json_format=json_format)
 

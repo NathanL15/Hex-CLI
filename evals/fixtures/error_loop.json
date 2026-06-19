@@ -1,0 +1,6 @@
+[
+  "{\"action\":\"run_command\",\"args\":{\"command\":\"echo stuck\"}}",
+  "{\"action\":\"run_command\",\"args\":{\"command\":\"echo stuck\"}}",
+  "{\"action\":\"run_command\",\"args\":{\"command\":\"echo stuck\"}}",
+  "{\"action\":\"finish\",\"message\":\"Done.\"}"
+]
