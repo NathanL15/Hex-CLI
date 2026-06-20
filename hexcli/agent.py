@@ -1747,10 +1747,13 @@ def workspace_snapshot(cwd: str) -> str:
         )
         if br.returncode == 0:
             branch = br.stdout.strip()
-            dirty = subprocess.run(
-                ["git", "diff", "--quiet"],
-                cwd=cwd, capture_output=True, timeout=0.5,
-            ).returncode != 0
+            # --porcelain detects staged, unstaged, and untracked changes in one call;
+            # git diff --quiet only detects unstaged changes (misses staged commits).
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=cwd, capture_output=True, text=True, timeout=0.5,
+            )
+            dirty = bool(status.stdout.strip())
             parts.append(f"git:{branch}{'*' if dirty else ''}")
     except Exception:
         pass
