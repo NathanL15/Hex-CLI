@@ -869,7 +869,12 @@ def _ollama_stream_chat(
                     eval_count = data.get("eval_count", tok)
 
     if "value" in err_box:
-        raise err_box["value"]
+        exc = err_box["value"]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+            sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+            sys.stderr.flush()
+            return ollama_chat_non_stream(config, messages, token_key, json_format=json_format), 0
+        raise exc
 
     sys.stderr.write("\r" + " " * 60 + "\r")
     sys.stderr.flush()
