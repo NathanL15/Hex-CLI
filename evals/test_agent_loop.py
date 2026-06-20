@@ -544,6 +544,17 @@ def test_batch_non_dict_action_returns_error_not_crash() -> None:
     assert "Non-dict batch done." in result
 
 
+def test_write_file_tool_leaves_no_tmp_file() -> None:
+    """write_file_tool must use atomic rename — no .tmp artefact left on success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "output.py"
+        sa.write_file_tool(str(target), "x = 1\n")
+        assert target.exists(), "write_file must create the target file"
+        assert target.read_text(encoding="utf-8") == "x = 1\n"
+        tmp_artefact = Path(tmp) / "output.py.tmp"
+        assert not tmp_artefact.exists(), "write_file must not leave a .tmp file behind"
+
+
 def test_delegate_recursion_guard_raises() -> None:
     """_run_delegate must raise RuntimeError when called from inside a delegate."""
     import hexcli.agent as sa2
@@ -643,6 +654,7 @@ TESTS = [
     test_batch_delegate_not_allowed_returns_error_not_crash,
     test_batch_non_dict_action_returns_error_not_crash,
     test_delegate_recursion_guard_raises,
+    test_write_file_tool_leaves_no_tmp_file,
 ]
 
 
