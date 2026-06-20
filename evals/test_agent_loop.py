@@ -472,6 +472,50 @@ def test_read_file_tool_large_file_truncated_without_oom() -> None:
 # edit_file error propagation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# _maybe_auto_compact — threshold behaviour
+# ---------------------------------------------------------------------------
+
+def test_maybe_auto_compact_fires_above_threshold() -> None:
+    """_maybe_auto_compact must call compact_history when session exceeds 1300 est. tokens."""
+    cfg = {**_CFG}
+    session = sa.create_session()
+    # 2600 est. tokens (> 1300): 8 messages × 1300 chars / 4 = 2600
+    for _ in range(4):
+        sa.append_session_message(session, "user", "x" * 1300)
+        sa.append_session_message(session, "assistant", "y" * 1300)
+
+    compact_called: list[bool] = []
+
+    def fake_compact(config: Any, sess: Any, *, quiet: bool = False) -> list[Any]:
+        compact_called.append(True)
+        return sess.get("messages", [])
+
+    with unittest.mock.patch.object(sa, "compact_history", side_effect=fake_compact), \
+         unittest.mock.patch.object(sa, "sync_session_store"):
+        sa._maybe_auto_compact(cfg, session, [])
+
+    assert compact_called, "_maybe_auto_compact must trigger compact_history above threshold"
+
+
+def test_maybe_auto_compact_silent_below_threshold() -> None:
+    """_maybe_auto_compact must not compact when below 1300 est. tokens."""
+    cfg = {**_CFG}
+    session = sa.create_session()
+    sa.append_session_message(session, "user", "x" * 200)  # ~50 tokens
+
+    compact_called: list[bool] = []
+
+    def fake_compact(config: Any, sess: Any, *, quiet: bool = False) -> list[Any]:
+        compact_called.append(True)
+        return sess.get("messages", [])
+
+    with unittest.mock.patch.object(sa, "compact_history", side_effect=fake_compact):
+        sa._maybe_auto_compact(cfg, session, [])
+
+    assert not compact_called, "_maybe_auto_compact must NOT compact when below threshold"
+
+
 def test_edit_file_empty_old_string_raises_error() -> None:
     """edit_file with empty old_string must raise, not silently insert at start of file."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -552,6 +596,8 @@ TESTS = [
     test_edit_file_missing_old_string_sends_error_to_model,
     test_read_file_tool_large_file_truncated_without_oom,
     test_edit_file_empty_old_string_raises_error,
+    test_maybe_auto_compact_fires_above_threshold,
+    test_maybe_auto_compact_silent_below_threshold,
 ]
 
 
