@@ -1361,7 +1361,18 @@ def run_command_tool(
 def read_file_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "read_file")
-    content = path.read_text(encoding="utf-8", errors="replace")
+    # Avoid loading huge files; read at most 4× output_limit bytes (UTF-8 max 4B/char).
+    max_bytes = output_limit * 4
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size > max_bytes:
+        with path.open("rb") as fh:
+            raw_bytes = fh.read(max_bytes)
+        content = raw_bytes.decode("utf-8", errors="replace")
+    else:
+        content = path.read_text(encoding="utf-8", errors="replace")
     ui.tool_event("read", str(path))
     return trim_text(content, output_limit)
 
