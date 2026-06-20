@@ -137,7 +137,9 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     7. Base any counts, totals, or other facts in your output strictly on the literal tool output
        you already received in this conversation. Never estimate or guess a number you could
        instead read from a previous tool result.
-    8. After completing all work, call finish with a concise plain-language summary.
+    8. After completing all work, call finish. Your message MUST cite or quote what the last
+       tool actually returned — never say "command executed successfully" without stating what
+       it produced. If a command was supposed to create a file, say whether the file now exists.
     9. For questions about this machine's actual current state (hardware, processes, installed
        software, files) always run a command or use a file tool — never claim you lack access.
     10. NEVER call a tool just because the user's wording names one. Whether to use a tool is
@@ -1396,6 +1398,14 @@ def list_directory_tool(path_text: str, output_limit: int) -> str:
     return trim_text(result, output_limit)
 
 
+_SEARCH_EXCLUDE_DIRS = frozenset({
+    ".shellai", ".git", ".hg", ".svn",
+    "node_modules", "__pycache__", ".venv", "venv",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+})
+_SEARCH_MAX_FILE_BYTES = 500_000  # skip files likely to be binary blobs
+
+
 def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_limit: int) -> str:
     search_path = resolve_path(path_text or ".")
     _check_sensitive_path(search_path, "search_files")
@@ -1407,6 +1417,22 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
         raise RuntimeError(f"Invalid regex: {exc}") from exc
     for fp in sorted(search_path.rglob(glob_pattern)):
         if not fp.is_file():
+            continue
+        # Skip hidden and data directories (e.g. .shellai/models/, .git/, node_modules/)
+        try:
+            rel_parts = fp.relative_to(search_path).parts[:-1]
+        except ValueError:
+            continue
+        if any(
+            p.lower() in _SEARCH_EXCLUDE_DIRS or (p.startswith(".") and len(p) > 1)
+            for p in rel_parts
+        ):
+            continue
+        # Skip large files (binary blobs, model weights, lock files)
+        try:
+            if fp.stat().st_size > _SEARCH_MAX_FILE_BYTES:
+                continue
+        except OSError:
             continue
         try:
             for i, line in enumerate(fp.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
@@ -2130,6 +2156,10 @@ def compact_history(
     summary, _ = call_llm(config_with_compact, summary_messages, "_compact_tokens", label="compacting")
     summary = strip_thinking(summary).strip()
 
+    # Keep the last few messages verbatim so in-progress task state survives compaction.
+    _COMPACT_KEEP_RECENT = 4
+    tail = messages[-_COMPACT_KEEP_RECENT:] if len(messages) > _COMPACT_KEEP_RECENT else []
+
     new_messages: list[dict[str, str]] = [
         {
             "role": "user",
@@ -2143,6 +2173,7 @@ def compact_history(
             "role": "assistant",
             "content": "Understood. I have the context summary and will continue from where we left off.",
         },
+        *tail,
     ]
     session["messages"] = new_messages
     session["compact_count"] = session.get("compact_count", 0) + 1
