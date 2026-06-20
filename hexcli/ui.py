@@ -223,7 +223,7 @@ def format_relative_time(timestamp: str) -> str:
         return "unknown"
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    seconds = int((_utc_now() - moment).total_seconds())
+    seconds = max(0, int((_utc_now() - moment).total_seconds()))
     if seconds < 60:
         return "now"
     if seconds < 3600:
