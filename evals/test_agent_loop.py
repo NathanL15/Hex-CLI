@@ -409,6 +409,71 @@ def test_verify_syntax_called_after_edit_file() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unknown / malformed action fallback
+# ---------------------------------------------------------------------------
+
+def test_unknown_action_returns_string_not_crash() -> None:
+    """Unknown action type must fall back gracefully — no exception raised."""
+    sa.set_mock_responses(['{"action":"nonexistent_tool","args":{}}'])
+    result = sa.run_autopilot(_CFG, [], "do something unusual", _SHELL)
+    assert isinstance(result, str), "unknown action must produce a string result, not crash"
+
+
+def test_empty_string_response_handled_gracefully() -> None:
+    """Empty LLM response must not crash the agent loop."""
+    sa.set_mock_responses([""])
+    result = sa.run_autopilot(_CFG, [], "anything", _SHELL)
+    assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# batch — parallel reads
+# ---------------------------------------------------------------------------
+
+def test_batch_reads_multiple_files() -> None:
+    """batch action with two read_file entries must return both file contents."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fa = Path(tmp) / "a.txt"
+        fb = Path(tmp) / "b.txt"
+        fa.write_text("content of A", encoding="utf-8")
+        fb.write_text("content of B", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({
+                "action": "batch",
+                "args": {"actions": [
+                    {"tool": "read_file", "args": {"path": str(fa)}},
+                    {"tool": "read_file", "args": {"path": str(fb)}},
+                ]},
+            }),
+            '{"action":"finish","message":"Both files read."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "read both files at once", _SHELL)
+    assert "Both files read." in result
+
+
+# ---------------------------------------------------------------------------
+# edit_file error propagation
+# ---------------------------------------------------------------------------
+
+def test_edit_file_missing_old_string_sends_error_to_model() -> None:
+    """edit_file error (old_string not found) must be sent back to model, not silenced."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "file.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({"action": "edit_file", "args": {
+                "path": str(target),
+                "old_string": "THIS DOES NOT EXIST",
+                "new_string": "y = 2",
+            }}),
+            '{"action":"finish","message":"Error reported."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "fix the code", _SHELL)
+    # Agent must continue after the error (not crash), and the finish message must appear
+    assert "Error reported." in result
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -452,6 +517,10 @@ TESTS = [
     test_compact_refuses_too_few_messages,
     test_run_command_tool_times_out,
     test_verify_syntax_called_after_edit_file,
+    test_unknown_action_returns_string_not_crash,
+    test_empty_string_response_handled_gracefully,
+    test_batch_reads_multiple_files,
+    test_edit_file_missing_old_string_sends_error_to_model,
 ]
 
 
