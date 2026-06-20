@@ -216,7 +216,7 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
     {{"action":"verify_syntax","args":{{"path":"src/main.py","language":"python"}}}}
 
     Run a script and capture its output (workspace-only; .py .ps1 .js/.mjs/.cjs supported;
-    use for runtime-bug diagnosis — follow the exact sequence in rule 15):
+    use for runtime-bug diagnosis — follow the exact sequence in rule 14):
     {{"action":"run_code","args":{{"path":"script.py","args":[],"timeout":10}}}}
 
     Finish — always the last action:
@@ -2165,8 +2165,12 @@ def compact_history(
     quiet=True suppresses the printed summary (used by auto-compact).
     """
     messages: list[dict[str, str]] = list(session.get("messages", []))
-    if len(messages) < 4:
-        print("Nothing to compact yet (fewer than 4 messages).")
+    _COMPACT_KEEP_RECENT = 4
+    # Need at least keep_recent+3 messages so that 3+ messages are summarised
+    # and removed — otherwise the 2 summary messages + 4 tail can exceed the
+    # original count (e.g. 5 msgs → 6 msgs after compact).
+    if len(messages) < _COMPACT_KEEP_RECENT + 3:
+        print(f"Nothing to compact yet (need at least {_COMPACT_KEEP_RECENT + 3} messages).")
         return messages
 
     # /no_think disables Qwen3's chain-of-thought block so the token budget
@@ -2182,7 +2186,6 @@ def compact_history(
     summary = strip_thinking(summary).strip()
 
     # Keep the last few messages verbatim so in-progress task state survives compaction.
-    _COMPACT_KEEP_RECENT = 4
     tail = messages[-_COMPACT_KEEP_RECENT:] if len(messages) > _COMPACT_KEEP_RECENT else []
 
     new_messages: list[dict[str, str]] = [
@@ -2539,7 +2542,7 @@ def _maybe_auto_compact(
 ) -> None:
     """Silently compact history when it approaches the 4B instruction-following cliff.
 
-    Fires after each autopilot turn. At ≥1,400 history tokens the compact runs
+    Fires after each autopilot turn. At ≥1,300 history tokens the compact runs
     automatically so TTFT never crosses the degradation threshold. The full
     summary is suppressed (quiet=True); only a one-line notice is printed.
     """
@@ -2875,6 +2878,12 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 cprint("  Restart it with: python launcher.py", C.DIM)
             else:
                 ui.error_box("Network error — backend returned an unexpected response.")
+            tel.record_turn(turn, status="error")
+        except (ConnectionResetError, ConnectionAbortedError):
+            ui.error_box(
+                "npurun dropped the stream connection.\n"
+                'Add  "use_streaming": false  to shellai.json to avoid this.'
+            )
             tel.record_turn(turn, status="error")
         except Exception as exc:  # noqa: BLE001
             ui.error_box(str(exc))

@@ -332,7 +332,7 @@ def test_refusal_nudge_fires_and_retries() -> None:
 def test_compact_history_preserves_tail() -> None:
     cfg = {**_CFG, "compact_max_output_tokens": 512}
     session = sa.create_session()
-    # Build a session with 10 messages
+    # Build a session with 10 messages (> 7 minimum)
     for i in range(5):
         sa.append_session_message(session, "user", f"Turn {i} question")
         sa.append_session_message(session, "assistant", f"Turn {i} answer")
@@ -346,9 +346,28 @@ def test_compact_history_preserves_tail() -> None:
     # Must have 2 summary messages + up to 4 tail messages
     assert len(new_msgs) >= 2, "must have at least summary + ack"
     assert len(new_msgs) <= 6, f"must have at most 2+4=6 messages, got {len(new_msgs)}"
+    # Compact must reduce total message count
+    assert len(new_msgs) < 10, "compact must reduce message count"
     # The last tail message (10th message = "Turn 4 answer") must be preserved
     all_content = " ".join(m["content"] for m in new_msgs)
     assert "Turn 4 answer" in all_content, "last message must survive compaction"
+
+
+def test_compact_refuses_too_few_messages() -> None:
+    cfg = {**_CFG, "compact_max_output_tokens": 512}
+    session = sa.create_session()
+    # Only 4 messages — below the 7-message minimum
+    for i in range(2):
+        sa.append_session_message(session, "user", f"Q{i}")
+        sa.append_session_message(session, "assistant", f"A{i}")
+    assert len(session["messages"]) == 4
+
+    import io
+    import unittest.mock
+    with unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+        new_msgs = sa.compact_history(cfg, session, quiet=False)
+    assert len(new_msgs) == 4, "compact must not change message list when below minimum"
+    assert "Nothing to compact" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +449,7 @@ TESTS = [
     test_null_read_file_path_raises_helpful_error,
     test_refusal_nudge_fires_and_retries,
     test_compact_history_preserves_tail,
+    test_compact_refuses_too_few_messages,
     test_run_command_tool_times_out,
     test_verify_syntax_called_after_edit_file,
 ]
