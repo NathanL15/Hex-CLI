@@ -227,7 +227,7 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
 _LINT_TOOL_SCHEMA = textwrap.dedent("""
     Lint a Python file with ruff (faster than verify_syntax for catching unused imports,
     undefined names, and style issues; complements but does not replace verify_syntax):
-    {{"action":"lint_code","args":{{"path":"src/main.py"}}}}
+    {"action":"lint_code","args":{"path":"src/main.py"}}
 """).strip()
 
 # Conditional schemas — injected by build_autopilot_prompt only when the heuristic fires.
@@ -239,21 +239,21 @@ _SEARCH_MEMORY_SCHEMA = textwrap.dedent("""
     rule 12 (bare ambiguous request still gets a clarifying question, not a memory search).
 
     Search past session memory for relevant prior context:
-    {{"action":"search_memory","args":{{"query":"<short restatement keeping concrete nouns>","top_k":3}}}}
+    {"action":"search_memory","args":{"query":"<short restatement keeping concrete nouns>","top_k":3}}
 """).strip()
 
 _FETCH_URL_SCHEMA = textwrap.dedent("""
     Fetch and read a web page (http/https only; private IPs and file:// are blocked):
-    {{"action":"fetch_url","args":{{"url":"https://example.com/docs/api"}}}}
+    {"action":"fetch_url","args":{"url":"https://example.com/docs/api"}}
 """).strip()
 
 _BATCH_SCHEMA = textwrap.dedent("""
     Run multiple read-only tools in parallel (faster than sequential calls when you need
     several files or directory listings at once):
-    {{"action":"batch","args":{{"actions":[
-      {{"tool":"read_file","args":{{"path":"a.py"}}}},
-      {{"tool":"read_file","args":{{"path":"b.py"}}}}
-    ]}}}}
+    {"action":"batch","args":{"actions":[
+      {"tool":"read_file","args":{"path":"a.py"}},
+      {"tool":"read_file","args":{"path":"b.py"}}
+    ]}}
     Allowed in batch: read_file, list_directory, find_files, search_files, search_memory.
     Max 8 actions. Mutations (edit_file, write_file, run_command) are NOT allowed in batch.
 """).strip()
@@ -265,7 +265,7 @@ _DELEGATE_SCHEMA = textwrap.dedent("""
     set of config files as a unit. The delegate has access to all the same tools and
     returns its final message as this tool's output. Delegates cannot spawn further
     delegates (no recursion).
-    {{"action":"delegate","args":{{"task":"<concise description of the sub-task>"}}}}
+    {"action":"delegate","args":{"task":"<concise description of the sub-task>"}}
 """).strip()
 
 # Flag set while a delegate sub-loop is running — blocks nested delegate calls.
