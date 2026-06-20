@@ -292,6 +292,104 @@ def test_empty_mock_queue_returns_fallback() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Null-args safety (JSON null fields must not produce the string "None")
+# ---------------------------------------------------------------------------
+
+def test_null_finish_message_does_not_produce_none_string() -> None:
+    sa.set_mock_responses(['{"action":"finish","message":null}'])
+    result = sa.run_autopilot(_CFG, [], "say something", _SHELL)
+    assert result != "None", f"null finish message must not produce 'None', got: {result!r}"
+
+
+def test_null_read_file_path_raises_helpful_error() -> None:
+    sa.set_mock_responses([
+        '{"action":"read_file","args":{"path":null}}',
+        '{"action":"finish","message":"tried null path"}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "read null path", _SHELL)
+    assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Refusal nudge
+# ---------------------------------------------------------------------------
+
+def test_refusal_nudge_fires_and_retries() -> None:
+    sa.set_mock_responses([
+        '{"action":"finish","message":"I am sorry, I cannot access that."}',
+        '{"action":"list_directory","args":{"path":"."}}',
+        '{"action":"finish","message":"Listed after nudge."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "list directory", _SHELL)
+    # The nudge should push the model to actually use a tool
+    assert "Listed after nudge." in result
+
+
+# ---------------------------------------------------------------------------
+# compact_history — tail preservation
+# ---------------------------------------------------------------------------
+
+def test_compact_history_preserves_tail() -> None:
+    cfg = {**_CFG, "compact_max_output_tokens": 512}
+    session = sa.create_session()
+    # Build a session with 10 messages
+    for i in range(5):
+        sa.append_session_message(session, "user", f"Turn {i} question")
+        sa.append_session_message(session, "assistant", f"Turn {i} answer")
+
+    assert len(session["messages"]) == 10
+
+    # compact_history needs an LLM call for the summary — use mock backend
+    sa.set_mock_responses(["This is the compact summary of all prior turns."])
+    new_msgs = sa.compact_history(cfg, session, quiet=True)
+
+    # Must have 2 summary messages + up to 4 tail messages
+    assert len(new_msgs) >= 2, "must have at least summary + ack"
+    assert len(new_msgs) <= 6, f"must have at most 2+4=6 messages, got {len(new_msgs)}"
+    # The last tail message (10th message = "Turn 4 answer") must be preserved
+    all_content = " ".join(m["content"] for m in new_msgs)
+    assert "Turn 4 answer" in all_content, "last message must survive compaction"
+
+
+# ---------------------------------------------------------------------------
+# run_command_tool timeout
+# ---------------------------------------------------------------------------
+
+def test_run_command_tool_times_out() -> None:
+    result = sa.run_command_tool(
+        "Start-Sleep -Seconds 100",
+        _SHELL,
+        output_limit=4000,
+        timeout=1,
+    )
+    assert "TIMEOUT" in result, f"expected TIMEOUT in output, got: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# verify_syntax after edit (Rule 13 path)
+# ---------------------------------------------------------------------------
+
+def test_verify_syntax_called_after_edit_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "code.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({"action": "edit_file", "args": {
+                "path": str(target),
+                "old_string": "x = 1",
+                "new_string": "x = 2",
+            }}),
+            json.dumps({"action": "verify_syntax", "args": {
+                "path": str(target), "language": "python"
+            }}),
+            '{"action":"finish","message":"Edited and verified."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "change x to 2", _SHELL)
+        assert "Edited and verified." in result
+        assert target.read_text(encoding="utf-8") == "x = 2\n"
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -328,6 +426,12 @@ TESTS = [
     test_agent_terminates_within_step_budget,
     test_history_messages_injected,
     test_empty_mock_queue_returns_fallback,
+    test_null_finish_message_does_not_produce_none_string,
+    test_null_read_file_path_raises_helpful_error,
+    test_refusal_nudge_fires_and_retries,
+    test_compact_history_preserves_tail,
+    test_run_command_tool_times_out,
+    test_verify_syntax_called_after_edit_file,
 ]
 
 

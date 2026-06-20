@@ -25,6 +25,8 @@ _DESTRUCTIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"\bdiskpart\b",
     # -Force and -Recurse together — almost always Remove-Item level danger
     r"-force\b[^|&\n]*-recurse\b|-recurse\b[^|&\n]*-force\b",
+    # Invoke-Expression / iex: evaluates arbitrary strings as code
+    r"\b(invoke-expression|iex)\b",
 ]]
 
 _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [

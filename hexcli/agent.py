@@ -128,9 +128,10 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
        new_string is enough to add content anywhere in a file.
     3. Use run_command for git, package managers, tests, and actions that change this machine's
        state (installing, running tests, checking live process/hardware info).
-    4. General knowledge questions — programming syntax, cmdlet/command names, algorithms,
-       concepts, explanations — do not require this machine's state. Answer them directly with
-       finish and 0 tool calls; do not run a command just to demonstrate the answer.
+    4. Direct answers: general knowledge, math, random numbers, poems, "what is X", "give me Y",
+       step-by-step explanations — need no tool. Respond with finish immediately.
+       Example: "give me a random number" → {{"action":"finish","message":"42"}}.
+       Do not run any command just to demonstrate an answer you already know.
     5. Only call finish without using a tool when you are confident no tool result is needed to
        answer correctly or complete the task.
     6. Chain tools freely — you have up to {max_steps} steps per task.
@@ -157,14 +158,13 @@ _AUTOPILOT_TEMPLATE = textwrap.dedent("""
        e.g. if find_files or search_files is denied/fails, try list_directory on "." instead; if
        a path is not found, try list_directory on its parent to see what actually exists. Only
        call finish reporting the failure after that alternative attempt has also failed.
-    12. If the request does not name a specific file or target and this directory does not
-       contain one single obvious match (e.g. "fix my code", "update the file", "make it
-       better"), you MUST NOT take any action and MUST NOT claim anything was done — there is
-       nothing to act on yet. Call finish with 0 tool calls and a message that is ONLY a
-       clarifying question ending in "?" (e.g. "Which file should I update, and what change do
-       you want?"). NEVER start this message with "Done" and NEVER say "completed", "as
-       requested", or "as instructed" — saying that here would be a lie, since zero tools were
-       called and nothing was changed.
+    12. AMBIGUOUS EDIT/FIX REQUESTS ONLY: if the user asks you to fix, edit, update, refactor,
+       or improve existing code but names no specific file, and no single obvious target exists
+       here (e.g. "fix my code", "make it better"), call finish with ONLY a clarifying question
+       ending in "?" — do not attempt the work. NEVER say "Done", "completed", "as requested",
+       or "as instructed" when zero tools were called. This rule is narrow — it does NOT apply
+       to: create/write/simulate/generate/run tasks (those have clear intent; proceed with
+       tools), knowledge/computation questions (Rule 4 applies), or system/analysis tasks.
     13. After every edit_file or write_file call that touches a code file (.py, .json, .ps1,
        .js, .ts, or similar — not plain .txt/.md notes), you MUST immediately call verify_syntax
        on that exact path before doing anything else. If it reports FAIL, read the error, make a
@@ -233,7 +233,7 @@ _LINT_TOOL_SCHEMA = textwrap.dedent("""
 # Conditional schemas — injected by build_autopilot_prompt only when the heuristic fires.
 
 _SEARCH_MEMORY_SCHEMA = textwrap.dedent("""
-    RULE 14: If the user explicitly references something from a prior session (e.g. "earlier",
+    RULE 15: If the user explicitly references something from a prior session (e.g. "earlier",
     "last time", "previously", "the file I fixed before", "what error did I get"), you MUST
     run search_memory first before executing any live-state commands. This does NOT override
     rule 12 (bare ambiguous request still gets a clarifying question, not a memory search).
@@ -1000,7 +1000,12 @@ def _openai_stream_chat(
                     sys.stderr.flush()
 
     if "value" in err_box:
-        raise err_box["value"]
+        exc = err_box["value"]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+            sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+            sys.stderr.flush()
+            return openai_chat(config, messages, token_key, json_format=json_format), 0
+        raise exc
 
     sys.stderr.write("\r" + " " * 60 + "\r")
     sys.stderr.flush()
@@ -1161,7 +1166,7 @@ def resolve_path(raw: str) -> Path:
     return Path(expanded).resolve()
 
 
-_SENSITIVE_HOME_DIRS = frozenset({".ssh", ".gnupg", ".gpg"})
+_SENSITIVE_HOME_DIRS = frozenset({".ssh", ".gnupg", ".gpg", ".aws"})
 _HOME = Path.home().resolve()
 
 
@@ -1247,8 +1252,8 @@ def extract_command(raw_text: str) -> str:
 def parse_chat_response(raw_text: str) -> dict[str, str]:
     parsed = parse_json_object(raw_text)
     if isinstance(parsed, dict):
-        message = str(parsed.get("message", "")).strip()
-        command = str(parsed.get("command", "")).strip()
+        message = str(parsed.get("message") or "").strip()
+        command = str(parsed.get("command") or "").strip()
         return {
             "message": message or "Done.",
             "command": extract_command(command) if command else "",
@@ -1269,13 +1274,13 @@ def parse_agent_action(raw_text: str) -> dict[str, Any]:
             tool = str(parsed.get("tool", "")).strip()
             return {"action": "tool", "tool": tool, "args": args}
         if action == "finish":
-            return {"action": "finish", "message": str(parsed.get("message", "")).strip()}
+            return {"action": "finish", "message": str(parsed.get("message") or "").strip()}
 
         tool = str(parsed.get("tool", "")).strip()
         if tool in TOOL_NAMES:
             return {"action": "tool", "tool": tool, "args": args}
 
-        message = str(parsed.get("message", "")).strip()
+        message = str(parsed.get("message") or "").strip()
         if message:
             return {"action": "finish", "message": message}
 
@@ -1297,7 +1302,9 @@ def detect_shell(shell_hint: str) -> str:
 
 
 def run_command_tool(
-    command: str, shell_exe: str, output_limit: int, *, show_command: bool = True
+    command: str, shell_exe: str, output_limit: int, *,
+    show_command: bool = True,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     if show_command:
         ui.command_echo(command)
@@ -1326,12 +1333,17 @@ def run_command_tool(
                 process.kill()
 
     parts: list[str] = []
+    deadline = time.monotonic() + timeout
     try:
         with CancelMonitor() as monitor:
             while t.is_alive() or not out_q.empty() or process.poll() is None:
                 if monitor.cancelled.is_set():
                     _terminate()
                     raise UserCancelled()
+                if time.monotonic() > deadline:
+                    _terminate()
+                    output = trim_text("".join(parts), output_limit)
+                    return f"Exit code: TIMEOUT ({timeout}s)\n{output}".strip()
                 try:
                     line = out_q.get(timeout=0.05)
                 except queue.Empty:
@@ -1447,9 +1459,22 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
 
 def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str:
     search_path = resolve_path(path_text or ".")
-    matches = sorted(search_path.rglob(glob_pattern or "*"))
-    result = "\n".join(str(p) for p in matches) if matches else f"No files matching '{glob_pattern}'"
-    ui.tool_event("find", f"{glob_pattern} in {search_path}  ({len(matches)} files)")
+    filtered: list[Path] = []
+    for p in sorted(search_path.rglob(glob_pattern or "*")):
+        if not p.is_file():
+            continue
+        try:
+            rel_parts = p.relative_to(search_path).parts[:-1]
+        except ValueError:
+            continue
+        if any(
+            part.lower() in _SEARCH_EXCLUDE_DIRS or (part.startswith(".") and len(part) > 1)
+            for part in rel_parts
+        ):
+            continue
+        filtered.append(p)
+    result = "\n".join(str(p) for p in filtered) if filtered else f"No files matching '{glob_pattern}'"
+    ui.tool_event("find", f"{glob_pattern} in {search_path}  ({len(filtered)} files)")
     return trim_text(result, output_limit)
 
 
@@ -2014,7 +2039,7 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
     limit = int(config.get("tool_output_limit", 12000))
 
     if tool == "run_command":
-        cmd = str(args.get("command", "")).strip()
+        cmd = str(args.get("command") or "").strip()
         if not cmd:
             raise RuntimeError("run_command requires 'command'.")
         classification = safety.classify_command(cmd)
@@ -2023,7 +2048,7 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
             if not ui.confirm_destructive_command(cmd):
                 safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "blocked")
                 return "Blocked by user."
-        result = run_command_tool(cmd, shell_exe, limit)
+        result = run_command_tool(cmd, shell_exe, limit, timeout=int(config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)))
         # Parse exit code from the first line of run_command_tool output for the audit log.
         exit_code: int | str | None = None
         try:
@@ -2035,77 +2060,77 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, exit_code)
         return result
     if tool == "read_file":
-        path = str(args.get("path", "")).strip()
+        path = str(args.get("path") or "").strip()
         if not path:
             raise RuntimeError("read_file requires 'path'.")
         return read_file_tool(path, limit)
     if tool == "edit_file":
-        path = str(args.get("path", "")).strip()
-        old = str(args.get("old_string", ""))
-        new = str(args.get("new_string", ""))
+        path = str(args.get("path") or "").strip()
+        old = str(args.get("old_string") or "")
+        new = str(args.get("new_string") or "")
         if not path:
             raise RuntimeError("edit_file requires 'path'.")
         if not old:
             raise RuntimeError("edit_file requires 'old_string'.")
         return edit_file_tool(path, old, new)
     if tool == "write_file":
-        path = str(args.get("path", "")).strip()
-        content = str(args.get("content", ""))
+        path = str(args.get("path") or "").strip()
+        content = str(args.get("content") or "")
         if not path:
             raise RuntimeError("write_file requires 'path'.")
         return write_file_tool(path, content)
     if tool == "append_file":
-        path = str(args.get("path", "")).strip()
-        content = str(args.get("content", ""))
+        path = str(args.get("path") or "").strip()
+        content = str(args.get("content") or "")
         if not path:
             raise RuntimeError("append_file requires 'path'.")
         return append_file_tool(path, content)
     if tool == "list_directory":
-        path = str(args.get("path", ".")).strip() or "."
+        path = str(args.get("path") or ".").strip() or "."
         return list_directory_tool(path, limit)
     if tool == "search_files":
-        pattern = str(args.get("pattern", "")).strip()
-        path = str(args.get("path", ".")).strip() or "."
-        glob_pat = str(args.get("glob", "*")).strip() or "*"
+        pattern = str(args.get("pattern") or "").strip()
+        path = str(args.get("path") or ".").strip() or "."
+        glob_pat = str(args.get("glob") or "*").strip() or "*"
         if not pattern:
             raise RuntimeError("search_files requires 'pattern'.")
         return search_files_tool(pattern, path, glob_pat, limit)
     if tool == "find_files":
-        glob_pat = str(args.get("glob", "")).strip()
-        path = str(args.get("path", ".")).strip() or "."
+        glob_pat = str(args.get("glob") or "").strip()
+        path = str(args.get("path") or ".").strip() or "."
         if not glob_pat:
             raise RuntimeError("find_files requires 'glob'.")
         return find_files_tool(glob_pat, path, limit)
     if tool == "verify_syntax":
-        path = str(args.get("path", "")).strip()
+        path = str(args.get("path") or "").strip()
         if not path:
             raise RuntimeError("verify_syntax requires 'path'.")
-        language = str(args.get("language", "")).strip()
+        language = str(args.get("language") or "").strip()
         return verify_syntax_tool(path, language, shell_exe)
     if tool == "search_memory":
-        query_text = str(args.get("query", "")).strip()
+        query_text = str(args.get("query") or "").strip()
         if not query_text:
             raise RuntimeError("search_memory requires 'query'.")
-        top_k = int(args.get("top_k", 3) or 3)
+        top_k = int(args.get("top_k") or 3)
         return memory.search_memory_tool(config, query_text, top_k)
     if tool == "run_code":
-        path = str(args.get("path", "")).strip()
+        path = str(args.get("path") or "").strip()
         if not path:
             raise RuntimeError("run_code requires 'path'.")
         run_args = args.get("args") or []
         if not isinstance(run_args, list):
             run_args = [str(run_args)]
-        timeout = max(1, min(int(args.get("timeout", 10) or 10), 60))
+        timeout = max(1, min(int(args.get("timeout") or 10), 60))
         return run_code_tool(path, run_args, timeout, shell_exe, limit)
 
     if tool == "lint_code":
-        path = str(args.get("path", "")).strip()
+        path = str(args.get("path") or "").strip()
         if not path:
             raise RuntimeError("lint_code requires 'path'.")
         return lint_code_tool(path)
 
     if tool == "fetch_url":
-        url = str(args.get("url", "")).strip()
+        url = str(args.get("url") or "").strip()
         if not url:
             raise RuntimeError("fetch_url requires 'url'.")
         return network.fetch_url(url)
@@ -2117,7 +2142,7 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         return _run_batch(config, actions, shell_exe)
 
     if tool == "delegate":
-        task = str(args.get("task", "")).strip()
+        task = str(args.get("task") or "").strip()
         if not task:
             raise RuntimeError("delegate requires 'task'.")
         return _run_delegate(config, task, shell_exe)
@@ -2907,6 +2932,7 @@ def main() -> int:
         print(json.dumps(config, indent=2))
         return 0
 
+    memory.set_local_model_path(APP_DIR / "onnx" / "model_qint8_arm64.onnx")
     distribution.first_run_check(APP_DIR)
 
     query = " ".join(args.query).strip()
@@ -2954,6 +2980,14 @@ def main() -> int:
             )
         else:
             ui.error_box("Network error — backend returned an unexpected response.")
+        if DEBUG:
+            raise
+        return 2
+    except (ConnectionResetError, ConnectionAbortedError):
+        ui.error_box(
+            "npurun dropped the stream connection.\n"
+            'Add  "use_streaming": false  to shellai.json to avoid this.'
+        )
         if DEBUG:
             raise
         return 2
