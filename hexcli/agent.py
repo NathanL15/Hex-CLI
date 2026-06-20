@@ -2733,6 +2733,9 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             mode = "command"
             cprint("Mode: command", C.DIM)
             continue
+        if norm == "/mode" or norm.startswith("/mode "):
+            cprint("Usage: /mode autopilot|chat|command", C.YELLOW)
+            continue
 
         # ── model ─────────────────────────────────────────────────────────
         if norm.startswith("/model "):
