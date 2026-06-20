@@ -516,6 +516,22 @@ def test_maybe_auto_compact_silent_below_threshold() -> None:
     assert not compact_called, "_maybe_auto_compact must NOT compact when below threshold"
 
 
+def test_delegate_called_from_agent_loop_succeeds() -> None:
+    """delegate tool must spawn a sub-agent and return its result to the outer agent."""
+    # Outer agent: calls delegate; then finishes with the delegate result
+    # Inner agent (sub): immediately finishes with a known message
+    sa.set_mock_responses([
+        # Step 1: outer agent calls delegate
+        json.dumps({"action": "delegate", "args": {"task": "summarise the logs"}}),
+        # Step 2 (inner agent — separate call_llm): sub-agent finishes
+        '{"action":"finish","message":"Logs summarised: all clear."}',
+        # Step 3: outer agent finishes using the delegate output
+        '{"action":"finish","message":"Delegation complete."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "delegate a task", _SHELL)
+    assert "Delegation complete." in result
+
+
 def test_batch_over_limit_returns_error_not_crash() -> None:
     """batch with more than 8 actions must raise, not silently drop extras."""
     sa.set_mock_responses([
@@ -718,6 +734,7 @@ TESTS = [
     test_compact_history_at_minimum_boundary,
     test_run_code_tool_python_script_executes,
     test_run_code_tool_outside_cwd_raises,
+    test_delegate_called_from_agent_loop_succeeds,
 ]
 
 
