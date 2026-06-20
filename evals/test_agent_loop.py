@@ -452,6 +452,23 @@ def test_batch_reads_multiple_files() -> None:
 
 
 # ---------------------------------------------------------------------------
+# read_file_tool — large file does not OOM
+# ---------------------------------------------------------------------------
+
+def test_read_file_tool_large_file_truncated_without_oom() -> None:
+    """read_file_tool must not load the full content of a file larger than 4× output_limit."""
+    limit = 200  # chars
+    # Write a file that is 10× limit in bytes — well over 4× limit
+    with tempfile.TemporaryDirectory() as tmp:
+        big = Path(tmp) / "big.txt"
+        big.write_bytes(b"x" * limit * 10)
+        result = sa.read_file_tool(str(big), limit)
+    # Result must be trimmed to limit (trim_text appends ~30 char notice)
+    assert len(result) <= limit + 50, f"expected ≤{limit+50} chars, got {len(result)}"
+    assert "x" in result, "content must appear in truncated output"
+
+
+# ---------------------------------------------------------------------------
 # edit_file error propagation
 # ---------------------------------------------------------------------------
 
@@ -521,6 +538,7 @@ TESTS = [
     test_empty_string_response_handled_gracefully,
     test_batch_reads_multiple_files,
     test_edit_file_missing_old_string_sends_error_to_model,
+    test_read_file_tool_large_file_truncated_without_oom,
 ]
 
 
