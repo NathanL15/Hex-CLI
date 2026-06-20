@@ -1479,6 +1479,8 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
         raise RuntimeError(f"Invalid regex: {exc}") from exc
     try:
         candidates = sorted(search_path.rglob(glob_pattern))
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid glob pattern {glob_pattern!r}: {exc}") from exc
     except (OSError, PermissionError):
         candidates = []
     for fp in candidates:
@@ -1516,6 +1518,8 @@ def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str
     filtered: list[Path] = []
     try:
         candidates = sorted(search_path.rglob(glob_pattern or "*"))
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid glob pattern {glob_pattern!r}: {exc}") from exc
     except (OSError, PermissionError):
         candidates = []
     for p in candidates:

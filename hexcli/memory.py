@@ -336,7 +336,9 @@ def _append_rules(new_rules: list[str]) -> None:
         combined = existing + stamped
         if len(combined) > _MAX_RULES:
             combined = combined[-_MAX_RULES:]
-        _RULES_PATH.write_text("\n".join(combined) + "\n", encoding="utf-8")
+        tmp = _RULES_PATH.with_suffix(".tmp")
+        tmp.write_text("\n".join(combined) + "\n", encoding="utf-8")
+        tmp.replace(_RULES_PATH)
     except Exception:
         pass
 
@@ -354,7 +356,9 @@ def prune_memory_rules() -> int:
         if len(lines) <= _MAX_RULES:
             return 0
         removed = len(lines) - _MAX_RULES
-        _RULES_PATH.write_text("\n".join(lines[-_MAX_RULES:]) + "\n", encoding="utf-8")
+        tmp = _RULES_PATH.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines[-_MAX_RULES:]) + "\n", encoding="utf-8")
+        tmp.replace(_RULES_PATH)
         return removed
     except Exception:
         return 0

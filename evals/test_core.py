@@ -660,6 +660,29 @@ def test_prune_memory_rules_removes_excess() -> None:
     assert len(remaining) <= mem._MAX_RULES
 
 
+def test_append_rules_leaves_no_tmp_file() -> None:
+    """_append_rules atomic write must not leave a .tmp artefact on success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            mem._append_rules(["- atomic rule"])
+        assert rules_path.exists(), "_append_rules must create the rules file"
+        assert not rules_path.with_suffix(".tmp").exists(), \
+            "_append_rules must not leave a .tmp artefact"
+
+
+def test_prune_memory_rules_leaves_no_tmp_file() -> None:
+    """prune_memory_rules atomic write must not leave a .tmp artefact on success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rules_path = Path(tmp) / "memory_rules.md"
+        many_rules = [f"- Rule {i}" for i in range(mem._MAX_RULES + 5)]
+        rules_path.write_text("\n".join(many_rules) + "\n", encoding="utf-8")
+        with unittest.mock.patch.object(mem, "_RULES_PATH", rules_path):
+            mem.prune_memory_rules()
+        assert not rules_path.with_suffix(".tmp").exists(), \
+            "prune_memory_rules must not leave a .tmp artefact"
+
+
 # ============================================================================
 # distribution — git pull timeout
 # ============================================================================
@@ -829,6 +852,30 @@ def test_search_files_skips_large_files() -> None:
         assert "big.txt" not in result
 
 
+def test_search_files_invalid_glob_raises_runtime_error() -> None:
+    """search_files_tool must raise RuntimeError (not raw ValueError) for invalid glob patterns."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with unittest.mock.patch.object(Path, "rglob", side_effect=ValueError("Non-relative")):
+            try:
+                sa.search_files_tool("needle", tmp, "/abs/pattern", 1000)
+                assert False, "should have raised RuntimeError"
+            except RuntimeError as exc:
+                assert "glob" in str(exc).lower() or "pattern" in str(exc).lower(), \
+                    f"expected 'glob' or 'pattern' in error: {exc}"
+
+
+def test_find_files_invalid_glob_raises_runtime_error() -> None:
+    """find_files_tool must raise RuntimeError (not raw ValueError) for invalid glob patterns."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with unittest.mock.patch.object(Path, "rglob", side_effect=ValueError("Non-relative")):
+            try:
+                sa.find_files_tool("/abs/pattern", tmp, 1000)
+                assert False, "should have raised RuntimeError"
+            except RuntimeError as exc:
+                assert "glob" in str(exc).lower() or "pattern" in str(exc).lower(), \
+                    f"expected 'glob' or 'pattern' in error: {exc}"
+
+
 # ============================================================================
 # distribution — module-level smoke tests
 # ============================================================================
@@ -940,6 +987,10 @@ TESTS = [
     test_append_rules_creates_file_and_writes,
     test_append_rules_enforces_max_cap,
     test_prune_memory_rules_removes_excess,
+    test_append_rules_leaves_no_tmp_file,
+    test_prune_memory_rules_leaves_no_tmp_file,
+    test_search_files_invalid_glob_raises_runtime_error,
+    test_find_files_invalid_glob_raises_runtime_error,
 ]
 
 
