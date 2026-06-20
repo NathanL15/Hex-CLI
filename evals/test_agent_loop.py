@@ -516,6 +516,48 @@ def test_maybe_auto_compact_silent_below_threshold() -> None:
     assert not compact_called, "_maybe_auto_compact must NOT compact when below threshold"
 
 
+def test_batch_delegate_not_allowed_returns_error_not_crash() -> None:
+    """batch must reject delegate (write tool) with an error, not crash."""
+    sa.set_mock_responses([
+        json.dumps({
+            "action": "batch",
+            "args": {"actions": [
+                {"tool": "delegate", "args": {"task": "do something"}},
+            ]},
+        }),
+        '{"action":"finish","message":"Recovered from batch error."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "batch with delegate", _SHELL)
+    assert "Recovered from batch error." in result
+
+
+def test_batch_non_dict_action_returns_error_not_crash() -> None:
+    """batch must handle non-dict entries gracefully."""
+    sa.set_mock_responses([
+        json.dumps({
+            "action": "batch",
+            "args": {"actions": ["not a dict", 42]},
+        }),
+        '{"action":"finish","message":"Non-dict batch done."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "batch with junk", _SHELL)
+    assert "Non-dict batch done." in result
+
+
+def test_delegate_recursion_guard_raises() -> None:
+    """_run_delegate must raise RuntimeError when called from inside a delegate."""
+    import hexcli.agent as sa2
+    sa2._in_delegate = True
+    try:
+        try:
+            sa2._run_delegate(_CFG, "nested task", _SHELL)
+            assert False, "should have raised RuntimeError"
+        except RuntimeError as exc:
+            assert "recursion" in str(exc).lower() or "delegate" in str(exc).lower()
+    finally:
+        sa2._in_delegate = False
+
+
 def test_edit_file_empty_old_string_raises_error() -> None:
     """edit_file with empty old_string must raise, not silently insert at start of file."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -598,6 +640,9 @@ TESTS = [
     test_edit_file_empty_old_string_raises_error,
     test_maybe_auto_compact_fires_above_threshold,
     test_maybe_auto_compact_silent_below_threshold,
+    test_batch_delegate_not_allowed_returns_error_not_crash,
+    test_batch_non_dict_action_returns_error_not_crash,
+    test_delegate_recursion_guard_raises,
 ]
 
 

@@ -221,6 +221,8 @@ def format_relative_time(timestamp: str) -> str:
         moment = datetime.fromisoformat(timestamp)
     except ValueError:
         return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
     seconds = int((_utc_now() - moment).total_seconds())
     if seconds < 60:
         return "now"
