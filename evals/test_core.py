@@ -683,6 +683,27 @@ def test_prune_memory_rules_leaves_no_tmp_file() -> None:
             "prune_memory_rules must not leave a .tmp artefact"
 
 
+def test_search_memory_tool_disabled_returns_message() -> None:
+    """search_memory_tool must return a clear message when memory is disabled."""
+    cfg = {**sa.DEFAULT_CONFIG, "memory_enabled": False}
+    result = mem.search_memory_tool(cfg, "anything")
+    assert "disabled" in result.lower(), \
+        f"expected 'disabled' in result when memory off, got: {result!r}"
+
+
+def test_run_code_tool_unsupported_extension_raises() -> None:
+    """run_code_tool must raise RuntimeError for file types it cannot execute."""
+    with tempfile.TemporaryDirectory() as tmp:
+        html_file = Path(tmp) / "page.html"
+        html_file.write_text("<html></html>", encoding="utf-8")
+        try:
+            sa.run_code_tool(str(html_file), [], timeout=5, shell_exe="powershell.exe", output_limit=1000)
+            assert False, "should have raised RuntimeError for .html"
+        except RuntimeError as exc:
+            assert ".html" in str(exc) or "unsupported" in str(exc).lower(), \
+                f"expected .html or 'unsupported' in error: {exc}"
+
+
 # ============================================================================
 # distribution — git pull timeout
 # ============================================================================
@@ -991,6 +1012,8 @@ TESTS = [
     test_prune_memory_rules_leaves_no_tmp_file,
     test_search_files_invalid_glob_raises_runtime_error,
     test_find_files_invalid_glob_raises_runtime_error,
+    test_search_memory_tool_disabled_returns_message,
+    test_run_code_tool_unsupported_extension_raises,
 ]
 
 
