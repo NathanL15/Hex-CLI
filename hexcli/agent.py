@@ -1380,6 +1380,8 @@ def read_file_tool(path_text: str, output_limit: int) -> str:
 def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "edit_file")
+    if not old_string:
+        raise RuntimeError("edit_file requires a non-empty 'old_string'. Use write_file to overwrite the whole file.")
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
     content = path.read_text(encoding="utf-8")
