@@ -1449,7 +1449,11 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
         compiled = re.compile(pattern)
     except re.error as exc:
         raise RuntimeError(f"Invalid regex: {exc}") from exc
-    for fp in sorted(search_path.rglob(glob_pattern)):
+    try:
+        candidates = sorted(search_path.rglob(glob_pattern))
+    except (OSError, PermissionError):
+        candidates = []
+    for fp in candidates:
         if not fp.is_file():
             continue
         # Skip hidden and data directories (e.g. .shellai/models/, .git/, node_modules/)
@@ -1482,7 +1486,11 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
 def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str:
     search_path = resolve_path(path_text or ".")
     filtered: list[Path] = []
-    for p in sorted(search_path.rglob(glob_pattern or "*")):
+    try:
+        candidates = sorted(search_path.rglob(glob_pattern or "*"))
+    except (OSError, PermissionError):
+        candidates = []
+    for p in candidates:
         if not p.is_file():
             continue
         try:
