@@ -516,6 +516,38 @@ def test_maybe_auto_compact_silent_below_threshold() -> None:
     assert not compact_called, "_maybe_auto_compact must NOT compact when below threshold"
 
 
+def test_batch_over_limit_returns_error_not_crash() -> None:
+    """batch with more than 8 actions must raise, not silently drop extras."""
+    sa.set_mock_responses([
+        json.dumps({
+            "action": "batch",
+            "args": {"actions": [
+                {"tool": "list_directory", "args": {"path": "."}}
+            ] * 9},  # 9 > _BATCH_MAX = 8
+        }),
+        '{"action":"finish","message":"Over-limit batch handled."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "batch 9 items", _SHELL)
+    assert "Over-limit batch handled." in result
+
+
+def test_compact_history_at_minimum_boundary() -> None:
+    """compact_history must proceed when session has exactly the minimum required messages."""
+    cfg = {**_CFG, "compact_max_output_tokens": 512}
+    session = sa.create_session()
+    # _COMPACT_KEEP_RECENT=4, min = 4+3=7 — build exactly 7 messages
+    for i in range(3):
+        sa.append_session_message(session, "user", f"Q{i}")
+        sa.append_session_message(session, "assistant", f"A{i}")
+    sa.append_session_message(session, "user", "final question")
+    assert len(session["messages"]) == 7
+
+    sa.set_mock_responses(["Summary at minimum boundary."])
+    new_msgs = sa.compact_history(cfg, session, quiet=True)
+
+    assert len(new_msgs) < 7, "compact must reduce message count at the minimum boundary"
+
+
 def test_batch_delegate_not_allowed_returns_error_not_crash() -> None:
     """batch must reject delegate (write tool) with an error, not crash."""
     sa.set_mock_responses([
@@ -655,6 +687,8 @@ TESTS = [
     test_batch_non_dict_action_returns_error_not_crash,
     test_delegate_recursion_guard_raises,
     test_write_file_tool_leaves_no_tmp_file,
+    test_batch_over_limit_returns_error_not_crash,
+    test_compact_history_at_minimum_boundary,
 ]
 
 

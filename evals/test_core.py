@@ -713,6 +713,15 @@ def test_format_relative_time_aware_timestamp() -> None:
     assert result in ("now", ) or result.endswith(("m ago", "h ago", "d ago"))
 
 
+def test_format_relative_time_future_timestamp_returns_now() -> None:
+    """A timestamp in the future (e.g. clock skew) must return 'now', not a negative string."""
+    import hexcli.ui as ui
+    from datetime import datetime, timezone, timedelta
+    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    result = ui.format_relative_time(future_ts)
+    assert result == "now", f"future timestamp must show 'now', got: {result!r}"
+
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -894,6 +903,7 @@ TESTS = [
     test_format_relative_time_naive_does_not_crash,
     test_format_relative_time_unknown_for_garbage,
     test_format_relative_time_aware_timestamp,
+    test_format_relative_time_future_timestamp_returns_now,
     test_read_memory_rules_empty_file,
     test_read_memory_rules_parses_bullet_lines,
     test_read_memory_rules_returns_last_n,
