@@ -1349,6 +1349,10 @@ def run_command_tool(
                 process.kill()
 
     parts: list[str] = []
+    parts_chars = 0
+    # Stop buffering once we have 4× the output limit (UTF-8 max 4B/char).
+    # Further lines are still printed to the terminal but not buffered.
+    _BUF_CAP = output_limit * 4
     deadline = time.monotonic() + timeout
     try:
         with CancelMonitor() as monitor:
@@ -1365,7 +1369,9 @@ def run_command_tool(
                 except queue.Empty:
                     continue
                 print(line, end="")
-                parts.append(line)
+                if parts_chars < _BUF_CAP:
+                    parts.append(line)
+                    parts_chars += len(line)
     except KeyboardInterrupt:
         _terminate()
         raise UserCancelled()

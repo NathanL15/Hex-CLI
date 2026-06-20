@@ -384,6 +384,19 @@ def test_run_command_tool_times_out() -> None:
     assert "TIMEOUT" in result, f"expected TIMEOUT in output, got: {result!r}"
 
 
+def test_run_command_tool_large_output_does_not_oom() -> None:
+    """run_command_tool must cap buffered output at 4×output_limit chars to avoid OOM."""
+    # Generate ~60 KB of output; output_limit is only 1000 chars → cap fires at 4000 chars.
+    result = sa.run_command_tool(
+        "1..600 | ForEach-Object { 'x' * 100 }",
+        _SHELL,
+        output_limit=1000,
+    )
+    # Result must be trimmed — not all 60 KB
+    assert len(result) <= 1100, f"output should be trimmed, got {len(result)} chars"
+    assert "Exit code:" in result
+
+
 # ---------------------------------------------------------------------------
 # verify_syntax after edit (Rule 13 path)
 # ---------------------------------------------------------------------------
@@ -876,6 +889,7 @@ TESTS = [
     test_verify_syntax_detects_invalid_python,
     test_verify_syntax_skips_large_file,
     test_append_file_leaves_no_tmp_file,
+    test_run_command_tool_large_output_does_not_oom,
 ]
 
 
