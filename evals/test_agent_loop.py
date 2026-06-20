@@ -716,6 +716,81 @@ def test_edit_file_missing_old_string_sends_error_to_model() -> None:
     assert "Error reported." in result
 
 
+def test_list_directory_nonexistent_path_returns_error() -> None:
+    """list_directory on a missing path must return an error message, not an OSError."""
+    sa.set_mock_responses([
+        json.dumps({"action": "list_directory", "args": {"path": "/nonexistent/path/xyz123"}}),
+        '{"action":"finish","message":"Listed."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "list that dir", _SHELL)
+    assert "Listed." in result
+
+
+def test_list_directory_on_file_returns_error() -> None:
+    """list_directory on a file path must return an error, not an OSError."""
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        f.write(b"data")
+        file_path = f.name
+    try:
+        sa.set_mock_responses([
+            json.dumps({"action": "list_directory", "args": {"path": file_path}}),
+            '{"action":"finish","message":"Not a dir."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "list it", _SHELL)
+        assert "Not a dir." in result
+    finally:
+        Path(file_path).unlink(missing_ok=True)
+
+
+def test_edit_file_leaves_no_tmp_file() -> None:
+    """edit_file atomic write must not leave a .tmp artefact on success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "data.txt"
+        target.write_text("hello world", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({"action": "edit_file", "args": {
+                "path": str(target),
+                "old_string": "hello world",
+                "new_string": "goodbye world",
+            }}),
+            '{"action":"finish","message":"Edited."}',
+        ])
+        sa.run_autopilot(_CFG, [], "edit it", _SHELL)
+        assert target.read_text(encoding="utf-8") == "goodbye world"
+        assert not (Path(tmp) / "data.txt.tmp").exists()
+
+
+def test_verify_syntax_detects_invalid_python() -> None:
+    """verify_syntax_tool must return FAIL for a file with a Python syntax error."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "broken.py"
+        bad.write_text("def foo(\n    x =\n", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({"action": "verify_syntax", "args": {
+                "path": str(bad), "language": "python"
+            }}),
+            '{"action":"finish","message":"Syntax checked."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "check syntax", _SHELL)
+        assert "Syntax checked." in result
+
+
+def test_verify_syntax_skips_large_file() -> None:
+    """verify_syntax_tool must skip files over _VERIFY_MAX_BYTES without reading them fully."""
+    with tempfile.TemporaryDirectory() as tmp:
+        big = Path(tmp) / "huge.py"
+        # Write a file whose size is just above the 500 KB limit
+        big.write_bytes(b"x = 1\n" * 100_000)  # ~600 KB
+        sa.set_mock_responses([
+            json.dumps({"action": "verify_syntax", "args": {
+                "path": str(big), "language": "python"
+            }}),
+            '{"action":"finish","message":"Done."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "check syntax", _SHELL)
+        assert "Done." in result
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -779,6 +854,11 @@ TESTS = [
     test_append_file_undo_snapshot_captures_original,
     test_append_file_undo_snapshot_none_for_new_file,
     test_delegate_called_from_agent_loop_succeeds,
+    test_list_directory_nonexistent_path_returns_error,
+    test_list_directory_on_file_returns_error,
+    test_edit_file_leaves_no_tmp_file,
+    test_verify_syntax_detects_invalid_python,
+    test_verify_syntax_skips_large_file,
 ]
 
 

@@ -1395,7 +1395,9 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     if old_string not in content:
         raise RuntimeError(f"String not found in {path}:\n{old_string!r}")
     new_content = content.replace(old_string, new_string, 1)
-    path.write_text(new_content, encoding="utf-8")
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(new_content, encoding="utf-8")
+    tmp.replace(path)
     delta = new_string.count("\n") - old_string.count("\n")
     ui.tool_event("edit", f"{path}  ({delta:+d} lines)")
     return f"Edited {path}"
@@ -1424,6 +1426,10 @@ def append_file_tool(path_text: str, content: str) -> str:
 
 def list_directory_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text or ".")
+    if not path.exists():
+        raise RuntimeError(f"Directory not found: {path}")
+    if not path.is_dir():
+        raise RuntimeError(f"Not a directory: {path}")
     entries = []
     for child in sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
         entries.append(child.name + ("/" if child.is_dir() else ""))
@@ -1515,9 +1521,16 @@ _LANGUAGE_BY_EXT = {
     ".js": "node", ".mjs": "node", ".cjs": "node",
     ".ts": "node", ".tsx": "node", ".jsx": "node",
 }
+_VERIFY_MAX_BYTES = 500_000  # skip files too large for in-process parse
 
 
 def _verify_python_syntax(path: Path) -> tuple[bool, str]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size > _VERIFY_MAX_BYTES:
+        return True, f"OK: skipped (file too large: {size} bytes)"
     source = path.read_text(encoding="utf-8", errors="replace")
     try:
         ast.parse(source, filename=str(path))
@@ -1527,6 +1540,12 @@ def _verify_python_syntax(path: Path) -> tuple[bool, str]:
 
 
 def _verify_json_syntax(path: Path) -> tuple[bool, str]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size > _VERIFY_MAX_BYTES:
+        return True, f"OK: skipped (file too large: {size} bytes)"
     source = path.read_text(encoding="utf-8", errors="replace")
     try:
         json.loads(source)
