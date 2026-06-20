@@ -516,6 +516,48 @@ def test_maybe_auto_compact_silent_below_threshold() -> None:
     assert not compact_called, "_maybe_auto_compact must NOT compact when below threshold"
 
 
+def test_append_file_undo_snapshot_captures_original() -> None:
+    """append_file must snapshot original content so /undo can restore exactly what was there."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "log.txt"
+        target.write_text("existing line\n", encoding="utf-8")
+        session = sa.create_session()
+        sa.set_mock_responses([
+            json.dumps({"action": "append_file", "args": {
+                "path": str(target), "content": "appended line\n"
+            }}),
+            '{"action":"finish","message":"Appended."}',
+        ])
+        sa.run_autopilot(_CFG, [], "append to file", _SHELL, session=session)
+        sid = session.get("id", "")
+        snap = sa._SESSION_UNDO_SNAPSHOTS.get(sid, {})
+        assert snap, "undo snapshot must be captured after append_file"
+        # Snapshot should contain original (pre-append) content
+        original = list(snap.values())[0]
+        assert original == "existing line\n", (
+            f"snapshot should have original content, got: {original!r}"
+        )
+
+
+def test_append_file_undo_snapshot_none_for_new_file() -> None:
+    """append_file to a new file must snapshot None so /undo deletes it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "new_log.txt"
+        session = sa.create_session()
+        sa.set_mock_responses([
+            json.dumps({"action": "append_file", "args": {
+                "path": str(target), "content": "first line\n"
+            }}),
+            '{"action":"finish","message":"Created."}',
+        ])
+        sa.run_autopilot(_CFG, [], "create via append", _SHELL, session=session)
+        sid = session.get("id", "")
+        snap = sa._SESSION_UNDO_SNAPSHOTS.get(sid, {})
+        assert any(v is None for v in snap.values()), (
+            "snapshot for new file via append must be None (undo = delete)"
+        )
+
+
 def test_delegate_called_from_agent_loop_succeeds() -> None:
     """delegate tool must spawn a sub-agent and return its result to the outer agent."""
     # Outer agent: calls delegate; then finishes with the delegate result
@@ -734,6 +776,8 @@ TESTS = [
     test_compact_history_at_minimum_boundary,
     test_run_code_tool_python_script_executes,
     test_run_code_tool_outside_cwd_raises,
+    test_append_file_undo_snapshot_captures_original,
+    test_append_file_undo_snapshot_none_for_new_file,
     test_delegate_called_from_agent_loop_succeeds,
 ]
 
