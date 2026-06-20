@@ -1840,7 +1840,10 @@ def _save_checkpoint(name: str, session: dict[str, Any], cwd: str) -> Path:
         "messages": session.get("messages", []),
         "workspace_metadata": workspace_snapshot(cwd),
     }
-    cp_path.write_text(json.dumps(cp_data, indent=2), encoding="utf-8")
+    payload = json.dumps(cp_data, indent=2) + "\n"
+    tmp = cp_path.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(cp_path)
     return cp_path
 
 
@@ -2693,7 +2696,9 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                                     p.unlink()
                                 restored.append(f"deleted {p.name}")
                             else:
-                                p.write_text(original, encoding="utf-8")
+                                tmp_p = p.parent / (p.name + ".tmp")
+                                tmp_p.write_text(original, encoding="utf-8")
+                                tmp_p.replace(p)
                                 restored.append(p.name)
                         except Exception as exc:
                             failed.append(f"{Path(path_str).name}: {exc}")
