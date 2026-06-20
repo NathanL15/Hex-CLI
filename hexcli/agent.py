@@ -486,7 +486,10 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 def ensure_default_config(path: Path) -> None:
     if not path.exists():
-        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+        payload = json.dumps(DEFAULT_CONFIG, indent=2) + "\n"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
 
 
 def load_config(path: Path) -> dict[str, Any]:
