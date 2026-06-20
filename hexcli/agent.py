@@ -1427,8 +1427,10 @@ def append_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "append_file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(content)
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(existing + content, encoding="utf-8")
+    tmp.replace(path)
     ui.tool_event("append", f"{path}  ({len(content)} chars)")
     return f"Appended to {path}"
 
