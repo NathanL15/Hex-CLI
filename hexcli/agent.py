@@ -2122,7 +2122,7 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         query_text = str(args.get("query") or "").strip()
         if not query_text:
             raise RuntimeError("search_memory requires 'query'.")
-        top_k = int(args.get("top_k") or 3)
+        top_k = max(1, min(int(args.get("top_k") or 3), 10))
         return memory.search_memory_tool(config, query_text, top_k)
     if tool == "run_code":
         path = str(args.get("path") or "").strip()
