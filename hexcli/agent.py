@@ -570,7 +570,16 @@ def append_session_message(session: dict[str, Any], role: str, content: str) -> 
 
 
 def sort_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(sessions, key=lambda s: s.get("modified_at", ""), reverse=True)
+    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+
+    def _key(s: dict[str, Any]) -> datetime:
+        raw = s.get("modified_at", "")
+        try:
+            return parse_timestamp(str(raw))
+        except (ValueError, TypeError):
+            return _epoch
+
+    return sorted(sessions, key=_key, reverse=True)
 
 
 def save_history_store(sessions: list[dict[str, Any]]) -> None:
