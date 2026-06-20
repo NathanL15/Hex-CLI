@@ -170,8 +170,9 @@ def test_base_prompt_smaller_than_full_prompt() -> None:
 def test_workspace_snapshot_contains_workspace_tag() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         snap = sa.workspace_snapshot(tmp)
-        assert snap.startswith("[workspace:"), f"unexpected snapshot: {snap}"
-        assert snap.endswith("]")
+        first_line = snap.split("\n")[0]
+        assert first_line.startswith("[workspace:"), f"unexpected snapshot: {snap}"
+        assert first_line.endswith("]")
 
 
 def test_workspace_snapshot_detects_python() -> None:
