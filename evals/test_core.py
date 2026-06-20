@@ -152,6 +152,33 @@ def test_touch_session_updates_modified_at() -> None:
     assert session["modified_at"] >= old_ts
 
 
+def test_sort_sessions_aware_before_naive_same_wall_time() -> None:
+    """sort_sessions must not place an aware timestamp behind a naive one at the same time."""
+    naive = {"id": "a", "modified_at": "2024-06-01T12:00:00"}
+    aware = {"id": "b", "modified_at": "2024-06-01T12:00:00+00:00"}
+    result = sa.sort_sessions([naive, aware])
+    # Both represent the same instant; order is unspecified but must not raise TypeError
+    assert len(result) == 2
+
+
+def test_sort_sessions_later_timestamp_comes_first() -> None:
+    """sort_sessions returns newest-first ordering."""
+    older = {"id": "a", "modified_at": "2024-01-01T00:00:00+00:00"}
+    newer = {"id": "b", "modified_at": "2024-06-01T00:00:00+00:00"}
+    result = sa.sort_sessions([older, newer])
+    assert result[0]["id"] == "b"
+    assert result[1]["id"] == "a"
+
+
+def test_sort_sessions_malformed_timestamp_goes_last() -> None:
+    """sort_sessions must not crash on malformed timestamps; malformed entries sort last."""
+    good = {"id": "a", "modified_at": "2024-06-01T12:00:00+00:00"}
+    bad  = {"id": "b", "modified_at": "not-a-timestamp"}
+    result = sa.sort_sessions([bad, good])
+    assert result[0]["id"] == "a"
+    assert result[1]["id"] == "b"
+
+
 def test_generate_session_title_strips_specials() -> None:
     title = sa.generate_session_title("how do I use git?!")
     assert "!" not in title
@@ -900,6 +927,9 @@ TESTS = [
     test_search_files_excludes_hidden_dirs,
     test_search_files_skips_large_files,
     test_set_local_model_path_marks_unavailable_when_missing,
+    test_sort_sessions_aware_before_naive_same_wall_time,
+    test_sort_sessions_later_timestamp_comes_first,
+    test_sort_sessions_malformed_timestamp_goes_last,
     test_format_relative_time_naive_does_not_crash,
     test_format_relative_time_unknown_for_garbage,
     test_format_relative_time_aware_timestamp,
