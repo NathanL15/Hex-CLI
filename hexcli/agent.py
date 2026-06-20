@@ -1401,7 +1401,9 @@ def write_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "write_file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
     ui.tool_event("write", f"{path}  ({len(content)} chars)")
     return f"Wrote {path}"
 
