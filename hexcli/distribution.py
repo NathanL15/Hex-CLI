@@ -55,12 +55,17 @@ def _git_pull(install_dir: Path) -> bool:
     if not git:
         _print("git not found on PATH — skipping source update.")
         return False
-    result = subprocess.run(
-        [git, "pull", "--ff-only"],
-        cwd=str(install_dir),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [git, "pull", "--ff-only"],
+            cwd=str(install_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _print("git pull timed out after 120 s — skipping source update.")
+        return False
     if result.returncode == 0:
         _print(result.stdout.strip() or "Already up to date.")
         return True

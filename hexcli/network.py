@@ -121,7 +121,7 @@ def fetch_url(url: str, max_chars: int = 2500) -> str:
     try:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "hexcli/1.3 (local agent; +https://github.com/NathanL15/Hex-CLI)"},
+            headers={"User-Agent": "hexcli/1.7 (local agent; +https://github.com/NathanL15/Hex-CLI)"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             content_type = resp.headers.get("Content-Type", "")

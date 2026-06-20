@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import threading
@@ -618,6 +619,58 @@ def test_prune_memory_rules_removes_excess() -> None:
 
 
 # ============================================================================
+# distribution — git pull timeout
+# ============================================================================
+
+def test_git_pull_timeout_returns_false() -> None:
+    """_git_pull must return False (not raise) when the subprocess times out."""
+    with unittest.mock.patch("shutil.which", return_value="/usr/bin/git"), \
+         unittest.mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 120)):
+        result = dist._git_pull(Path("."))
+    assert result is False, "_git_pull must absorb TimeoutExpired and return False"
+
+
+# ============================================================================
+# ui — show_context thresholds match agent constants
+# ============================================================================
+
+def test_show_context_no_warning_below_1300_tokens() -> None:
+    """Below 1300 estimated tokens no auto-compact warning is printed."""
+    import hexcli.ui as ui
+    session = {"messages": [{"content": "a" * (1299 * 4)}], "compact_count": 0}
+    config = {"max_agent_steps": 15, "model": "test", "backend": "mock"}
+    printed: list[str] = []
+    with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+        ui.show_context(session, config)
+    joined = " ".join(printed)
+    assert "degradation" not in joined.lower()
+
+
+def test_show_context_warning_fires_at_1300_tokens() -> None:
+    """At exactly 1300 estimated tokens the approaching-threshold warning appears."""
+    import hexcli.ui as ui
+    session = {"messages": [{"content": "a" * (1300 * 4)}], "compact_count": 0}
+    config = {"max_agent_steps": 15, "model": "test", "backend": "mock"}
+    printed: list[str] = []
+    with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+        ui.show_context(session, config)
+    joined = " ".join(printed)
+    assert "degradation" in joined.lower(), "expected approaching-threshold warning at 1300 tokens"
+
+
+def test_show_context_critical_fires_at_1600_tokens() -> None:
+    """At 1600+ estimated tokens the past-threshold (critical) warning appears."""
+    import hexcli.ui as ui
+    session = {"messages": [{"content": "a" * (1600 * 4)}], "compact_count": 0}
+    config = {"max_agent_steps": 15, "model": "test", "backend": "mock"}
+    printed: list[str] = []
+    with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+        ui.show_context(session, config)
+    joined = " ".join(printed)
+    assert "past" in joined.lower(), "expected past-threshold (critical) warning at 1600 tokens"
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -715,6 +768,10 @@ def test_first_run_check_does_not_crash(capsys: Any = None) -> None:
 TESTS = [
     test_distribution_module_imports,
     test_first_run_check_does_not_crash,
+    test_git_pull_timeout_returns_false,
+    test_show_context_no_warning_below_1300_tokens,
+    test_show_context_warning_fires_at_1300_tokens,
+    test_show_context_critical_fires_at_1600_tokens,
     test_deep_merge_flat_override,
     test_deep_merge_nested_dict_merges_recursively,
     test_deep_merge_non_dict_value_overwrites_nested_dict,

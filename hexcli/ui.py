@@ -297,9 +297,9 @@ def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
     print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
     print(f"  Model:            {config.get('model', 'unknown')}")
     print(f"  Backend:          {config.get('backend', 'ollama')}")
-    if est_tokens >= 1700:
+    if est_tokens >= 1600:
         cprint("  ✗ Past 4B degradation threshold — auto-compact will fire after the next turn.", C.BRED)
-    elif est_tokens >= 1400:
+    elif est_tokens >= 1300:
         cprint("  ⚠ Approaching 4B degradation threshold — auto-compact fires after this turn.", C.BYELLOW)
     print()
 
