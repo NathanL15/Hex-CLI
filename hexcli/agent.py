@@ -567,10 +567,10 @@ def sort_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def save_history_store(sessions: list[dict[str, Any]]) -> None:
-    HISTORY_PATH.write_text(
-        json.dumps({"sessions": sort_sessions(sessions)}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps({"sessions": sort_sessions(sessions)}, indent=2) + "\n"
+    tmp = HISTORY_PATH.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(HISTORY_PATH)
 
 
 def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
