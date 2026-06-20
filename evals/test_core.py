@@ -686,6 +686,34 @@ def test_show_context_critical_fires_at_1600_tokens() -> None:
 
 
 # ============================================================================
+# ui — format_relative_time naive datetime safety
+# ============================================================================
+
+def test_format_relative_time_naive_does_not_crash() -> None:
+    """format_relative_time must not raise TypeError when the timestamp has no tz offset."""
+    import hexcli.ui as ui
+    from datetime import datetime
+    naive_ts = datetime.now().isoformat()  # no tzinfo
+    result = ui.format_relative_time(naive_ts)
+    assert isinstance(result, str) and result != "unknown", (
+        f"naive timestamp must produce a valid relative time string, got: {result!r}"
+    )
+
+
+def test_format_relative_time_unknown_for_garbage() -> None:
+    import hexcli.ui as ui
+    assert ui.format_relative_time("not-a-date") == "unknown"
+
+
+def test_format_relative_time_aware_timestamp() -> None:
+    import hexcli.ui as ui
+    from datetime import datetime, timezone
+    aware_ts = datetime.now(timezone.utc).isoformat()
+    result = ui.format_relative_time(aware_ts)
+    assert result in ("now", ) or result.endswith(("m ago", "h ago", "d ago"))
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -863,6 +891,9 @@ TESTS = [
     test_search_files_excludes_hidden_dirs,
     test_search_files_skips_large_files,
     test_set_local_model_path_marks_unavailable_when_missing,
+    test_format_relative_time_naive_does_not_crash,
+    test_format_relative_time_unknown_for_garbage,
+    test_format_relative_time_aware_timestamp,
     test_read_memory_rules_empty_file,
     test_read_memory_rules_parses_bullet_lines,
     test_read_memory_rules_returns_last_n,
