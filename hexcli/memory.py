@@ -25,11 +25,14 @@ from typing import Any, Callable
 import numpy as np
 
 _STORE_DIR_NAME = ".shellai/vector_store"
-_MODEL_CACHE_DIR_NAME = ".shellai/models"
-_HF_REPO = "sentence-transformers/all-MiniLM-L6-v2"
-_HF_ONNX_FILE = "onnx/model_qint8_arm64.onnx"
-_HF_TOKENIZER_FILE = "tokenizer.json"
 _EMBED_DIM = 384
+_LOCAL_MODEL_PATH: Path | None = None
+
+
+def set_local_model_path(path: Path) -> None:
+    """Tell the embedder where to find the ONNX model. Call once at startup from agent.py."""
+    global _LOCAL_MODEL_PATH
+    _LOCAL_MODEL_PATH = path
 _MAX_ENTRIES = 500
 _GLOBAL_MAX_ENTRIES = 1_000
 _MIN_SIMILARITY = 0.15
@@ -82,20 +85,20 @@ class _Embedder:
     def _ensure_loaded(self) -> None:
         if self._session is not None or self._unavailable:
             return
+        if _LOCAL_MODEL_PATH is None or not _LOCAL_MODEL_PATH.exists():
+            self._unavailable = True
+            return
+        tok_path = _LOCAL_MODEL_PATH.parent / "tokenizer.json"
+        if not tok_path.exists():
+            self._unavailable = True
+            return
         try:
-            from huggingface_hub import hf_hub_download
             from tokenizers import Tokenizer
             import onnxruntime as ort
-
-            cache_dir = Path.cwd() / _MODEL_CACHE_DIR_NAME
-            model_path = hf_hub_download(_HF_REPO, _HF_ONNX_FILE, cache_dir=str(cache_dir))
-            tok_path = hf_hub_download(_HF_REPO, _HF_TOKENIZER_FILE, cache_dir=str(cache_dir))
-
-            tokenizer = Tokenizer.from_file(tok_path)
+            tokenizer = Tokenizer.from_file(str(tok_path))
             tokenizer.enable_padding()
             tokenizer.enable_truncation(max_length=_MAX_SEQ_LEN)
-
-            self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+            self._session = ort.InferenceSession(str(_LOCAL_MODEL_PATH), providers=["CPUExecutionProvider"])
             self._tokenizer = tokenizer
         except Exception:
             self._unavailable = True

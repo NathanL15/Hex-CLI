@@ -17,6 +17,7 @@ from typing import Any
 
 _LOG_DIR_NAME = ".shellai/logs"
 _REDACT_KEYS = {"content", "old_string", "new_string"}
+_MAX_PROMPT_LOG = 500
 
 
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -35,7 +36,7 @@ class TurnRecorder:
     def __init__(self, turn_index: int, mode: str, prompt: str) -> None:
         self.turn_index = turn_index
         self.mode = mode
-        self.prompt = prompt
+        self.prompt = prompt[:_MAX_PROMPT_LOG] + ("…" if len(prompt) > _MAX_PROMPT_LOG else "")
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.execution_path = "direct"
         self.tool_calls: list[dict[str, Any]] = []
