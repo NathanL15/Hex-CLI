@@ -716,6 +716,22 @@ def test_edit_file_missing_old_string_sends_error_to_model() -> None:
     assert "Error reported." in result
 
 
+def test_append_file_leaves_no_tmp_file() -> None:
+    """append_file atomic write must not leave a .tmp artefact on success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "notes.txt"
+        target.write_text("line one\n", encoding="utf-8")
+        sa.set_mock_responses([
+            json.dumps({"action": "append_file", "args": {
+                "path": str(target), "content": "line two\n"
+            }}),
+            '{"action":"finish","message":"Appended."}',
+        ])
+        sa.run_autopilot(_CFG, [], "append to notes", _SHELL)
+        assert target.read_text(encoding="utf-8") == "line one\nline two\n"
+        assert not (Path(tmp) / "notes.txt.tmp").exists()
+
+
 def test_list_directory_nonexistent_path_returns_error() -> None:
     """list_directory on a missing path must return an error message, not an OSError."""
     sa.set_mock_responses([
@@ -859,6 +875,7 @@ TESTS = [
     test_edit_file_leaves_no_tmp_file,
     test_verify_syntax_detects_invalid_python,
     test_verify_syntax_skips_large_file,
+    test_append_file_leaves_no_tmp_file,
 ]
 
 
