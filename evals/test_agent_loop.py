@@ -472,6 +472,18 @@ def test_read_file_tool_large_file_truncated_without_oom() -> None:
 # edit_file error propagation
 # ---------------------------------------------------------------------------
 
+def test_edit_file_empty_old_string_raises_error() -> None:
+    """edit_file with empty old_string must raise, not silently insert at start of file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "file.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        try:
+            sa.edit_file_tool(str(target), "", "y = 2")
+            assert False, "should have raised RuntimeError"
+        except RuntimeError as exc:
+            assert "empty" in str(exc).lower() or "old_string" in str(exc).lower()
+
+
 def test_edit_file_missing_old_string_sends_error_to_model() -> None:
     """edit_file error (old_string not found) must be sent back to model, not silenced."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -539,6 +551,7 @@ TESTS = [
     test_batch_reads_multiple_files,
     test_edit_file_missing_old_string_sends_error_to_model,
     test_read_file_tool_large_file_truncated_without_oom,
+    test_edit_file_empty_old_string_raises_error,
 ]
 
 
