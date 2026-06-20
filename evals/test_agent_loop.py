@@ -576,6 +576,33 @@ def test_batch_non_dict_action_returns_error_not_crash() -> None:
     assert "Non-dict batch done." in result
 
 
+def test_run_code_tool_python_script_executes() -> None:
+    """run_code_tool must execute a .py script in cwd and return its output."""
+    import os
+    orig_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            script = Path(tmp) / "hello.py"
+            script.write_text('print("hello from run_code")\n', encoding="utf-8")
+            result = sa.run_code_tool(str(script), [], timeout=10, shell_exe=_SHELL, output_limit=4000)
+        finally:
+            os.chdir(orig_cwd)
+    assert "hello from run_code" in result
+
+
+def test_run_code_tool_outside_cwd_raises() -> None:
+    """run_code_tool must reject a path that is not under the working directory."""
+    import sys
+    # Use the Python interpreter itself as an out-of-cwd path
+    interpreter = Path(sys.executable).resolve()
+    try:
+        sa.run_code_tool(str(interpreter), [], timeout=5, shell_exe=_SHELL, output_limit=4000)
+        assert False, "should have raised RuntimeError for out-of-cwd path"
+    except RuntimeError as exc:
+        assert "restricted" in str(exc).lower() or "working directory" in str(exc).lower()
+
+
 def test_write_file_tool_leaves_no_tmp_file() -> None:
     """write_file_tool must use atomic rename — no .tmp artefact left on success."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -689,6 +716,8 @@ TESTS = [
     test_write_file_tool_leaves_no_tmp_file,
     test_batch_over_limit_returns_error_not_crash,
     test_compact_history_at_minimum_boundary,
+    test_run_code_tool_python_script_executes,
+    test_run_code_tool_outside_cwd_raises,
 ]
 
 
