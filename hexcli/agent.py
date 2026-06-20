@@ -518,7 +518,10 @@ def iso_now() -> str:
 
 
 def parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def create_session() -> dict[str, Any]:

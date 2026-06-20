@@ -259,6 +259,21 @@ def test_load_history_store_skips_invalid_timestamps() -> None:
     assert len(sessions) == 0, "sessions with invalid timestamps must be dropped"
 
 
+def test_load_history_store_accepts_naive_timestamps() -> None:
+    """Sessions with naive ISO timestamps (no tz offset) must not crash the history loader."""
+    from datetime import datetime
+    naive_ts = datetime.now().isoformat()  # no tzinfo
+    store = {"sessions": [
+        {"id": "naive", "modified_at": naive_ts, "messages": [{"role": "user", "content": "hi"}]},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        hp.write_text(json.dumps(store), encoding="utf-8")
+        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+            sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
+    assert len(sessions) == 1, "session with naive timestamp must be loaded (not dropped)"
+
+
 def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
     from datetime import datetime, timezone
     recent_ts = datetime.now(timezone.utc).isoformat()
@@ -799,6 +814,7 @@ TESTS = [
     test_load_history_store_keeps_all_when_within_retention,
     test_load_history_store_returns_empty_for_missing_file,
     test_load_history_store_skips_invalid_timestamps,
+    test_load_history_store_accepts_naive_timestamps,
     test_load_history_store_sets_defaults_on_legacy_sessions,
     test_parse_json_object_direct_parse,
     test_parse_json_object_strips_markdown_fences,
