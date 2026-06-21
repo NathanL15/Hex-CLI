@@ -898,6 +898,126 @@ def test_find_files_invalid_glob_raises_runtime_error() -> None:
 
 
 # ============================================================================
+# find_files_tool / list_directory_tool — sensitive-path blocking (fix: was missing)
+# ============================================================================
+
+def test_find_files_blocked_for_sensitive_path() -> None:
+    """find_files_tool must block ~/.ssh just like search_files_tool does."""
+    ssh_path = str(Path.home() / ".ssh")
+    try:
+        sa.find_files_tool("**/*", ssh_path, 1000)
+        assert False, "should have raised RuntimeError for sensitive path"
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        assert "ssh" in msg or "blocked" in msg or "sensitive" in msg, \
+            f"expected sensitive-path block message, got: {exc}"
+
+
+def test_list_directory_blocked_for_sensitive_path() -> None:
+    """list_directory_tool must block ~/.ssh just like read_file_tool does."""
+    ssh_path = str(Path.home() / ".ssh")
+    try:
+        sa.list_directory_tool(ssh_path, 1000)
+        assert False, "should have raised RuntimeError for sensitive path"
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        assert "ssh" in msg or "blocked" in msg or "sensitive" in msg, \
+            f"expected sensitive-path block message, got: {exc}"
+
+
+def test_find_files_allowed_for_non_sensitive_path() -> None:
+    """find_files_tool must still work for normal directories after the security fix."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "hello.txt").write_text("hi")
+        result = sa.find_files_tool("*.txt", tmp, 1000)
+        assert "hello.txt" in result
+
+
+def test_list_directory_allowed_for_non_sensitive_path() -> None:
+    """list_directory_tool must still work for normal directories after the security fix."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "file.txt").write_text("hi")
+        result = sa.list_directory_tool(tmp, 1000)
+        assert "file.txt" in result
+
+
+# ============================================================================
+# run_autopilot — memory indexing on non-finish exits
+# ============================================================================
+
+def test_maybe_index_turn_called_on_step_limit() -> None:
+    """run_autopilot must call maybe_index_turn with outcome='step_limit' when steps exhaust."""
+    sa.set_mock_responses(
+        ['{"action":"run_command","args":{"command":"echo hi"}}'] * 20
+    )
+    captured: list[str] = []
+    _step = [0]
+
+    def capture(config: Any, prompt: str, tools: Any, paths: Any, outcome: str = "completed") -> None:
+        captured.append(outcome)
+
+    def vary_output(*args: Any, **kwargs: Any) -> str:
+        _step[0] += 1
+        return f"output {_step[0]}"  # different each call → error-loop detector never fires
+
+    with unittest.mock.patch.object(mem, "maybe_index_turn", side_effect=capture), \
+         unittest.mock.patch.object(sa, "execute_tool_call", side_effect=vary_output):
+        cfg = {**sa.DEFAULT_CONFIG, "backend": "mock", "max_agent_steps": 3,
+               "tool_output_limit": 1000}
+        sa.run_autopilot(cfg, [], "run echo", "powershell.exe", session=None)
+
+    assert "step_limit" in captured, \
+        f"expected 'step_limit' in maybe_index_turn calls, got: {captured}"
+
+
+def test_maybe_index_turn_called_on_error_loop() -> None:
+    """run_autopilot must call maybe_index_turn with outcome='error_loop' when stuck."""
+    sa.set_mock_responses(
+        ['{"action":"read_file","args":{"path":"x.txt"}}'] * 20
+    )
+    captured: list[str] = []
+
+    def capture(config: Any, prompt: str, tools: Any, paths: Any, outcome: str = "completed") -> None:
+        captured.append(outcome)
+
+    with unittest.mock.patch.object(mem, "maybe_index_turn", side_effect=capture), \
+         unittest.mock.patch.object(sa, "execute_tool_call", return_value="File not found"):
+        cfg = {**sa.DEFAULT_CONFIG, "backend": "mock", "max_agent_steps": 15,
+               "tool_output_limit": 1000}
+        sa.run_autopilot(cfg, [], "read a file", "powershell.exe", session=None)
+
+    assert "error_loop" in captured, \
+        f"expected 'error_loop' in maybe_index_turn calls, got: {captured}"
+
+
+# ============================================================================
+# _http_request — reconnect on CannotSendRequest (fix: was missing)
+# ============================================================================
+
+def test_http_request_reconnects_on_cannot_send_request() -> None:
+    """_http_request must close the connection and retry when CannotSendRequest is raised."""
+    import http.client
+    from unittest.mock import MagicMock
+
+    mock_conn = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status = 200
+    # First request() raises CannotSendRequest; second succeeds (returns None — void method)
+    mock_conn.request.side_effect = [http.client.CannotSendRequest(), None]
+    mock_conn.getresponse.return_value = mock_response
+
+    with unittest.mock.patch.object(sa, "_get_connection", return_value=(mock_conn, "/api/chat")):
+        resp = sa._http_request(
+            "POST", "http://127.0.0.1:11434/api/chat",
+            {"Content-Type": "application/json"}, b"{}", 10.0,
+        )
+
+    assert mock_conn.close.called, "_http_request must close the stale connection on CannotSendRequest"
+    assert mock_conn.request.call_count == 2, "_http_request must retry exactly once"
+    assert resp is mock_response
+
+
+# ============================================================================
 # distribution — module-level smoke tests
 # ============================================================================
 
@@ -1014,6 +1134,13 @@ TESTS = [
     test_find_files_invalid_glob_raises_runtime_error,
     test_search_memory_tool_disabled_returns_message,
     test_run_code_tool_unsupported_extension_raises,
+    test_find_files_blocked_for_sensitive_path,
+    test_list_directory_blocked_for_sensitive_path,
+    test_find_files_allowed_for_non_sensitive_path,
+    test_list_directory_allowed_for_non_sensitive_path,
+    test_maybe_index_turn_called_on_step_limit,
+    test_maybe_index_turn_called_on_error_loop,
+    test_http_request_reconnects_on_cannot_send_request,
 ]
 
 

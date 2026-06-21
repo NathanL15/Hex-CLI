@@ -728,7 +728,11 @@ def _http_request(
     try:
         conn.request(method, path, body=body, headers=headers)
         resp = conn.getresponse()
-    except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+    except (
+        http.client.RemoteDisconnected, http.client.CannotSendRequest,
+        http.client.BadStatusLine,
+        BrokenPipeError, ConnectionResetError, ConnectionAbortedError,
+    ):
         conn.close()
         try:
             conn.request(method, path, body=body, headers=headers)
@@ -837,48 +841,50 @@ def _ollama_stream_chat(
     # background thread and can be abandoned mid-stream (cancel, or the
     # "done" line arriving before the socket reaches EOF), which would leave
     # a shared connection in an indeterminate state for the next reuse.
-    with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
-        reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
-        with CancelMonitor() as monitor:
-            reader.start()
-            while True:
-                if monitor.cancelled.is_set():
-                    raise UserCancelled()
-                try:
-                    raw = line_q.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-                if raw is None:
-                    break
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                chunk = (data.get("message") or {}).get("content", "")
-                if chunk:
-                    parts.append(chunk)
-                    tok += 1
-                    sys.stderr.write(
-                        f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
-                    )
-                    sys.stderr.flush()
-                if data.get("done"):
-                    eval_count = data.get("eval_count", tok)
+    try:
+        with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+            reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
+            with CancelMonitor() as monitor:
+                reader.start()
+                while True:
+                    if monitor.cancelled.is_set():
+                        raise UserCancelled()
+                    try:
+                        raw = line_q.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                    if raw is None:
+                        break
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk = (data.get("message") or {}).get("content", "")
+                    if chunk:
+                        parts.append(chunk)
+                        tok += 1
+                        sys.stderr.write(
+                            f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                        )
+                        sys.stderr.flush()
+                    if data.get("done"):
+                        eval_count = data.get("eval_count", tok)
 
-    if "value" in err_box:
-        exc = err_box["value"]
-        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-            sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
-            sys.stderr.flush()
-            return ollama_chat_non_stream(config, messages, token_key, json_format=json_format), 0
-        raise exc
+        if "value" in err_box:
+            exc = err_box["value"]
+            if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+                sys.stderr.flush()
+                return ollama_chat_non_stream(config, messages, token_key, json_format=json_format), 0
+            raise exc
 
-    sys.stderr.write("\r" + " " * 60 + "\r")
-    sys.stderr.flush()
-    return "".join(parts), eval_count
+        return "".join(parts), eval_count
+    finally:
+        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.flush()
 
 
 def ollama_chat_non_stream(
@@ -982,55 +988,57 @@ def _openai_stream_chat(
 
     # Dedicated per-call connection — see _ollama_stream_chat for why the
     # shared keep-alive pool isn't used here.
-    with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
-        reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
-        with CancelMonitor() as monitor:
-            reader.start()
-            while True:
-                if monitor.cancelled.is_set():
-                    raise UserCancelled()
-                try:
-                    raw = line_q.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-                if raw is None:
-                    break
-                line = raw.strip()
-                if not line:
-                    continue
-                # SSE lines start with "data: "
-                text = line.decode("utf-8", errors="replace")
-                if text == "data: [DONE]":
-                    break
-                if not text.startswith("data: "):
-                    continue
-                try:
-                    data = json.loads(text[6:])
-                except json.JSONDecodeError:
-                    continue
-                choices = data.get("choices") or []
-                if not choices:
-                    continue
-                delta = (choices[0].get("delta") or {}).get("content", "")
-                if delta:
-                    parts.append(delta)
-                    tok += 1
-                    sys.stderr.write(
-                        f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
-                    )
-                    sys.stderr.flush()
+    try:
+        with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+            reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
+            with CancelMonitor() as monitor:
+                reader.start()
+                while True:
+                    if monitor.cancelled.is_set():
+                        raise UserCancelled()
+                    try:
+                        raw = line_q.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                    if raw is None:
+                        break
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    # SSE lines start with "data: "
+                    text = line.decode("utf-8", errors="replace")
+                    if text == "data: [DONE]":
+                        break
+                    if not text.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(text[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content", "")
+                    if delta:
+                        parts.append(delta)
+                        tok += 1
+                        sys.stderr.write(
+                            f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                        )
+                        sys.stderr.flush()
 
-    if "value" in err_box:
-        exc = err_box["value"]
-        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-            sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
-            sys.stderr.flush()
-            return openai_chat(config, messages, token_key, json_format=json_format), 0
-        raise exc
+        if "value" in err_box:
+            exc = err_box["value"]
+            if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+                sys.stderr.flush()
+                return openai_chat(config, messages, token_key, json_format=json_format), 0
+            raise exc
 
-    sys.stderr.write("\r" + " " * 60 + "\r")
-    sys.stderr.flush()
-    return "".join(parts), tok
+        return "".join(parts), tok
+    finally:
+        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.flush()
 
 
 def ollama_generate_with_system(config: dict[str, Any], system: str, prompt: str) -> str:
@@ -1448,6 +1456,7 @@ def append_file_tool(path_text: str, content: str) -> str:
 
 def list_directory_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text or ".")
+    _check_sensitive_path(path, "list_directory")
     if not path.exists():
         raise RuntimeError(f"Directory not found: {path}")
     if not path.is_dir():
@@ -1515,6 +1524,7 @@ def search_files_tool(pattern: str, path_text: str, glob_pattern: str, output_li
 
 def find_files_tool(glob_pattern: str, path_text: str, output_limit: int) -> str:
     search_path = resolve_path(path_text or ".")
+    _check_sensitive_path(search_path, "find_files")
     filtered: list[Path] = []
     try:
         candidates = sorted(search_path.rglob(glob_pattern or "*"))
@@ -2507,6 +2517,7 @@ def run_autopilot(
                     print()
             else:
                 cprint("  (set ANTHROPIC_API_KEY to enable cloud escalation)", C.DIM)
+            memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="error_loop")
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             return last_tool_output or "Done."
@@ -2515,6 +2526,7 @@ def run_autopilot(
 
     if session and last_tool_output:
         store_observation(session, query, last_tool_output)
+    memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
     if total_eval:
         cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
     if session:
@@ -2640,7 +2652,7 @@ def _maybe_auto_compact(
         compact_history(config, session, quiet=True)
         sync_session_store(sessions, session)
         n_after = len(session.get("messages", []))
-        cprint(f"  Auto-compacted. {n_after} active messages; past context indexed to memory.", C.DIM)
+        cprint(f"  Auto-compacted. {n_after} active messages.", C.DIM)
     except UserCancelled:
         cprint("  Auto-compact cancelled. Run /compact manually when ready.", C.YELLOW)
     except Exception as exc:  # noqa: BLE001
