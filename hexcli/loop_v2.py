@@ -297,12 +297,13 @@ def run(
                         and config.get("require_verification", True)):
                     verify_nudge_used = True
                     messages.append({"role": "assistant", "content": agent.strip_thinking(raw)})
+                    changed = touched_paths[-1] if touched_paths else "the file"
                     messages.append({
                         "role": "user",
                         "content": (
-                            "You modified a file but never verified the result. "
-                            "Before finishing, check your work: run the code, or "
-                            "read the changed section back — then report what you "
+                            f"You modified {changed} but never verified the result. "
+                            f"Use the read tool on {changed} (or run it via shell if "
+                            "it is code) to confirm the change, then report what you "
                             "actually observed."
                         ),
                     })
