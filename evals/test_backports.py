@@ -190,8 +190,56 @@ def test_plain_prose_is_still_a_finish() -> None:
     assert a["action"] == "finish" and "no JSON" in a["message"]
 
 
+def test_edit_file_tier4_high_similarity_unique_match() -> None:
+    """uc1-t4 live failure: the model reconstructs the line from memory and
+    lands ~97% similar to exactly one region — and repeats the same wrong
+    string on every retry. Tier 4 applies the intended edit."""
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "p.py"
+        f.write_text(
+            "def stats(d):\n"
+            '    return {"total": total, "count": count, "average": avg}\n',
+            encoding="utf-8")
+        # Model wrote "cnt" instead of "count" — highly similar, unique.
+        sa.edit_file_tool(
+            str(f),
+            '    return {"total": total, "cnt": count, "average": avg}',
+            '    return {"total": total, "count": count, "average": avg, "median": med}',
+        )
+        assert '"median": med' in f.read_text(encoding="utf-8")
+
+
+def test_edit_file_tier4_rejects_weak_similarity() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "p.py"
+        f.write_text("alpha beta gamma\n", encoding="utf-8")
+        raised = False
+        try:
+            sa.edit_file_tool(str(f), "completely different text here", "x")
+        except RuntimeError:
+            raised = True
+        assert raised, "a weak match must still error, never guess"
+
+
+def test_edit_file_tier4_rejects_near_ties() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "p.py"
+        # Two nearly identical lines — a high match against both is ambiguous.
+        f.write_text("    value = compute(a, b, c)\n    value = compute(a, b, d)\n",
+                     encoding="utf-8")
+        raised = False
+        try:
+            sa.edit_file_tool(str(f), "    value = compute(a, b, x)", "    value = 0")
+        except RuntimeError:
+            raised = True
+        assert raised, "near-tie candidates must error, never pick one"
+
+
 TESTS = [
     test_multi_action_response_yields_first_action,
+    test_edit_file_tier4_high_similarity_unique_match,
+    test_edit_file_tier4_rejects_weak_similarity,
+    test_edit_file_tier4_rejects_near_ties,
     test_multi_action_is_parseable_at_all,
     test_braces_inside_strings_do_not_confuse_scanner,
     test_single_action_and_fences_still_work,
