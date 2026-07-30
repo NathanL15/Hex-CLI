@@ -618,6 +618,7 @@ def main() -> int:
              "results": uc_results},
             default=str,
         ))
+        RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
         RESULTS_PATH.write_text(
             json.dumps(save_data, indent=2), encoding="utf-8"
         )

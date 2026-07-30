@@ -410,6 +410,7 @@ def run_suite(
     print_report(results, findings)
 
     if not no_save:
+        results_path.parent.mkdir(parents=True, exist_ok=True)
         results_path.write_text(
             json.dumps({"timestamp": time.time(), "model": config.get("model"), "results": results, "findings": findings}, indent=2),
             encoding="utf-8",

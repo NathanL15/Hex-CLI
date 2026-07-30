@@ -25,18 +25,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from hexcli import ui
-from hexcli import telemetry
-from hexcli import memory
-from hexcli import safety
-from hexcli import network
-from hexcli import distribution, escalate, lockfile
+from hexcli import distribution, escalate, lockfile, memory, network, safety, telemetry, ui
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -436,7 +430,7 @@ class CancelMonitor:
                 if msvcrt.getwch() == "\x1b":
                     self.cancelled.set()
 
-    def __enter__(self) -> "CancelMonitor":
+    def __enter__(self) -> CancelMonitor:
         clear_keyboard_buffer()
         self._thread.start()
         return self
@@ -514,7 +508,7 @@ def load_config(path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def iso_now() -> str:
@@ -524,7 +518,7 @@ def iso_now() -> str:
 def parse_timestamp(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -570,7 +564,7 @@ def append_session_message(session: dict[str, Any], role: str, content: str) -> 
 
 
 def sort_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+    _epoch = datetime.min.replace(tzinfo=UTC)
 
     def _key(s: dict[str, Any]) -> datetime:
         raw = s.get("modified_at", "")
@@ -1881,7 +1875,7 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
     cap = 1500
     if len(result) > cap:
         result = result[:cap] + f"\n...[delegate output truncated to {cap} chars]"
-    cprint(f"  ⟶ delegate done", C.DIM)
+    cprint("  ⟶ delegate done", C.DIM)
     return result
 
 
@@ -2738,7 +2732,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         # ── compact ───────────────────────────────────────────────────────
         if norm == "/compact":
             try:
-                new_msgs = compact_history(config, current_session)
+                compact_history(config, current_session)
                 sync_session_store(sessions, current_session)
             except UserCancelled:
                 print("\nCancelled.\n")

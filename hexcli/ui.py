@@ -11,7 +11,7 @@ import subprocess
 import sys
 import textwrap
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +84,7 @@ class Spinner:
             sys.stderr.flush()
             i += 1
 
-    def __enter__(self) -> "Spinner":
+    def __enter__(self) -> Spinner:
         self._thread.start()
         return self
 
@@ -172,8 +172,10 @@ HELP_TEXT = textwrap.dedent("""
       Esc                           cancel the current agent step
 
     AGENT TOOLS (autopilot):
-      run_command     read_file     edit_file    write_file    run_code
-      append_file     list_directory             search_files  find_files
+      run_command     read_file      edit_file      write_file    append_file
+      list_directory  search_files   find_files     run_code      verify_syntax
+      lint_code       search_memory  fetch_url      batch         delegate
+      (/tools for full signatures)
 
     NPU NOTE:
       Primary path: npurun + qwen3-4b-instruct-2507 on the Hexagon NPU (~15 tok/s).
@@ -213,7 +215,7 @@ TOOLS_HELP = textwrap.dedent("""
 # ---------------------------------------------------------------------------
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def format_relative_time(timestamp: str) -> str:
@@ -222,7 +224,7 @@ def format_relative_time(timestamp: str) -> str:
     except ValueError:
         return "unknown"
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
     seconds = max(0, int((_utc_now() - moment).total_seconds()))
     if seconds < 60:
         return "now"

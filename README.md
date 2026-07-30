@@ -87,16 +87,17 @@ shellai.example.json config template
 /mode command           switch to command-only mode
 /undo                   revert file edits from the last agent turn
 /memory search <query>  query the semantic memory store
-/memory show            show recent memory entries
+/memory status          show memory store status
+/memory list [n]        list recent memory entries
 /memory clear           clear project memory for the current directory
 /memory prune           enforce the max-rules cap now
 /profile                show current session's tool-call profile
-/config get <key>       print a config value
-/config set <key> <v>   update a config value at runtime
+/config <key>           print a config value
+/config <key> <value>   update a config value at runtime
 /save <name>            save a named checkpoint of the current session
 /load <name>            restore a previously saved checkpoint
 /checkpoints            list all checkpoints for the current directory
-/delegate <query>       run a sub-query in a fresh session and return the result
+/tools                  list agent tools
 /exit                   quit
 ```
 
@@ -112,14 +113,16 @@ The autopilot loop has access to these tools:
 | `read_file` | Read a file's content (blocks SSH/GPG key dirs and Windows credential stores) |
 | `write_file` | Write or overwrite a file (captures undo snapshot) |
 | `edit_file` | Replace an exact string in a file (captures undo snapshot) |
+| `append_file` | Append text to a file |
 | `list_directory` | List files and subdirectories at a path |
+| `search_files` | Grep — search across files by content |
+| `find_files` | Find files by glob pattern |
 | `search_memory` | Cosine-similarity search over the session memory store |
 | `verify_syntax` | Non-destructive syntax check for .py, .json, .ps1, .js/.ts |
 | `run_code` | Execute a .py/.ps1/.js script in a sandboxed subprocess |
-| `lint_code` | Run ruff/pylint/eslint on a file and return findings |
-| `http_get` | Fetch a URL with optional headers (no auth headers in untrusted turns) |
-| `http_post` | POST JSON to a URL |
-| `batch_exec` | Run a sequence of commands in a single turn |
+| `lint_code` | Run ruff/pylint/eslint on a file and return findings (requires ruff) |
+| `fetch_url` | Fetch a URL with optional headers (no auth headers in untrusted turns) |
+| `batch` | Run up to 8 read-only tools in parallel in a single turn |
 | `delegate` | Run a sub-task in a fresh agent session |
 
 ---
@@ -139,14 +142,14 @@ The autopilot loop has access to these tools:
 ### v1.3 — Capability expansion
 - **`verify_syntax` + `run_code`** — self-correction loop for code files: verify after edit, run to confirm zero exit code.
 - **`search_memory` tool** — explicit in-prompt recall via cosine similarity.
-- **`http_get` / `http_post`** — outbound network access from the agent loop.
-- **`batch_exec`** — run a list of commands atomically in one turn.
+- **`fetch_url`** — outbound network access (GET) from the agent loop.
+- **`batch`** — run several read-only tools in one turn.
 - **`delegate`** — spawn a nested sub-agent for complex subtasks.
 - **Workspace snapshot** — each autopilot turn prepends `[mode | model | cwd | turns]` context to the user message.
 
 ### v1.4 — Operational
 - **Lockfile** — `hexcli/lockfile.py` prevents two REPL instances from fighting over the same session store. Stale locks (process dead) are auto-cleared.
-- **`/config get|set`** — live config mutation without restarting the REPL. All settable keys are type-checked.
+- **`/config [key [value]]`** — live config mutation without restarting the REPL. All settable keys are type-checked.
 - **`/memory` subcommands** — `search`, `show`, `clear`, `prune`.
 - **`/profile`** — prints the current session's per-tool call count.
 
