@@ -180,6 +180,58 @@ def test_write_payload_before_header() -> None:
     assert r.payload == "hello world"
 
 
+def test_atomic_write_block() -> None:
+    raw = ('I will create the file.\n'
+           '<write path="notes.txt">\nhello world\nline two\n</write>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.tool == "write"
+    assert r.args == {"path": "notes.txt"}
+    assert r.payload == "hello world\nline two"
+    assert "create the file" in r.thought
+
+
+def test_atomic_write_block_with_inner_fence_unwrapped() -> None:
+    raw = ('<write path="doc.md">\n```markdown\n# Title\n```\n</write>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.payload == "# Title"
+
+
+def test_atomic_edit_block() -> None:
+    raw = ('<edit path="app.py">\n'
+           "<<<<<<< SEARCH\n    return conut\n=======\n    return count\n>>>>>>> REPLACE\n"
+           "</edit>")
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.tool == "edit"
+    assert r.args == {"path": "app.py"}
+    assert r.payload == [("    return conut", "    return count")]
+
+
+def test_atomic_edit_block_missing_divider_is_precise() -> None:
+    raw = ('<edit path="a.py">\n<<<<<<< SEARCH\nx\n>>>>>>> REPLACE\n</edit>')
+    r = p2.parse_response(raw)
+    assert r.kind == "malformed"
+    assert "=======" in r.error
+
+
+def test_lone_open_tag_gets_template_error() -> None:
+    r = p2.parse_response('<edit path="a.py">\nsome text with no close')
+    assert r.kind == "malformed"
+    assert "</edit>" in r.error and "SEARCH" in r.error
+    r = p2.parse_response('<write path="a.txt">')
+    assert r.kind == "malformed"
+    assert "</write>" in r.error
+
+
+def test_atomic_block_with_windows_content_no_escaping() -> None:
+    raw = ('<write path="cfg.ps1">\n$path = "C:\\new"\nWrite-Host "quoted \\"x\\""\n</write>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.payload == '$path = "C:\\new"\nWrite-Host "quoted \\"x\\""'
+
+
 def test_recall_tool_accepted_search_memory_rejected() -> None:
     r = p2.parse_response('<action>{"name": "recall", "arguments": {"query": "x"}}</action>')
     assert r.kind == "tool" and r.tool == "recall"
@@ -190,7 +242,7 @@ def test_recall_tool_accepted_search_memory_rejected() -> None:
 def test_write_payload_missing_fence() -> None:
     r = p2.parse_response('<action>{"name": "write", "arguments": {"path": "a.txt"}}</action>')
     assert r.kind == "malformed"
-    assert "fenced block" in r.error
+    assert "<write path=" in r.error, r.error
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +416,12 @@ TESTS = [
     test_write_payload_fence_with_language_and_inner_backticks,
     test_edit_payload_before_header,
     test_write_payload_before_header,
+    test_atomic_write_block,
+    test_atomic_write_block_with_inner_fence_unwrapped,
+    test_atomic_edit_block,
+    test_atomic_edit_block_missing_divider_is_precise,
+    test_lone_open_tag_gets_template_error,
+    test_atomic_block_with_windows_content_no_escaping,
     test_recall_tool_accepted_search_memory_rejected,
     test_write_payload_missing_fence,
     test_apply_exact_unique,

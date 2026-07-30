@@ -74,9 +74,72 @@ class ParsedResponse:
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+# Atomic block forms for the payload tools. One coherent unit — tag carries
+# the path, body carries the content — because round-3 live traces showed the
+# 4B model cannot reliably emit a two-part "JSON header + separate payload"
+# convention it was never trained on (headers kept arriving with no payload).
+_WRITE_BLOCK_RE = re.compile(
+    r"<write\s+path\s*=\s*[\"']([^\"'\n]+)[\"']\s*>\n?(.*?)\n?</write>",
+    re.DOTALL | re.IGNORECASE,
+)
+_EDIT_BLOCK_RE = re.compile(
+    r"<edit\s+path\s*=\s*[\"']([^\"'\n]+)[\"']\s*>\n?(.*?)\n?</edit>",
+    re.DOTALL | re.IGNORECASE,
+)
+_LONE_WRITE_RE = re.compile(r"<write\b[^>]*>", re.IGNORECASE)
+_LONE_EDIT_RE = re.compile(r"<edit\b[^>]*>", re.IGNORECASE)
+
+
+def _unfence(body: str) -> str:
+    """Models love wrapping content in ``` fences even inside a block — unwrap
+    exactly one enclosing fence if present."""
+    m = re.match(r"^```[^\n]*\n(.*)\n```\s*$", body, re.DOTALL)
+    return m.group(1) if m else body
+
+
+def _parse_atomic_blocks(text: str) -> ParsedResponse | None:
+    """Try the single-block forms for write/edit. Returns None when neither
+    tag is present at all."""
+    wm = _WRITE_BLOCK_RE.search(text)
+    em = _EDIT_BLOCK_RE.search(text)
+    if wm and em:
+        return ParsedResponse(kind="malformed",
+                              error="Both <write> and <edit> blocks found. Emit exactly ONE action per response.")
+    if wm:
+        thought = (text[:wm.start()] + text[wm.end():]).strip()
+        return ParsedResponse(kind="tool", tool="write",
+                              args={"path": wm.group(1)}, payload=_unfence(wm.group(2)),
+                              thought=_strip_payload_markers(thought))
+    if em:
+        blocks, err = _parse_search_replace(em.group(2))
+        if err:
+            return ParsedResponse(kind="malformed", tool="edit",
+                                  args={"path": em.group(1)}, error=err)
+        thought = (text[:em.start()] + text[em.end():]).strip()
+        return ParsedResponse(kind="tool", tool="edit",
+                              args={"path": em.group(1)}, payload=blocks,
+                              thought=_strip_payload_markers(thought))
+    # A lone opening tag without its closing tag deserves a precise error,
+    # not silent fall-through to "final answer".
+    if _LONE_WRITE_RE.search(text):
+        return ParsedResponse(kind="malformed", error=(
+            "Found <write ...> without a closing </write>. The full form is:\n"
+            '<write path="notes.txt">\nfile content here\n</write>'))
+    if _LONE_EDIT_RE.search(text):
+        return ParsedResponse(kind="malformed", error=(
+            "Found <edit ...> without a closing </edit>. The full form is:\n"
+            f'<edit path="app.py">\n{SEARCH_MARK}\n<exact existing lines>\n'
+            f"{DIVIDER_MARK}\n<replacement lines>\n{REPLACE_MARK}\n</edit>"))
+    return None
+
+
 def parse_response(raw: str) -> ParsedResponse:
     """Parse one model response into a final answer or a tool action."""
     text = _THINK_RE.sub("", raw or "").strip()
+
+    atomic = _parse_atomic_blocks(text)
+    if atomic is not None:
+        return atomic
 
     open_idx = text.find(TOOL_CALL_OPEN)
     if open_idx == -1:
@@ -207,9 +270,9 @@ def _parse_search_replace(rest: str) -> tuple[list[tuple[str, str]] | None, str]
             i += 1
     if not blocks:
         return None, (
-            "The edit tool needs at least one SEARCH/REPLACE block after "
-            f"</action>:\n{SEARCH_MARK}\n<exact existing lines>\n{DIVIDER_MARK}\n"
-            f"<replacement lines>\n{REPLACE_MARK}"
+            "The edit needs a SEARCH/REPLACE block. Use the single-block form:\n"
+            f'<edit path="app.py">\n{SEARCH_MARK}\n<exact existing lines>\n{DIVIDER_MARK}\n'
+            f"<replacement lines>\n{REPLACE_MARK}\n</edit>"
         )
     return blocks, ""
 
@@ -221,8 +284,8 @@ def _parse_fence(rest: str) -> tuple[str | None, str]:
     """Extract the fenced payload for `write`: first fence open to LAST fence close."""
     m = _FENCE_OPEN_RE.search(rest)
     if not m:
-        return None, ("The write tool needs its file content in a fenced block after "
-                      "</action>:\n```\n<file content>\n```")
+        return None, ("The write needs its file content. Use the single-block form:\n"
+                      '<write path="notes.txt">\nfile content here\n</write>')
     body_start = m.end()
     close = rest.rfind("\n```")
     if close == -1 or close < body_start - 1:
@@ -354,11 +417,12 @@ SYSTEM_PROMPT_V2 = """You are Hex, a local terminal agent on a Windows 11 machin
 
 ## How to respond
 Think briefly in plain text first if it helps. Then EITHER:
-- emit exactly ONE action header to use a tool:
+- emit exactly ONE action to use a tool — a JSON header for most tools:
 <action>
 {"name": "<tool>", "arguments": {...}}
 </action>
-- OR reply with plain text and no <action> — that is your final answer and ends the task.
+  (write and edit use their own single-block forms shown below, with no JSON)
+- OR reply with plain text and no action block — that is your final answer and ends the task.
 
 NEVER describe what you are about to do in plain text ("I will list the files...") — that ends the task without doing it. If work remains, your response must BE an <action> block.
 
@@ -367,22 +431,18 @@ After each tool runs, its output comes back inside <tool_response> tags. Base ev
 ## Tools
 - shell — run a PowerShell command in a persistent session (cwd and variables survive between calls). Also how you list directories: Get-ChildItem. arguments: {"command": "..."}
 - read — read one FILE (never a directory). arguments: {"path": "...", "offset": <line, optional>, "limit": <lines, optional>}
-- write — create or overwrite a file. The file content goes in a fenced block BEFORE the action header, never in the JSON:
-```
+- write — create or overwrite a file. ONE block, no JSON; everything between the tags becomes the file:
+<write path="notes.txt">
 file content here
-```
-<action>
-{"name": "write", "arguments": {"path": "notes.txt"}}
-</action>
-- edit — change part of an existing file. The change goes in a SEARCH/REPLACE block BEFORE the action header. SEARCH must copy the existing lines exactly; keep it small but unique. Lines outside the block stay untouched — never rewrite a whole file to change one line:
+</write>
+- edit — change part of an existing file. ONE block, no JSON. SEARCH must copy the existing lines exactly; keep it small but unique. Lines outside the block stay untouched — never rewrite a whole file to change one line:
+<edit path="app.py">
 <<<<<<< SEARCH
     return f"{conut} items"
 =======
     return f"{count} items"
 >>>>>>> REPLACE
-<action>
-{"name": "edit", "arguments": {"path": "app.py"}}
-</action>
+</edit>
 - grep — search file contents. arguments: {"pattern": "...", "path": "<dir or file, optional>"}
 - recall — memories from PAST sessions with this user only; never for general knowledge, math, or the current files. arguments: {"query": "..."}
 - fetch_url — fetch a web page (needs network). arguments: {"url": "..."}
