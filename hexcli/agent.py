@@ -1649,7 +1649,7 @@ def lint_code_tool(path_text: str) -> str:
         raise RuntimeError(f"File not found: {path}")
     try:
         result = subprocess.run(
-            [_RUFF, "check", "--output-format=text", str(path)],
+            [_RUFF, "check", "--output-format=concise", str(path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
     except Exception as exc:
@@ -1657,6 +1657,8 @@ def lint_code_tool(path_text: str) -> str:
     output = (result.stdout + result.stderr).strip()
     status = "clean" if result.returncode == 0 else f"{result.returncode} issue(s)"
     ui.tool_event("lint", f"{path}  ({status})")
+    if result.returncode == 0:
+        return f"OK: no issues in {path}"
     return output if output else f"OK: no issues in {path}"
 
 
