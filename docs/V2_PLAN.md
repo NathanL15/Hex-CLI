@@ -1,5 +1,13 @@
 # Hex CLI v2 — Comprehensive Revamp Plan
 
+> **Status update, 2026-07-30 (after implementation round 1).** Phases 0 and 1
+> are built and measured. The headline finding overturns §5 of this plan:
+> **the v2 protocol lost the A/B and was not adopted; its protocol-independent
+> mechanisms were back-ported into v1 instead.** See
+> [§14 Implementation findings](#14-implementation-findings-2026-07-30) for the
+> data, which supersedes the v2-protocol recommendations below. Everything in
+> §8 (eval methodology) held up and is now shipped.
+
 *Prepared 2026-07-29. Grounded in: the full v1.7.0 audit (330/330 offline tests, live NPU evals), a fresh live re-verification run, direct speed measurements on the Hexagon NPU, a deep architectural review of the v1 codebase and eval suites, and web research into the mid-2026 model/runtime/agent-design landscape. Every load-bearing number below was measured on this machine or verified against a cited source; unverified claims are flagged.*
 
 ---
@@ -239,3 +247,129 @@ Concrete runtime work items:
 3. **npurun bus factor**: upstream quiet since May 2026; the GenieX/Nexa bake-off is the hedge, and fork hygiene (committing local work) is the insurance.
 4. **Eval re-baselining will change the headline numbers** — the v1 "9/9, 6 hard fails" figures are not comparable to pass^5 measurements. Expect apparent regressions that are actually measurement honesty.
 5. **4B ceiling is real**: even a perfect harness won't make trap compliance 0% or multi-line reasoning frontier-grade. The harness absorbs what it can (verification gates, safety enforcement, format design); the escalation ladder handles the rest. Set expectations accordingly in the README.
+
+---
+
+## 14. Implementation findings (2026-07-30)
+
+Phases 0 and 1 are built, measured, and committed. This section records what the
+measurements actually showed — including where they contradicted the plan above.
+
+### 14.1 The eval instrument (Phase 0) — shipped, and it worked
+
+`evals/runner.py` + `checks.py` + `cases_*.py` drive the **production**
+`run_autopilot` through an `AutopilotProbe` seam, so prompt parity is structural
+rather than aspirational. Binary verdicts come from state + content + behaviour
+assertions; every case runs N times with pass@k, pass^k, and Wilson intervals.
+44 v1 live cases were ported with the audit's grading defects fixed. 22 offline
+instrument tests run in CI.
+
+It immediately paid for itself by finding things the old suite could not:
+
+| Finding | How it surfaced |
+|---|---|
+| **The embedding model was never installed** — `search_memory` and vector indexing were silent no-ops in production | memory-1 marked INVALID instead of "failed", which prompted the check |
+| **memory-1 was never a model failure** — 5/5 once the model was installed and prompt parity was real | the v1.7 audit had recorded it as a model-ceiling hard fail |
+| **The NPU server degrades under sustained load** (§14.4) | invalid-run classification + a fresh-server probe |
+| **A UTF-8 char-boundary panic aborts npurun** | v2's plain-text answers emit emoji; the crash landed within four requests |
+
+### 14.2 v1 baseline, honestly measured
+
+Extended suite, 5 runs/case, production sampling: **23/36 pass^5, 32/36 pass@5.**
+Multi-turn: uc1 coding turns collapse from turn 3 (~2,500 est. input tokens),
+uc2 routing holds, uc3 injections comply 3/3 (including an executed hosts-file
+read), first-response latency 5.9s → 28.9s across a session.
+
+The v1.7 audit's "6 hard fails" and the multi-turn α≈2.22 exponent are **not**
+comparable to these numbers: the old instrument graded single runs with string
+matching and folded retries into its latency measurement.
+
+### 14.3 The v2 protocol lost the A/B — 7 rounds, then a pivot
+
+| Round | Change | Extended pass^5 |
+|---|---|---|
+| — | v1 baseline | **22/35** |
+| 2 | v2 as designed (`<tool_call>` markers) | 14/36 |
+| 3 | payload-before-header, `recall` rename, read-dir redirect | 18/36 |
+| 4 | atomic `<write>`/`<edit>` single-block forms | 14/36 |
+| 5 | JSON `old_string`/`new_string` fallback, stronger verify nudge | 14/36 |
+| 6 | v1's tuned rules ported into the v2 prompt | 10/36 (server degraded) |
+| 7 | same, on a **verified-clean** server | **13/36** |
+
+Real bugs were found and fixed along the way — Qwen3's `<tool_call>` tag is a
+special token the qwen3-4b w4a16 bundle's **detokenizer garbles** (measured:
+`<tool_call>hello</tool_call>` → `Fightinghello trespassing`, while `<action>`
+round-trips exactly), payload-after-header is frequently never generated because
+the model ends its turn at the block, and `search_memory` gets grabbed by any
+"run a search…" phrasing. Each fix landed cleanly and the total never approached
+v1.
+
+**Conclusion: v1's protocol is what this model actually knows.** Two months of
+`_AUTOPILOT_TEMPLATE` tuning has effectively specialised qwen3-4b-instruct-2507
+to that JSON action format; the traces show it reaching for v1 shapes
+(`{"name":"edit","arguments":{…,"command":…}}`, `write` with a `content` arg)
+no matter what the prompt demonstrates. Each patched symptom reappeared in a
+new form. This is a **model-specific** result, not a verdict on SEARCH/REPLACE
+or native tool-calling in general — the published evidence for those formats
+comes from far more capable models.
+
+### 14.4 The measurement trap (most important process finding)
+
+After ~1–2 hours of continuous eval traffic the npurun/Genie dialog degrades
+into sticky `ERROR_QUERY_FAILED (-6)` and returns HTTP 500 for **every**
+request. Proof: requests failing 3/4 on the aging server succeeded **12/12** on
+a fresh restart. Rounds 4–6 ran against that degradation, so part of their
+apparent regression was infrastructure, not behaviour.
+
+Hardening now in the instrument:
+1. `is_backend_failure()` classifies 5xx / `URLError` / connection loss /
+   `ERROR_QUERY_FAILED` as infrastructure; those runs are **INVALID** and
+   excluded from pass^k rather than counted as model failures. (4xx stays a
+   real failure — `HTTPError` subclasses `URLError`, so order matters; a test
+   pins it.)
+2. `backend_preflight()` refuses to start a suite against a dead backend.
+3. Six consecutive backend failures abort the suite loudly.
+4. The A/B scripts restart the NPU server before each suite.
+
+**Any local-model eval that runs for hours needs this.** Without it a degrading
+server silently manufactures regressions that look exactly like real ones.
+
+### 14.5 What shipped instead: v2 wins back-ported into v1
+
+Mechanisms that are protocol-independent moved into the default loop:
+
+- **3-tier fuzzy `edit_file`** (exact → trailing-whitespace → indent-shift),
+  ambiguity still a hard error, no-match reports the closest region with line
+  numbers as retry feedback — the audit's #1 finding.
+- **Head+tail tool-output truncation** so stack traces and exit summaries
+  survive (head-only trimming hid exactly what recovery needs).
+- **`read_file` paging** (offset/limit) and a helpful directory error.
+- **Verification-gated finish** — one nudge after an unverified mutation.
+
+Measured against the v1 baseline (5 runs/case, fresh server): **7 cases
+improved, 4 regressed by a single run each (noise), 24 unchanged; pass@5
+31/35 → 33/36.** The clearest signal is `runtime-correct-1` 2/5 → 4/5 — exactly
+the case the fuzzy applier targets — plus trap-1 0/5 → 2/5.
+
+Also shipped in the npurun fork: `usage` reporting (exact completion tokens),
+token-precise `max_tokens`, mid-stream stop-sequence aborts, and the UTF-8
+char-boundary crash fix.
+
+### 14.6 Revised recommendations
+
+**Supersedes §5.1–5.2.** Keep v1's JSON action protocol as the default for
+qwen3-4b-instruct-2507. `hexcli/protocol_v2.py` + `loop_v2.py` stay in the tree
+behind `{"protocol": "v2"}`, fully tested — they are the right harness to
+**retest against Qwen3-4B-Thinking** (§4.1) or any bundle whose detokenizer
+isn't broken, and that retest is now a one-flag experiment with a trustworthy
+instrument behind it.
+
+**Unchanged and still the priority:** §6 context/latency work (the stable-prefix
+and compaction rebuild are protocol-independent), §7 safety, §9 runtime
+experiments (8K bundle, Rewind on a non-Qwen3 bundle, GenieX/Nexa bake-off),
+and §4's dual-model plan.
+
+**New lesson for the roadmap:** prompt *content* and prompt *architecture* are
+independent variables, and this model is far more sensitive to the former.
+Future work should change one at a time and measure — which the instrument now
+makes cheap.
