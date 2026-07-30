@@ -1180,9 +1180,25 @@ def render_models(config: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def trim_text(text: str, limit: int) -> str:
+    """Head-only truncation. Use trim_tool_output for command/tool results."""
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated to {limit} chars]"
+
+
+def trim_tool_output(text: str, limit: int) -> str:
+    """Head+tail truncation for tool results.
+
+    Command output carries its verdict at the END — exit summaries, stack
+    traces, assertion messages. v1.7's head-only trim hid exactly the part
+    the model needed to recover from a failure, so keep both ends.
+    """
+    if len(text) <= limit:
+        return text
+    head = int(limit * 0.6)
+    tail = max(0, limit - head)
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n...[{omitted} chars omitted]...\n{text[-tail:]}" if tail else trim_text(text, limit)
 
 
 def normalize_text(value: str) -> str:
@@ -1419,9 +1435,26 @@ def run_command_tool(
     return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
 
 
-def read_file_tool(path_text: str, output_limit: int) -> str:
+def read_file_tool(path_text: str, output_limit: int,
+                   offset: int = 0, limit: int = 0) -> str:
+    """Read a file. With offset/limit (1-based line numbers), read one page —
+    v1.7 could only ever see the head of a large file, with no way to page."""
     path = resolve_path(path_text)
     _check_sensitive_path(path, "read_file")
+    if path.is_dir():
+        raise RuntimeError(
+            f"{path} is a directory, not a file. Use list_directory to see its contents."
+        )
+    if offset or limit:
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        total = len(lines)
+        start = max(1, int(offset or 1))
+        count = max(1, int(limit or 400))
+        page = lines[start - 1:start - 1 + count]
+        end = min(start - 1 + len(page), total)
+        header = f"[lines {start}-{end} of {total}]\n" if (start > 1 or end < total) else ""
+        ui.tool_event("read", f"{path}  (lines {start}-{end} of {total})")
+        return header + trim_text("\n".join(page), output_limit)
     # Avoid loading huge files; read at most 4× output_limit bytes (UTF-8 max 4B/char).
     max_bytes = output_limit * 4
     try:
@@ -1439,6 +1472,17 @@ def read_file_tool(path_text: str, output_limit: int) -> str:
 
 
 def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
+    """Replace old_string with new_string.
+
+    Exact match first; when that fails, fall back to the 3-tier fuzzy applier
+    (trailing-whitespace-insensitive, then indent-shifted) rather than erroring
+    out — the v1.7 audit found the model frequently mis-copies whitespace or
+    indentation, and a hard failure there burned whole step budgets. Ambiguity
+    is still an error, never a guess, and a genuine no-match now reports the
+    closest region with line numbers so the retry has something to work with.
+    """
+    from .protocol_v2 import apply_search_replace
+
     path = resolve_path(path_text)
     _check_sensitive_path(path, "edit_file")
     if not old_string:
@@ -1446,9 +1490,12 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
     content = path.read_text(encoding="utf-8")
-    if old_string not in content:
-        raise RuntimeError(f"String not found in {path}:\n{old_string!r}")
-    new_content = content.replace(old_string, new_string, 1)
+    if content.count(old_string) == 1:
+        new_content = content.replace(old_string, new_string, 1)
+    else:
+        new_content, err = apply_search_replace(content, [(old_string, new_string)])
+        if err:
+            raise RuntimeError(err.replace("SEARCH block 1", "old_string"))
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(new_content, encoding="utf-8")
     tmp.replace(path)
@@ -2184,7 +2231,9 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         path = str(args.get("path") or "").strip()
         if not path:
             raise RuntimeError("read_file requires 'path'.")
-        return read_file_tool(path, limit)
+        return read_file_tool(path, limit,
+                              offset=int(args.get("offset") or 0),
+                              limit=int(args.get("limit") or 0))
     if tool == "edit_file":
         path = str(args.get("path") or "").strip()
         old = str(args.get("old_string") or "")
@@ -2439,6 +2488,11 @@ def run_autopilot(
     _turn_snapshots: dict[str, str | None] = {}
     # Rolling window for error-loop detection: (tool_name, output) tuples.
     _loop_tracker: list[tuple[str, str]] = []
+    # Verification-gated finish: after a successful file mutation the model
+    # must observe something (run/read/check) before its answer is accepted.
+    # One nudge per turn — it guides, never traps.
+    _unverified_mutation = False
+    _verify_nudge_used = False
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
@@ -2480,6 +2534,21 @@ def run_autopilot(
 
         if action["action"] == "finish":
             msg = action.get("message", "")
+            if (_unverified_mutation and not _verify_nudge_used
+                    and config.get("require_verification", True)):
+                _verify_nudge_used = True
+                changed = touched_paths[-1] if touched_paths else "the file"
+                messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"You modified {changed} but never verified the result. "
+                        f"Use read_file on {changed} (or run_code / verify_syntax if it "
+                        "is code) to confirm the change, then report what you actually "
+                        "observed. Respond with JSON only."
+                    ),
+                })
+                continue
             # Nudge once if the model refused to use tools
             if step == 0 and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES):
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
@@ -2545,6 +2614,12 @@ def run_autopilot(
         )
 
         last_tool_output = tool_output
+        _is_error = tool_output.lstrip().startswith("Error:")
+        if tool_name in {"edit_file", "write_file", "append_file"} and not _is_error:
+            _unverified_mutation = True
+        elif tool_name in {"read_file", "run_code", "verify_syntax", "lint_code",
+                           "run_command"} and not _is_error:
+            _unverified_mutation = False
         # Error-loop detection: if the last 3 (tool, output) pairs are identical,
         # the agent is cycling — stop early rather than burning the full step budget.
         _loop_tracker.append((tool_name, tool_output))
@@ -2573,7 +2648,7 @@ def run_autopilot(
             _probe(probe, "on_end", "loop_stop", last_tool_output or "Done.")
             return last_tool_output or "Done."
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
-        messages.append({"role": "user", "content": f"Tool output:\n{trim_text(tool_output, output_limit)}"})
+        messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, output_limit)}"})
 
     if session and last_tool_output:
         store_observation(session, query, last_tool_output)
