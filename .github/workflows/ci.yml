@@ -36,6 +36,9 @@ jobs:
       - name: Unit tests — v2 protocol + shell session
         run: python evals/test_protocol_v2.py
 
+      - name: Unit tests — v2 back-ports into the v1 protocol
+        run: python evals/test_backports.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 

@@ -103,6 +103,10 @@ def test_write_file_tool_executes() -> None:
             json.dumps({"action": "write_file", "args": {
                 "path": str(target), "content": "written by agent"
             }}),
+            # The verification gate deflects this first finish...
+            '{"action":"finish","message":"Written."}',
+            # ...so the agent reads the file back, then finishes for real.
+            json.dumps({"action": "read_file", "args": {"path": str(target)}}),
             '{"action":"finish","message":"Written."}',
         ])
         result = sa.run_autopilot(_CFG, [], "write the file", _SHELL)
@@ -120,11 +124,54 @@ def test_edit_file_modifies_content() -> None:
                 "old_string": "original content",
                 "new_string": "edited content",
             }}),
+            # Deflected once by the verification gate, then verified for real.
+            '{"action":"finish","message":"Edited."}',
+            json.dumps({"action": "read_file", "args": {"path": str(target)}}),
             '{"action":"finish","message":"Edited."}',
         ])
         result = sa.run_autopilot(_CFG, [], "edit it", _SHELL)
         assert "Edited." in result
         assert target.read_text(encoding="utf-8") == "edited content"
+
+
+def test_verification_gate_deflects_unverified_finish() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "gated.txt"
+        sa.set_mock_responses([
+            json.dumps({"action": "write_file", "args": {
+                "path": str(target), "content": "x"}}),
+            '{"action":"finish","message":"Done without checking."}',
+            json.dumps({"action": "read_file", "args": {"path": str(target)}}),
+            '{"action":"finish","message":"Verified: file contains x."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "write the gated file", _SHELL)
+        assert "Verified" in result, f"gate should force a verification pass, got: {result!r}"
+
+
+def test_verification_gate_nudges_only_once() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "stubborn.txt"
+        sa.set_mock_responses([
+            json.dumps({"action": "write_file", "args": {
+                "path": str(target), "content": "x"}}),
+            '{"action":"finish","message":"First."}',
+            '{"action":"finish","message":"Second."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "write the stubborn file", _SHELL)
+        assert "Second." in result, f"gate must not loop forever, got: {result!r}"
+
+
+def test_verification_gate_accepts_verified_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "checked.txt"
+        sa.set_mock_responses([
+            json.dumps({"action": "write_file", "args": {
+                "path": str(target), "content": "x"}}),
+            json.dumps({"action": "read_file", "args": {"path": str(target)}}),
+            '{"action":"finish","message":"Checked and correct."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "write and check the file", _SHELL)
+        assert result == "Checked and correct.", result
 
 
 def test_tool_sequence_uses_output_as_context() -> None:
@@ -846,6 +893,9 @@ TESTS = [
     test_read_file_tool_executes,
     test_write_file_tool_executes,
     test_edit_file_modifies_content,
+    test_verification_gate_deflects_unverified_finish,
+    test_verification_gate_nudges_only_once,
+    test_verification_gate_accepts_verified_turn,
     test_tool_sequence_uses_output_as_context,
     test_undo_snapshot_captured_for_edit,
     test_undo_snapshot_captured_for_write_new_file,
