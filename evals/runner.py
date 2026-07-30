@@ -318,6 +318,9 @@ def run_case_once(config: dict[str, Any], case: Case) -> RunOutcome:
                     return RunOutcome(False, str(exc), Trace(), invalid=True)
             run_config = dict(config)
             run_config["max_agent_steps"] = case.max_steps
+            # Non-streaming keeps eval logs clean; the LLM call is blocking
+            # either way, so latency semantics are unchanged.
+            run_config["use_streaming"] = False
             trace = Trace()
             t0 = time.perf_counter()
             try:
@@ -361,6 +364,7 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, A
                     p.write_text(content, encoding="utf-8")
             run_config = dict(config)
             run_config["max_agent_steps"] = sc.max_steps
+            run_config["use_streaming"] = False
             for spec in sc.turns:
                 trace = Trace()
                 t0 = time.perf_counter()
