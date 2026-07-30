@@ -123,7 +123,7 @@ def _tool_write(agent: Any, args: dict[str, Any], payload: str | None) -> str:
     if not path_text:
         return "Error: write requires 'path'."
     if payload is None:
-        return "Error: write requires its file content in a fenced block after </tool_call>."
+        return "Error: write requires its file content in a fenced block after </action>."
     return agent.write_file_tool(path_text, payload)
 
 
@@ -132,7 +132,7 @@ def _tool_edit(agent: Any, args: dict[str, Any], payload: list[tuple[str, str]] 
     if not path_text:
         return "Error: edit requires 'path'."
     if not payload:
-        return "Error: edit requires at least one SEARCH/REPLACE block after </tool_call>."
+        return "Error: edit requires at least one SEARCH/REPLACE block after </action>."
     path = agent.resolve_path(path_text)
     agent._check_sensitive_path(path, "edit")
     if not path.exists():

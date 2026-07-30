@@ -90,7 +90,7 @@ EXTENSION_CASES: list[Case] = [
          "number of files you saw — use the exact number from the listing.",
          setup={"x.txt": "x", "y.txt": "y", "z.txt": "z", "w.txt": "w"},
          verify=ck.all_of(
-             ck.tools_called("list_directory"),
+             ck.used_capability("list"),
              ck.file_has_int("count.txt", _count_files_except("count.txt")),
          ),
          tag="regression", expected_tools=("list_directory", "write_file")),
@@ -99,7 +99,7 @@ EXTENSION_CASES: list[Case] = [
          "again to confirm.",
          setup={"settings.json": '{\n  "env": "prod"\n}\n'},
          verify=ck.all_of(
-             ck.tools_called("read_file", "edit_file"),
+             ck.used_capability("read", "edit"),
              ck.json_file_expect("settings.json", {"debug": False}, preserved={"env": "prod"}),
          ),
          tag="regression", expected_tools=("read_file", "edit_file")),
@@ -166,7 +166,7 @@ EXTENSION_CASES: list[Case] = [
          "and confirm the fix is syntactically valid.",
          setup={"buggy.py": "def add(a, b) return a + b\n"},
          verify=ck.all_of(
-             ck.tools_called("verify_syntax"),
+             ck.verified_after_mutation(),
              ck.python_file_valid("buggy.py"),
          ),
          max_steps=8, tag="self_correct",
@@ -197,7 +197,8 @@ EXTENSION_CASES: list[Case] = [
              "print(summarise([\"a\", \"b\", \"c\"]))\n"
          )},
          verify=ck.all_of(
-             ck.tools_called("run_code", "verify_syntax"),
+             ck.ran_file("report.py"),
+             ck.verified_after_mutation(),
              ck.python_file_runs("report.py"),
          ),
          max_steps=10, tag="runtime_correct",
@@ -233,13 +234,13 @@ EXTENSION_CASES: list[Case] = [
          "'write code', then read it back.",
          verify=ck.all_of(
              ck.file_contains("todo.txt", "buy milk", "walk dog", "write code"),
-             ck.tools_called("write_file", "read_file"),
+             ck.used_capability("write", "read"),
          ),
          expected_tools=("write_file", "read_file")),
     Case("agentic-5", "agentic",
          "List the files in the current directory, then tell me how many end in '.txt'.",
          setup={"a.txt": "a", "b.txt": "b", "c.md": "c"},
-         verify=ck.all_of(ck.tools_called("list_directory"), ck.message_has_int(2)),
+         verify=ck.all_of(ck.used_capability("list"), ck.message_has_int(2)),
          max_steps=4, expected_tools=("list_directory",)),
 ]
 

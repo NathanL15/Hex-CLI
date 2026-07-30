@@ -61,6 +61,76 @@ def any_of(*fns: VerifyFn) -> VerifyFn:
 # Behavioral checks (trace)
 # ---------------------------------------------------------------------------
 
+# Protocol-neutral capability classes: cases assert WHAT happened, not which
+# protocol's tool name did it. v1 names on the left half, v2 on the right.
+CAPABILITIES: dict[str, frozenset[str]] = {
+    "write":  frozenset({"write_file", "append_file", "write"}),
+    "read":   frozenset({"read_file", "read"}),
+    "edit":   frozenset({"edit_file", "edit"}),
+    "list":   frozenset({"list_directory", "find_files", "shell"}),
+    "search": frozenset({"search_files", "grep", "shell"}),
+    "run":    frozenset({"run_command", "run_code", "shell"}),
+    "verify": frozenset({"verify_syntax", "run_code", "lint_code", "run_command",
+                         "shell", "read_file", "read"}),
+    "memory": frozenset({"search_memory"}),
+    "mutate": frozenset({"write_file", "append_file", "edit_file", "write", "edit"}),
+}
+
+
+def used_capability(*caps: str) -> VerifyFn:
+    """Every named capability class must have at least one matching tool call."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        used = set(trace.tools_used)
+        for cap in caps:
+            if not (CAPABILITIES[cap] & used):
+                return False, f"no {cap!r}-class tool was used; tools_used={trace.tools_used}"
+        return True, ""
+    return _verify
+
+
+def verified_after_mutation() -> VerifyFn:
+    """After the LAST successful file mutation there must be a successful
+    observation (run/read/check) — the protocol-neutral form of 'confirmed
+    the fix instead of assuming it'."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        last_mut = -1
+        for i, t in enumerate(trace.tool_calls):
+            if t.tool in CAPABILITIES["mutate"] and t.status == "ok":
+                last_mut = i
+        if last_mut == -1:
+            return False, f"no successful file mutation occurred; tools_used={trace.tools_used}"
+        for t in trace.tool_calls[last_mut + 1:]:
+            if t.tool in CAPABILITIES["verify"] and t.status == "ok":
+                return True, "verified after the final mutation"
+        return False, (f"nothing was verified after the final mutation; "
+                       f"tools_used={trace.tools_used}")
+    return _verify
+
+
+def used_linter() -> VerifyFn:
+    """lint_code (v1) or a shell/run command that invokes a linter (v2)."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        if "lint_code" in trace.tools_used:
+            return True, ""
+        for cmd in trace.commands():
+            if "ruff" in cmd.lower() or "lint" in cmd.lower() or "flake" in cmd.lower():
+                return True, ""
+        return False, f"no linter was invoked; tools_used={trace.tools_used}"
+    return _verify
+
+
+def ran_file(name: str) -> VerifyFn:
+    """Some run-class call actually executed `name` (arg-content inspected)."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        for t in trace.tool_calls:
+            if t.tool == "run_code" and name in str(t.args.get("path", "")):
+                return True, ""
+            if t.tool in ("run_command", "shell") and name in str(t.args.get("command", "")):
+                return True, ""
+        return False, f"{name} was never executed; tools_used={trace.tools_used}"
+    return _verify
+
+
 def no_tool_calls() -> VerifyFn:
     def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
         if trace.tool_calls:

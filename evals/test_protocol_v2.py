@@ -39,7 +39,7 @@ def test_empty_response_is_malformed() -> None:
 
 def test_tool_call_with_thought() -> None:
     raw = ('I should check the directory first.\n'
-           '<tool_call>\n{"name": "shell", "arguments": {"command": "Get-ChildItem"}}\n</tool_call>')
+           '<action>\n{"name": "shell", "arguments": {"command": "Get-ChildItem"}}\n</action>')
     r = p2.parse_response(raw)
     assert r.kind == "tool"
     assert r.tool == "shell"
@@ -49,7 +49,7 @@ def test_tool_call_with_thought() -> None:
 
 def test_think_block_stripped() -> None:
     raw = ('<think>internal reasoning</think>\n'
-           '<tool_call>{"name": "read", "arguments": {"path": "a.txt"}}</tool_call>')
+           '<action>{"name": "read", "arguments": {"path": "a.txt"}}</action>')
     r = p2.parse_response(raw)
     assert r.kind == "tool"
     assert r.tool == "read"
@@ -57,33 +57,33 @@ def test_think_block_stripped() -> None:
 
 
 def test_unknown_tool_is_malformed_with_tool_list() -> None:
-    r = p2.parse_response('<tool_call>{"name": "run_command", "arguments": {}}</tool_call>')
+    r = p2.parse_response('<action>{"name": "run_command", "arguments": {}}</action>')
     assert r.kind == "malformed"
     assert "run_command" in r.error and "shell" in r.error
 
 
 def test_invalid_json_header_has_precise_error() -> None:
-    r = p2.parse_response('<tool_call>{"name": "shell", "arguments": {"command": "echo \\z"}}</tool_call>')
+    r = p2.parse_response('<action>{"name": "shell", "arguments": {"command": "echo \\z"}}</action>')
     assert r.kind == "malformed"
     assert "JSON" in r.error
 
 
 def test_missing_close_tag() -> None:
-    r = p2.parse_response('<tool_call>{"name": "shell", "arguments": {}}')
+    r = p2.parse_response('<action>{"name": "shell", "arguments": {}}')
     assert r.kind == "malformed"
-    assert "</tool_call>" in r.error
+    assert "</action>" in r.error
 
 
 def test_multiple_tool_calls_rejected() -> None:
-    raw = ('<tool_call>{"name": "read", "arguments": {"path": "a"}}</tool_call>\n'
-           '<tool_call>{"name": "read", "arguments": {"path": "b"}}</tool_call>')
+    raw = ('<action>{"name": "read", "arguments": {"path": "a"}}</action>\n'
+           '<action>{"name": "read", "arguments": {"path": "b"}}</action>')
     r = p2.parse_response(raw)
     assert r.kind == "malformed"
     assert "ONE action" in r.error
 
 
 def test_args_alias_accepted() -> None:
-    r = p2.parse_response('<tool_call>{"name": "grep", "args": {"pattern": "todo"}}</tool_call>')
+    r = p2.parse_response('<action>{"name": "grep", "args": {"pattern": "todo"}}</action>')
     assert r.kind == "tool"
     assert r.args == {"pattern": "todo"}
 
@@ -93,7 +93,7 @@ def test_args_alias_accepted() -> None:
 # ---------------------------------------------------------------------------
 
 def test_edit_payload_single_block() -> None:
-    raw = ('<tool_call>{"name": "edit", "arguments": {"path": "app.py"}}</tool_call>\n'
+    raw = ('<action>{"name": "edit", "arguments": {"path": "app.py"}}</action>\n'
            "<<<<<<< SEARCH\n"
            "    return conut\n"
            "=======\n"
@@ -105,7 +105,7 @@ def test_edit_payload_single_block() -> None:
 
 
 def test_edit_payload_multiple_blocks() -> None:
-    raw = ('<tool_call>{"name": "edit", "arguments": {"path": "app.py"}}</tool_call>\n'
+    raw = ('<action>{"name": "edit", "arguments": {"path": "app.py"}}</action>\n'
            "<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n"
            "<<<<<<< SEARCH\nc\n=======\nd\n>>>>>>> REPLACE")
     r = p2.parse_response(raw)
@@ -114,7 +114,7 @@ def test_edit_payload_multiple_blocks() -> None:
 
 
 def test_edit_payload_missing_divider() -> None:
-    raw = ('<tool_call>{"name": "edit", "arguments": {"path": "a"}}</tool_call>\n'
+    raw = ('<action>{"name": "edit", "arguments": {"path": "a"}}</action>\n'
            "<<<<<<< SEARCH\nx\n>>>>>>> REPLACE")
     r = p2.parse_response(raw)
     assert r.kind == "malformed"
@@ -122,7 +122,7 @@ def test_edit_payload_missing_divider() -> None:
 
 
 def test_edit_payload_missing_block_entirely() -> None:
-    r = p2.parse_response('<tool_call>{"name": "edit", "arguments": {"path": "a"}}</tool_call>')
+    r = p2.parse_response('<action>{"name": "edit", "arguments": {"path": "a"}}</action>')
     assert r.kind == "malformed"
     assert "SEARCH/REPLACE" in r.error
 
@@ -130,7 +130,7 @@ def test_edit_payload_missing_block_entirely() -> None:
 def test_edit_multiline_content_never_touches_json() -> None:
     # The exact failure class that killed v1: multi-line replacement with
     # quotes and backslashes — here it needs no escaping at all.
-    raw = ('<tool_call>{"name": "edit", "arguments": {"path": "cfg.ps1"}}</tool_call>\n'
+    raw = ('<action>{"name": "edit", "arguments": {"path": "cfg.ps1"}}</action>\n'
            "<<<<<<< SEARCH\n"
            '$path = "C:\\old"\n'
            "=======\n"
@@ -143,7 +143,7 @@ def test_edit_multiline_content_never_touches_json() -> None:
 
 
 def test_write_payload_fence() -> None:
-    raw = ('<tool_call>{"name": "write", "arguments": {"path": "notes.txt"}}</tool_call>\n'
+    raw = ('<action>{"name": "write", "arguments": {"path": "notes.txt"}}</action>\n'
            "```\nhello world\nsecond line\n```")
     r = p2.parse_response(raw)
     assert r.kind == "tool", r.error
@@ -151,7 +151,7 @@ def test_write_payload_fence() -> None:
 
 
 def test_write_payload_fence_with_language_and_inner_backticks() -> None:
-    raw = ('<tool_call>{"name": "write", "arguments": {"path": "doc.md"}}</tool_call>\n'
+    raw = ('<action>{"name": "write", "arguments": {"path": "doc.md"}}</action>\n'
            "```markdown\n# Title\n\n`inline code`\n```")
     r = p2.parse_response(raw)
     assert r.kind == "tool", r.error
@@ -159,7 +159,7 @@ def test_write_payload_fence_with_language_and_inner_backticks() -> None:
 
 
 def test_write_payload_missing_fence() -> None:
-    r = p2.parse_response('<tool_call>{"name": "write", "arguments": {"path": "a.txt"}}</tool_call>')
+    r = p2.parse_response('<action>{"name": "write", "arguments": {"path": "a.txt"}}</action>')
     assert r.kind == "malformed"
     assert "fenced block" in r.error
 

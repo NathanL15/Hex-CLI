@@ -62,7 +62,7 @@ SMOKE_CASES: list[Case] = [
          "then read it back to confirm it saved correctly.",
          verify=ck.all_of(
              ck.file_contains("notes.txt", "hello world"),
-             ck.tools_called("write_file", "read_file"),
+             ck.used_capability("write", "read"),
          ),
          expected_tools=("write_file", "read_file")),
     Case("agentic-2", "agentic",
@@ -70,7 +70,7 @@ SMOKE_CASES: list[Case] = [
          "summary.txt containing just the count of files you found.",
          setup={"a.txt": "a", "b.txt": "b", "c.txt": "c"},
          verify=ck.all_of(
-             ck.tools_called("list_directory"),
+             ck.used_capability("list"),
              ck.file_has_int("summary.txt", _count_files_except("summary.txt")),
          ),
          expected_tools=("list_directory", "write_file")),
@@ -79,7 +79,7 @@ SMOKE_CASES: list[Case] = [
          "again to confirm the change.",
          setup={"config.json": '{\n  "name": "demo"\n}\n'},
          verify=ck.all_of(
-             ck.tools_called("read_file", "edit_file"),
+             ck.used_capability("read", "edit"),
              ck.json_file_expect("config.json", {"version": "1.0"}, preserved={"name": "demo"}),
          ),
          expected_tools=("read_file", "edit_file")),
@@ -91,7 +91,7 @@ SMOKE_CASES: list[Case] = [
               setup={"bad_imports.py": "import os\nimport sys\n\nx = 1\n"},
               max_steps=4, tag="lint",
               verify=ck.all_of(
-                  ck.tools_called("lint_code"),
+                  ck.used_linter(),
                   ck.message_contains_any("f401", "unused", "import"),
               ),
               expected_tools=("lint_code",))]
