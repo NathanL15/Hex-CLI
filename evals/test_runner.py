@@ -203,6 +203,20 @@ def test_sandbox_prompt_parity_includes_conditional_schema() -> None:
 # Statistics
 # ---------------------------------------------------------------------------
 
+def test_backend_failures_are_invalid_not_model_failures() -> None:
+    import urllib.error
+
+    from evals.runner import is_backend_failure
+    assert is_backend_failure(urllib.error.HTTPError("u", 500, "ISE", {}, None))
+    assert is_backend_failure(urllib.error.URLError("refused"))
+    assert is_backend_failure(ConnectionResetError())
+    assert is_backend_failure(RuntimeError("Genie status -6 (ERROR_QUERY_FAILED)"))
+    # A 4xx is a client bug and a plain exception is a real failure — neither
+    # may be excused as a backend problem.
+    assert is_backend_failure(urllib.error.HTTPError("u", 400, "Bad", {}, None)) is None
+    assert is_backend_failure(ValueError("bad args")) is None
+
+
 def test_wilson_interval_known_values() -> None:
     lo, hi = wilson_interval(5, 5)
     assert lo > 0.5 and hi == 1.0, (lo, hi)
@@ -379,6 +393,7 @@ TESTS = [
     test_eval_env_isolates_memory_rules_and_restores,
     test_eval_env_restores_cwd_and_patches,
     test_sandbox_prompt_parity_includes_conditional_schema,
+    test_backend_failures_are_invalid_not_model_failures,
     test_wilson_interval_known_values,
     test_aggregate_pass_semantics,
     test_int_grading_rejects_digit_concatenation,
