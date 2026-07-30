@@ -42,6 +42,9 @@ jobs:
       - name: Unit tests — context budget + deterministic compaction
         run: python evals/test_context_budget.py
 
+      - name: Unit tests — local escalation ladder
+        run: python evals/test_escalation.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 

@@ -30,7 +30,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from hexcli import distribution, escalate, lockfile, memory, network, safety, telemetry, ui
+from hexcli import (
+    distribution,
+    escalate,
+    local_escalation,
+    lockfile,
+    memory,
+    network,
+    safety,
+    telemetry,
+    ui,
+)
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
@@ -350,6 +360,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Override the derived history budget (tokens). Empty = derive from the
     # measured system-prompt size.
     "context_warn_tokens": 0,
+    # Local escalation ladder (docs/V2_PLAN.md §4): name of a bigger local
+    # npurun model to consult at hard moments (loop trips, ignored
+    # verification, prose-instead-of-edit). Empty = disabled. The server is
+    # spawned lazily on the bind address below and reused for the session.
+    "escalation_local_model": "",
+    "escalation_local_bind": "127.0.0.1:11436",
+    "escalation_max_output_tokens": 900,
+    "escalation_timeout_seconds": 240,
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -406,6 +424,23 @@ def _pop_mock_response() -> tuple[str, int]:
     if _MOCK_RESPONSE_QUEUE:
         return (_MOCK_RESPONSE_QUEUE.pop(0), _MOCK_EVAL_COUNT)
     return ('{"action":"finish","message":"Mock queue exhausted."}', 0)
+
+# One escalation server per (model, bind) for the process lifetime — spawning
+# a fresh 4.6 GB bundle load per consult would make escalation useless.
+_ESCALATORS: dict[str, local_escalation.LocalEscalator] = {}
+
+
+def _get_escalator(config: dict[str, Any]) -> local_escalation.LocalEscalator | None:
+    model = str(config.get("escalation_local_model", "") or "")
+    if not model:
+        return None
+    key = f"{model}@{config.get('escalation_local_bind', '127.0.0.1:11436')}"
+    esc = _ESCALATORS.get(key)
+    if esc is None:
+        esc = local_escalation.LocalEscalator(config)
+        _ESCALATORS[key] = esc
+    return esc if esc.enabled else None
+
 
 class AutopilotProbe:
     """Optional instrumentation hook for run_autopilot, used by evals/ to
@@ -2092,6 +2127,10 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "protocol":                       "str",
     "auto_compact_uses_llm":          "bool",
     "context_warn_tokens":            "int",
+    "escalation_local_model":         "str",
+    "escalation_local_bind":          "str",
+    "escalation_max_output_tokens":   "int",
+    "escalation_timeout_seconds":     "int",
     "anthropic_api_key":              "str",
     "escalation_model":               "str",
 }
@@ -2603,6 +2642,36 @@ def run_autopilot(
     # One nudge per turn — it guides, never traps.
     _unverified_mutation = False
     _verify_nudge_used = False
+    # Local escalation (docs/V2_PLAN.md §4 ladder): consult the bigger local
+    # model at hard moments. At most one consult per turn; every failure path
+    # degrades to the pre-escalation behaviour.
+    _escalator = _get_escalator(config)
+    _escalation_used = False
+    _turn_events: list[str] = []
+
+    def _consult_and_inject(problem: str, raw_response: str) -> bool:
+        """Ask the local escalation model for advice and inject it as the next
+        user message. Returns True when advice was injected."""
+        nonlocal _escalation_used
+        if _escalator is None or _escalation_used:
+            return False
+        cprint("\n  Consulting the local escalation model…", C.BCYAN, file=sys.stderr)
+        advice = _escalator.consult(
+            local_escalation.build_situation(query, _turn_events, problem))
+        if not advice:
+            return False
+        _escalation_used = True
+        if raw_response:
+            messages.append({"role": "assistant", "content": strip_thinking(raw_response)})
+        messages.append({
+            "role": "user",
+            "content": (
+                "A senior engineer reviewed the situation and advises:\n"
+                f"{advice}\n"
+                "Apply this advice now using the tools. Respond with JSON only."
+            ),
+        })
+        return True
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
@@ -2658,6 +2727,25 @@ def run_autopilot(
                         "observed. Respond with JSON only."
                     ),
                 })
+                continue
+            # Escalation trigger B — the verification nudge was ignored: the
+            # model finished a second time without checking its own mutation.
+            if (_unverified_mutation and _verify_nudge_used
+                    and config.get("require_verification", True)
+                    and _consult_and_inject(
+                        "The agent modified a file but is finishing WITHOUT verifying "
+                        "the change, even after being asked to verify.", raw)):
+                continue
+            # Escalation trigger C — prose instead of action: the task asks
+            # for a file change, nothing was mutated, and the finish is not a
+            # clarifying question (questions are the CORRECT outcome for
+            # ambiguous requests — never escalate those).
+            if (local_escalation.looks_like_edit_request(query)
+                    and not local_escalation.turn_mutated(tools_used)
+                    and not msg.rstrip().endswith("?")
+                    and _consult_and_inject(
+                        "The task asks for a file change, but the agent is finishing "
+                        f"without having modified any file. Its answer was: {msg[:300]}", raw)):
                 continue
             # Nudge once if the model refused to use tools
             if step == 0 and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES):
@@ -2724,6 +2812,7 @@ def run_autopilot(
         )
 
         last_tool_output = tool_output
+        _turn_events.append(f"{tool_name}: {tool_output[:220]}")
         _is_error = tool_output.lstrip().startswith("Error:")
         if tool_name in {"edit_file", "write_file", "append_file"} and not _is_error:
             _unverified_mutation = True
@@ -2736,7 +2825,15 @@ def run_autopilot(
         if len(_loop_tracker) > 3:
             _loop_tracker.pop(0)
         if len(_loop_tracker) == 3 and len(set(_loop_tracker)) == 1:
-            cprint("\n  ⚠ Agent appears stuck in a repeat loop (3 identical results). Stopping.", C.BYELLOW)
+            cprint("\n  ⚠ Agent appears stuck in a repeat loop (3 identical results).", C.BYELLOW)
+            # Escalation trigger A — the loop detector: consult the local
+            # model BEFORE giving up (the cloud path stays as the fallback).
+            if _consult_and_inject(
+                    f"The agent repeated the same failing call 3 times: {tool_name} "
+                    f"kept returning:\n{tool_output[:400]}", raw):
+                _loop_tracker.clear()
+                continue
+            cprint("  Stopping.", C.BYELLOW)
             if escalate.get_api_key(config):
                 try:
                     answer = input(
