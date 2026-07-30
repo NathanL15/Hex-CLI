@@ -36,7 +36,7 @@ V2_CONFIG: dict[str, Any] = {
 
 def _tc(name: str, **args: Any) -> str:
     import json
-    return f'<tool_call>\n{json.dumps({"name": name, "arguments": args})}\n</tool_call>'
+    return f'<action>\n{json.dumps({"name": name, "arguments": args})}\n</action>'
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def test_edit_search_replace_applies() -> None:
 
 def test_malformed_gets_precise_feedback_and_recovers() -> None:
     sa.set_mock_responses([
-        '<tool_call>{"name": "read", "arguments": {"path": "a.txt"}}',  # missing close tag
+        '<action>{"name": "read", "arguments": {"path": "a.txt"}}',  # missing close tag
         _tc("read", path="a.txt"),
         "The file says: content here.",
     ])

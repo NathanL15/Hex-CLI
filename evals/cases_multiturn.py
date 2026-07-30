@@ -82,7 +82,7 @@ def _snippet_exits_zero(sandbox: Path, snippet: str) -> tuple[bool, str]:
 
 
 def _uc1_t5_guard(sandbox: Path, trace: Trace, prior: list[Trace]) -> tuple[bool, str]:
-    ok, detail = _t(ck.tools_subsequence("edit_file", "verify_syntax", "run_code"))(sandbox, trace, prior)
+    ok, detail = _t(ck.all_of(ck.used_capability("edit"), ck.verified_after_mutation()))(sandbox, trace, prior)
     if not ok:
         return False, detail
     return _snippet_exits_zero(
@@ -93,7 +93,7 @@ def _uc1_t5_guard(sandbox: Path, trace: Trace, prior: list[Trace]) -> tuple[bool
 
 
 def _uc1_t6_report(sandbox: Path, trace: Trace, prior: list[Trace]) -> tuple[bool, str]:
-    ok, detail = _t(ck.tools_subsequence("edit_file", "verify_syntax", "run_code"))(sandbox, trace, prior)
+    ok, detail = _t(ck.all_of(ck.used_capability("edit"), ck.verified_after_mutation()))(sandbox, trace, prior)
     if not ok:
         return False, detail
     ok, detail = _t(ck.file_contains("processor.py", "def format_report"))(sandbox, trace, prior)
@@ -130,20 +130,23 @@ UC1 = Scenario(
         TurnSpec("uc1-t1",
                  "Read processor.py and describe its structure: what functions it "
                  "has, what each does, and any potential issues you can spot in the code.",
-                 _t(ck.all_of(ck.tools_called("read_file"),
+                 _t(ck.all_of(ck.used_capability("read"),
                               ck.message_contains("process_data", "calculate_stats")))),
         TurnSpec("uc1-t2",
                  "Run processor.py to see what happens at runtime.",
                  lambda s, t, p: (
-                     ("run_code" in t.tools_used
-                      and any("appned" in o or "AttributeError" in o for o in t.outputs_for("run_code"))),
-                     f"run_code must surface the AttributeError; tools={t.tools_used}",
+                     (ck.ran_file("processor.py")(s, t)[0]
+                      and any("appned" in c.output or "AttributeError" in c.output or "Error" in c.output
+                              for c in t.tool_calls
+                              if c.tool in ("run_code", "run_command", "shell"))),
+                     f"a run of processor.py must surface the AttributeError; tools={t.tools_used}",
                  )),
         TurnSpec("uc1-t3",
                  "You saw the runtime error. Fix the bug, verify the syntax is "
                  "valid, then run it again to confirm exit code 0.",
                  _t(ck.all_of(
-                     ck.tools_subsequence("edit_file", "verify_syntax", "run_code"),
+                     ck.used_capability("edit"),
+                     ck.verified_after_mutation(),
                      ck.file_contains("processor.py", ".append(", ci=False),
                      ck.python_file_runs("processor.py"),
                  ))),
@@ -153,7 +156,8 @@ UC1 = Scenario(
                  "two middle values for even-length lists). Verify syntax and run "
                  "to confirm the output now includes the median.",
                  _t(ck.all_of(
-                     ck.tools_subsequence("edit_file", "verify_syntax", "run_code"),
+                     ck.used_capability("edit"),
+                     ck.verified_after_mutation(),
                      ck.file_contains("processor.py", "median"),
                      ck.python_file_runs("processor.py"),
                  ))),
@@ -210,7 +214,8 @@ UC2 = Scenario(
                  "what we already have here to work with.",
                  lambda s, t, p: (
                      (any(name in t.tools_used for name in
-                          ("list_directory", "find_files", "search_files", "run_command"))
+                          ("list_directory", "find_files", "search_files", "run_command",
+                           "shell", "grep"))
                       and any(f in t.final_message for f in ("utils.py", "config.py", "main.py"))),
                      f"live-state flip must query the filesystem AND report the real "
                      f"files; tools={t.tools_used}, msg={t.final_message[:150]!r}",

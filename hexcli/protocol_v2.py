@@ -5,10 +5,13 @@ Design principles, in order of importance:
   1. No file content inside JSON, ever. Multi-line payloads (edits, writes)
      ride in plain-text blocks AFTER the action header, killing the JSON
      string-escaping failure class by construction.
-  2. The action header is the model's native tool-call format:
-     <tool_call>{"name": ..., "arguments": {...}}</tool_call>
-     (Qwen3 is post-trained on this Hermes-style template.)
-  3. A response with no <tool_call> IS the final answer — finishing is not a
+  2. The action header is a Hermes-shaped JSON envelope with PLAIN-token
+     markers: <action>{"name": ..., "arguments": {...}}</action>.
+     (Qwen3's true native tag, <tool_call>, is a special token that the
+     qwen3-4b w4a16 Genie bundle's detokenizer garbles — see the constant
+     comment below. The JSON shape stays Hermes-style, which the model
+     knows; only the wrapper tokens differ.)
+  3. A response with no <action> IS the final answer — finishing is not a
      tool, so finish messages can never be malformed.
   4. Free-text thought is allowed (and encouraged) before the action header;
      structure is only imposed on the header itself.
@@ -30,8 +33,12 @@ from typing import Any
 # Format constants
 # ---------------------------------------------------------------------------
 
-TOOL_CALL_OPEN = "<tool_call>"
-TOOL_CALL_CLOSE = "</tool_call>"
+# Plain-token action markers. NOT <tool_call>: that is a Qwen3 special token
+# and the qwen3-4b w4a16 Genie bundle's detokenizer garbles it (measured:
+# "Repeat exactly: <tool_call>hello</tool_call>" → "Fightinghello trespassing",
+# while <action>hello</action> round-trips perfectly). Regular tokens only.
+TOOL_CALL_OPEN = "<action>"
+TOOL_CALL_CLOSE = "</action>"
 SEARCH_MARK = "<<<<<<< SEARCH"
 DIVIDER_MARK = "======="
 REPLACE_MARK = ">>>>>>> REPLACE"
@@ -73,7 +80,7 @@ def parse_response(raw: str) -> ParsedResponse:
     if open_idx == -1:
         # No action header → the whole response is the final answer.
         if not text:
-            return ParsedResponse(kind="malformed", error="Empty response. Either reply with your final answer as plain text, or emit exactly one <tool_call> block.")
+            return ParsedResponse(kind="malformed", error="Empty response. Either reply with your final answer as plain text, or emit exactly one <action> block.")
         return ParsedResponse(kind="final", final_text=text)
 
     thought = text[:open_idx].strip()
@@ -81,7 +88,7 @@ def parse_response(raw: str) -> ParsedResponse:
     if close_idx == -1:
         return ParsedResponse(
             kind="malformed", thought=thought,
-            error="Found <tool_call> without a closing </tool_call>. Emit the action header as: <tool_call>{\"name\": \"...\", \"arguments\": {...}}</tool_call>",
+            error="Found <action> without a closing </action>. Emit the action header as: <action>{\"name\": \"...\", \"arguments\": {...}}</action>",
         )
 
     header = text[open_idx + len(TOOL_CALL_OPEN):close_idx].strip()
@@ -90,7 +97,7 @@ def parse_response(raw: str) -> ParsedResponse:
     if text.find(TOOL_CALL_OPEN, close_idx) != -1:
         return ParsedResponse(
             kind="malformed", thought=thought,
-            error="Multiple <tool_call> blocks found. Emit exactly ONE action per response.",
+            error="Multiple <action> blocks found. Emit exactly ONE action per response.",
         )
 
     try:
@@ -98,11 +105,11 @@ def parse_response(raw: str) -> ParsedResponse:
     except json.JSONDecodeError as exc:
         return ParsedResponse(
             kind="malformed", thought=thought,
-            error=f"The JSON inside <tool_call> is invalid ({exc.msg} at char {exc.pos}). Remember: file content never goes in the JSON — only in the payload block after </tool_call>.",
+            error=f"The JSON inside <action> is invalid ({exc.msg} at char {exc.pos}). Remember: file content never goes in the JSON — only in the payload block after </action>.",
         )
     if not isinstance(obj, dict):
         return ParsedResponse(kind="malformed", thought=thought,
-                              error="The <tool_call> header must be a JSON object with \"name\" and \"arguments\".")
+                              error="The <action> header must be a JSON object with \"name\" and \"arguments\".")
 
     tool = str(obj.get("name", "")).strip()
     args = obj.get("arguments", obj.get("args", {}))
@@ -112,7 +119,7 @@ def parse_response(raw: str) -> ParsedResponse:
         known = ", ".join(sorted(TOOL_NAMES_V2))
         return ParsedResponse(
             kind="malformed", thought=thought,
-            error=f"Unknown tool {tool!r}. Available tools: {known}. To give your final answer, reply with plain text and no <tool_call>.",
+            error=f"Unknown tool {tool!r}. Available tools: {known}. To give your final answer, reply with plain text and no <action>.",
         )
 
     payload: Any = None
@@ -169,7 +176,7 @@ def _parse_search_replace(rest: str) -> tuple[list[tuple[str, str]] | None, str]
     if not blocks:
         return None, (
             "The edit tool needs at least one SEARCH/REPLACE block after "
-            f"</tool_call>:\n{SEARCH_MARK}\n<exact existing lines>\n{DIVIDER_MARK}\n"
+            f"</action>:\n{SEARCH_MARK}\n<exact existing lines>\n{DIVIDER_MARK}\n"
             f"<replacement lines>\n{REPLACE_MARK}"
         )
     return blocks, ""
@@ -183,7 +190,7 @@ def _parse_fence(rest: str) -> tuple[str | None, str]:
     m = _FENCE_OPEN_RE.search(rest)
     if not m:
         return None, ("The write tool needs its file content in a fenced block after "
-                      "</tool_call>:\n```\n<file content>\n```")
+                      "</action>:\n```\n<file content>\n```")
     body_start = m.end()
     close = rest.rfind("\n```")
     if close == -1 or close < body_start - 1:
@@ -316,27 +323,29 @@ SYSTEM_PROMPT_V2 = """You are Hex, a local terminal agent on a Windows 11 machin
 ## How to respond
 Think briefly in plain text first if it helps. Then EITHER:
 - emit exactly ONE action header to use a tool:
-<tool_call>
+<action>
 {"name": "<tool>", "arguments": {...}}
-</tool_call>
-- OR reply with plain text and no <tool_call> — that is your final answer and ends the task.
+</action>
+- OR reply with plain text and no <action> — that is your final answer and ends the task.
+
+NEVER describe what you are about to do in plain text ("I will list the files...") — that ends the task without doing it. If work remains, your response must BE an <action> block.
 
 After each tool runs, its output comes back inside <tool_response> tags. Base every claim on that literal output — never estimate counts, never report success you have not observed.
 
 ## Tools
 - shell — run a PowerShell command in a persistent session (cwd and variables survive between calls). arguments: {"command": "..."}
 - read — read a file. arguments: {"path": "...", "offset": <line, optional>, "limit": <lines, optional>}
-- write — create or overwrite a file. arguments: {"path": "..."}; the file content goes in a fenced block AFTER </tool_call>, never in the JSON:
-<tool_call>
+- write — create or overwrite a file. arguments: {"path": "..."}; the file content goes in a fenced block AFTER </action>, never in the JSON:
+<action>
 {"name": "write", "arguments": {"path": "notes.txt"}}
-</tool_call>
+</action>
 ```
 file content here
 ```
-- edit — change part of an existing file. arguments: {"path": "..."}; the change goes in a SEARCH/REPLACE block AFTER </tool_call>. SEARCH must copy the existing lines exactly; keep it small but unique:
-<tool_call>
+- edit — change part of an existing file. arguments: {"path": "..."}; the change goes in a SEARCH/REPLACE block AFTER </action>. SEARCH must copy the existing lines exactly; keep it small but unique:
+<action>
 {"name": "edit", "arguments": {"path": "app.py"}}
-</tool_call>
+</action>
 <<<<<<< SEARCH
     return f"{conut} items"
 =======

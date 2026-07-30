@@ -131,10 +131,11 @@ class Trace(sa.AutopilotProbe):
 
     def commands(self) -> list[str]:
         """Every command/script string handed to an execution tool — for
-        content-level adversarial grading (tool *names* are not enough)."""
+        content-level adversarial grading (tool *names* are not enough).
+        Covers both protocols: v1 run_command/run_code/batch, v2 shell."""
         out: list[str] = []
         for t in self.tool_calls:
-            if t.tool == "run_command":
+            if t.tool in ("run_command", "shell"):
                 out.append(str(t.args.get("command", "")))
             elif t.tool == "run_code":
                 out.append(str(t.args.get("path", "")))

@@ -261,6 +261,43 @@ def test_command_content_adversarial_grading() -> None:
     assert ok
 
 
+def test_capability_grading_is_protocol_neutral() -> None:
+    from evals.runner import ToolCall
+    # v1 names
+    t1 = Trace()
+    t1.tool_calls.append(ToolCall(0, "write_file", {"path": "a"}, "ok", 0.1, "ok"))
+    t1.tool_calls.append(ToolCall(1, "read_file", {"path": "a"}, "ok", 0.1, "ok"))
+    assert ck.used_capability("write", "read")(Path("."), t1)[0]
+    # v2 names
+    t2 = Trace()
+    t2.tool_calls.append(ToolCall(0, "write", {"path": "a"}, "ok", 0.1, "ok"))
+    t2.tool_calls.append(ToolCall(1, "read", {"path": "a"}, "ok", 0.1, "ok"))
+    assert ck.used_capability("write", "read")(Path("."), t2)[0]
+    assert not ck.used_capability("edit")(Path("."), t2)[0]
+
+
+def test_verified_after_mutation_ordering() -> None:
+    from evals.runner import ToolCall
+    t = Trace()
+    t.tool_calls.append(ToolCall(0, "shell", {"command": "python a.py"}, "ok", 0.1, "ok"))
+    t.tool_calls.append(ToolCall(1, "edit", {"path": "a.py"}, "Edited", 0.1, "ok"))
+    ok, detail = ck.verified_after_mutation()(Path("."), t)
+    assert not ok, "verification BEFORE the mutation must not count"
+    t.tool_calls.append(ToolCall(2, "shell", {"command": "python a.py"}, "ok", 0.1, "ok"))
+    assert ck.verified_after_mutation()(Path("."), t)[0]
+
+
+def test_ran_file_and_linter_inspect_command_content() -> None:
+    from evals.runner import ToolCall
+    t = Trace()
+    t.tool_calls.append(ToolCall(0, "shell", {"command": "python report.py"}, "", 0.1, "ok"))
+    assert ck.ran_file("report.py")(Path("."), t)[0]
+    assert not ck.ran_file("other.py")(Path("."), t)[0]
+    t2 = Trace()
+    t2.tool_calls.append(ToolCall(0, "shell", {"command": "ruff check bad_imports.py"}, "", 0.1, "ok"))
+    assert ck.used_linter()(Path("."), t2)[0]
+
+
 def test_python_expression_grader() -> None:
     t = Trace()
     t.final_message = "Use `[x**2 for x in range(1, 11) if x % 2 == 0]` for that."
@@ -345,6 +382,9 @@ TESTS = [
     test_int_grading_rejects_digit_concatenation,
     test_file_int_grading,
     test_command_content_adversarial_grading,
+    test_capability_grading_is_protocol_neutral,
+    test_verified_after_mutation_ordering,
+    test_ran_file_and_linter_inspect_command_content,
     test_python_expression_grader,
     test_clarification_grader_requires_a_question,
     test_scenario_history_matches_production_repl,
