@@ -41,6 +41,11 @@ sys.path.insert(0, str(APP_DIR))
 import hexcli.agent as sa  # noqa: E402
 from hexcli import memory  # noqa: E402
 
+# Mirror production main(): point the embedder at the local ONNX model so
+# memory-dependent cases are runnable (they mark themselves INVALID when the
+# model is absent rather than failing the model).
+memory.set_local_model_path(APP_DIR / "onnx" / "model_qint8_arm64.onnx")
+
 CONFIG_PATH = APP_DIR / "shellai_npurun.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
