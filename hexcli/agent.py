@@ -342,6 +342,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Agent protocol: "v1" (JSON action loop) or "v2" (native tool-call format,
     # payload-block edits, persistent shell — see docs/V2_PLAN.md §5).
     "protocol": "v1",
+    # Auto-compact is deterministic (no LLM call) by default: summarising via
+    # the same model that is already at its context cliff produced unverified
+    # summaries and cost a full extra re-prefill. Set true to restore the
+    # LLM summariser for auto-compact; explicit /compact always uses it.
+    "auto_compact_uses_llm": False,
+    # Override the derived history budget (tokens). Empty = derive from the
+    # measured system-prompt size.
+    "context_warn_tokens": 0,
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -2041,6 +2049,8 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
     "protocol":                       "str",
+    "auto_compact_uses_llm":          "bool",
+    "context_warn_tokens":            "int",
     "anthropic_api_key":              "str",
     "escalation_model":               "str",
 }
@@ -2323,6 +2333,65 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
 # ---------------------------------------------------------------------------
 # /compact
 # ---------------------------------------------------------------------------
+
+def compact_history_deterministic(
+    session: dict[str, Any],
+    keep_recent: int = 4,
+    stub_chars: int = 160,
+    total_stub_chars: int = 900,
+) -> list[dict[str, str]]:
+    """Compact history WITHOUT an LLM call.
+
+    Auto-compact used to summarise via the same 4B model that was already at
+    its degradation cliff — the worst possible moment to ask it for a faithful
+    summary, and a full extra re-prefill besides (review finding W10). This
+    keeps the most recent turns verbatim and reduces older ones to one-line
+    stubs: instant, free, and impossible to hallucinate. The LLM summariser
+    stays available for explicit /compact, where the user opts into the cost.
+    """
+    messages: list[dict[str, str]] = list(session.get("messages", []))
+    if len(messages) <= keep_recent + 1:
+        return messages
+
+    head, tail = messages[:-keep_recent], messages[-keep_recent:]
+    # Build stubs newest-first and stop at the total budget: recent context is
+    # worth more than old, and an unbounded stub list just recreates the
+    # oversized history we are trying to shed.
+    stub_lines: list[str] = []
+    used = 0
+    dropped = 0
+    for m in reversed(head):
+        text = " ".join((m.get("content") or "").split())
+        if not text:
+            continue
+        who = "You" if m.get("role") == "user" else "Hex"
+        line = f"- {who}: {text[:stub_chars]}" + ("…" if len(text) > stub_chars else "")
+        if used + len(line) > total_stub_chars:
+            dropped += 1
+            continue
+        stub_lines.append(line)
+        used += len(line)
+    stub_lines.reverse()
+    if dropped:
+        stub_lines.insert(0, f"- […{dropped} earlier turn(s) dropped]")
+
+    new_messages: list[dict[str, str]] = [
+        {
+            "role": "user",
+            "content": ("[Earlier turns, condensed:]\n" + "\n".join(stub_lines)
+                        + "\n[Continue from here]"),
+        },
+        {
+            "role": "assistant",
+            "content": "Understood — continuing with that context in mind.",
+        },
+        *tail,
+    ]
+    session["messages"] = new_messages
+    session["compact_count"] = session.get("compact_count", 0) + 1
+    touch_session(session)
+    return new_messages
+
 
 def compact_history(
     config: dict[str, Any],
@@ -2747,13 +2816,39 @@ def one_shot_command_mode(
 # Context warning
 # ---------------------------------------------------------------------------
 
-# Eval showed Rule 15 degradation onset at ~2,600 total input tokens, of which
-# the system prompt accounts for ~1,200 tokens. Auto-compact when session history
-# alone approaches that margin so the user never manually hits the cliff.
-# Recalibrated for v1.3: base prompt ~1,000 tokens (search_memory/fetch_url/batch are
-# conditional). Warn at 1,300 history tokens → total ~2,450 (under 2,600 cliff).
-_CONTEXT_WARN_TOKENS = 1_300
-_CONTEXT_CRIT_TOKENS = 1_600
+# Total input tokens at which qwen3-4b-instruct-2507 starts dropping structure
+# (measured: multi-turn runs collapse from ~2,560 est. input tokens onward).
+_DEGRADATION_CLIFF_TOKENS = 2_600
+# Reserve for the parts of a turn that are neither system prompt nor history:
+# workspace snapshot, the user's query, and the first tool result coming back.
+_TURN_OVERHEAD_TOKENS = 500
+# Never demand compaction below this — pathological when the prompt is huge.
+_MIN_HISTORY_BUDGET_TOKENS = 250
+
+
+def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
+    """Return (warn, critical) history-token thresholds derived from the ACTUAL
+    system prompt size.
+
+    v1.3–v1.7 hardcoded warn=1,300 on a comment claiming the base prompt was
+    ~1,000 tokens. It is really ~2,100, so auto-compact fired ~900 tokens PAST
+    the degradation cliff — i.e. the safety net never once fired in time, which
+    is what made multi-turn coding sessions collapse from turn 4 (see
+    docs/V2_PLAN.md §14). Measuring the prompt instead of guessing keeps this
+    honest when the prompt changes again.
+    """
+    override = config.get("context_warn_tokens")
+    if override:
+        return int(override), int(override) * 5 // 4
+    try:
+        base = len(build_autopilot_prompt(
+            cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15)),
+        )) // 4
+    except Exception:
+        base = 2_100
+    warn = max(_MIN_HISTORY_BUDGET_TOKENS,
+               _DEGRADATION_CLIFF_TOKENS - base - _TURN_OVERHEAD_TOKENS)
+    return warn, warn * 5 // 4
 
 
 def _maybe_auto_compact(
@@ -2761,22 +2856,27 @@ def _maybe_auto_compact(
     session: dict[str, Any],
     sessions: list[dict[str, Any]],
 ) -> None:
-    """Silently compact history when it approaches the 4B instruction-following cliff.
+    """Silently compact history when the NEXT turn would cross the 4B
+    instruction-following cliff.
 
-    Fires after each autopilot turn. At ≥1,300 history tokens the compact runs
-    automatically so TTFT never crosses the degradation threshold. The full
-    summary is suppressed (quiet=True); only a one-line notice is printed.
+    Fires after each autopilot turn. The threshold is derived from the actual
+    system-prompt size (see _history_budget_tokens), not a hardcoded guess.
+    The full summary is suppressed (quiet=True); only a one-line notice prints.
     """
     msgs = session.get("messages", [])
     est = sum(len(m.get("content", "")) for m in msgs) // 4
-    if est < _CONTEXT_WARN_TOKENS:
+    warn_tokens, crit_tokens = _history_budget_tokens(config)
+    if est < warn_tokens:
         return
     label = f"~{est:,} tokens"
-    if est >= _CONTEXT_CRIT_TOKENS:
+    if est >= crit_tokens:
         label += " — past degradation threshold"
     cprint(f"  Context {label} — auto-compacting…", C.BCYAN)
     try:
-        compact_history(config, session, quiet=True)
+        if config.get("auto_compact_uses_llm", False):
+            compact_history(config, session, quiet=True)
+        else:
+            compact_history_deterministic(session)
         sync_session_store(sessions, session)
         n_after = len(session.get("messages", []))
         cprint(f"  Auto-compacted. {n_after} active messages.", C.DIM)
@@ -2917,7 +3017,11 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
 
         # ── context ───────────────────────────────────────────────────────
         if norm == "/context":
-            show_context(current_session, config)
+            _sys_tokens = len(build_autopilot_prompt(
+                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15)))) // 4
+            show_context(current_session, config,
+                         budget=_history_budget_tokens(config),
+                         system_prompt_tokens=_sys_tokens)
             continue
 
         # ── models ────────────────────────────────────────────────────────

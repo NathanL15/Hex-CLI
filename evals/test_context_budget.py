@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""evals/test_context_budget.py — Unit tests for the v1.8 context-budget fix.
+
+Background (docs/V2_PLAN.md §14): v1.3–v1.7 hardcoded an auto-compact warn
+threshold of 1,300 history tokens on the belief that the system prompt was
+~1,000 tokens. It is really ~2,100, so the safety net fired ~900 tokens PAST
+the measured ~2,600-token degradation cliff — i.e. never in time. That is what
+made multi-turn coding sessions collapse from turn 4 onward.
+
+These tests pin the two halves of the fix:
+  * the budget is DERIVED from the measured prompt, so it stays honest when
+    the prompt changes again
+  * auto-compact is deterministic (no LLM call), because summarising with a
+    model already at its cliff is both slow and unreliable
+
+Usage:
+    python evals/test_context_budget.py
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import hexcli.agent as sa  # noqa: E402
+
+_CFG: dict[str, Any] = {**sa.DEFAULT_CONFIG, "backend": "mock", "memory_enabled": False}
+
+
+# ---------------------------------------------------------------------------
+# Derived budget
+# ---------------------------------------------------------------------------
+
+def test_budget_is_derived_not_hardcoded() -> None:
+    warn, crit = sa._history_budget_tokens(_CFG)
+    base = len(sa.build_autopilot_prompt(cwd=".", max_steps=15)) // 4
+    assert crit > warn, (warn, crit)
+    # The whole point: warn + base + overhead must land at or under the cliff.
+    assert warn + base <= sa._DEGRADATION_CLIFF_TOKENS, (
+        f"budget {warn} + prompt {base} = {warn + base} exceeds the "
+        f"{sa._DEGRADATION_CLIFF_TOKENS}-token cliff"
+    )
+
+
+def test_budget_never_below_floor() -> None:
+    # Even a pathologically huge prompt must leave a usable floor rather than
+    # demanding compaction of an empty history.
+    original = sa._AUTOPILOT_TEMPLATE
+    try:
+        sa._AUTOPILOT_TEMPLATE = "x" * 40_000 + "{date}{cwd}{max_steps}"
+        warn, _ = sa._history_budget_tokens(_CFG)
+        assert warn == sa._MIN_HISTORY_BUDGET_TOKENS, warn
+    finally:
+        sa._AUTOPILOT_TEMPLATE = original
+
+
+def test_budget_respects_explicit_override() -> None:
+    warn, crit = sa._history_budget_tokens({**_CFG, "context_warn_tokens": 900})
+    assert warn == 900 and crit == 1125, (warn, crit)
+
+
+def test_old_hardcoded_threshold_would_have_missed_the_cliff() -> None:
+    """Regression guard for the actual v1.7 bug."""
+    base = len(sa.build_autopilot_prompt(cwd=".", max_steps=15)) // 4
+    assert base + 1_300 > sa._DEGRADATION_CLIFF_TOKENS, (
+        "if this fails the prompt shrank enough that the old constant would "
+        "have been fine — re-derive the story before changing the test"
+    )
+    warn, _ = sa._history_budget_tokens(_CFG)
+    assert warn < 1_300, "the derived budget must be tighter than the old constant"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic compaction
+# ---------------------------------------------------------------------------
+
+def _session(n_pairs: int) -> dict[str, Any]:
+    msgs: list[dict[str, str]] = []
+    for i in range(n_pairs):
+        msgs.append({"role": "user", "content": f"question number {i} " + "detail " * 40})
+        msgs.append({"role": "assistant", "content": f"answer number {i} " + "words " * 40})
+    return {"id": "t", "messages": msgs}
+
+
+def test_deterministic_compaction_shrinks_and_keeps_tail() -> None:
+    s = _session(10)
+    before = sum(len(m["content"]) for m in s["messages"])
+    last = s["messages"][-1]["content"]
+    out = sa.compact_history_deterministic(s)
+    after = sum(len(m["content"]) for m in out)
+    assert after < before // 2, (before, after)
+    assert out[-1]["content"] == last, "most recent turn must survive verbatim"
+    assert "Earlier turns, condensed" in out[0]["content"]
+    assert s["compact_count"] == 1
+
+
+def test_deterministic_compaction_makes_no_llm_call() -> None:
+    # An empty mock queue would return the "queue exhausted" sentinel; assert
+    # the queue is untouched, proving no call happened.
+    sa.set_mock_responses(['{"action":"finish","message":"SENTINEL"}'])
+    sa.compact_history_deterministic(_session(8))
+    assert len(sa._MOCK_RESPONSE_QUEUE) == 1, "compaction must not consume an LLM call"
+
+
+def test_deterministic_compaction_noop_on_short_history() -> None:
+    s = {"id": "t", "messages": [{"role": "user", "content": "hi"}]}
+    out = sa.compact_history_deterministic(s)
+    assert out == s["messages"]
+    assert "compact_count" not in s
+
+
+def test_deterministic_compaction_preserves_recent_facts() -> None:
+    s = _session(8)
+    s["messages"][-2]["content"] = "the API key lives in config/secrets.toml"
+    out = sa.compact_history_deterministic(s)
+    joined = " ".join(m["content"] for m in out)
+    assert "config/secrets.toml" in joined, "recent concrete facts must survive"
+
+
+def test_auto_compact_uses_deterministic_path_by_default() -> None:
+    s = _session(12)
+    sessions = [s]
+    sa.set_mock_responses(['{"action":"finish","message":"SENTINEL"}'])
+    sa._maybe_auto_compact({**_CFG, "context_warn_tokens": 10}, s, sessions)
+    assert len(sa._MOCK_RESPONSE_QUEUE) == 1, "default auto-compact must not call the LLM"
+    assert s.get("compact_count") == 1, "auto-compact should have fired"
+
+
+TESTS = [
+    test_budget_is_derived_not_hardcoded,
+    test_budget_never_below_floor,
+    test_budget_respects_explicit_override,
+    test_old_hardcoded_threshold_would_have_missed_the_cliff,
+    test_deterministic_compaction_shrinks_and_keeps_tail,
+    test_deterministic_compaction_makes_no_llm_call,
+    test_deterministic_compaction_noop_on_short_history,
+    test_deterministic_compaction_preserves_recent_facts,
+    test_auto_compact_uses_deterministic_path_by_default,
+]
+
+
+def _run(fn: Any) -> bool:
+    try:
+        fn()
+        print(f"  PASS  {fn.__name__}")
+        return True
+    except AssertionError as exc:
+        print(f"  FAIL  {fn.__name__}: {exc}")
+        return False
+    except Exception as exc:
+        print(f"  ERROR {fn.__name__}: {type(exc).__name__}: {exc}")
+        return False
+
+
+def main() -> int:
+    print(f"\nevals/test_context_budget.py — {len(TESTS)} unit tests\n")
+    results = [_run(t) for t in TESTS]
+    passed = sum(results)
+    failed = len(results) - passed
+    print(f"\n{passed}/{len(results)} passed", "✓" if failed == 0 else f"— {failed} FAILED")
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

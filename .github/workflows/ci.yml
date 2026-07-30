@@ -39,6 +39,9 @@ jobs:
       - name: Unit tests — v2 back-ports into the v1 protocol
         run: python evals/test_backports.py
 
+      - name: Unit tests — context budget + deterministic compaction
+        run: python evals/test_context_budget.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 

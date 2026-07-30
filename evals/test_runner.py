@@ -338,6 +338,33 @@ def test_clarification_grader_requires_a_question() -> None:
 # Scenario driver
 # ---------------------------------------------------------------------------
 
+def test_scenario_driver_applies_auto_compaction() -> None:
+    """The scenario driver must run the REPL's auto-compact step, or the eval
+    silently diverges from production on exactly the long sessions it tests."""
+    long_answer = "detail " * 300  # ~2100 chars per turn, forces the budget
+    sa.set_mock_responses([_finish(long_answer)] * 6)
+    specs = [
+        TurnSpec(f"t{i}", f"Please give me a long answer about topic {i}.",
+                 lambda s, t, prior: (True, ""))
+        for i in range(1, 6)
+    ]
+    # Assert on the LAST turn's prompt: it must contain the compaction marker
+    # rather than every prior turn verbatim.
+    specs[-1] = TurnSpec(
+        "t5", "One more long answer please.",
+        lambda s, t, prior: (
+            any("Earlier turns, condensed" in m.get("content", "")
+                for m in t.initial_messages),
+            "history was never compacted — REPL parity broken",
+        ),
+    )
+    sc = Scenario("t-compact", turns=specs, max_steps=2)
+    cfg = {**MOCK_CONFIG, "context_warn_tokens": 400}
+    res = run_scenario_once(cfg, sc)
+    last = res["turns"][-1]
+    assert last["ok"], last["detail"]
+
+
 def test_scenario_history_matches_production_repl() -> None:
     sa.set_mock_responses([
         _finish("The answer is BLUE."),
@@ -404,6 +431,7 @@ TESTS = [
     test_ran_file_and_linter_inspect_command_content,
     test_python_expression_grader,
     test_clarification_grader_requires_a_question,
+    test_scenario_driver_applies_auto_compaction,
     test_scenario_history_matches_production_repl,
 ]
 
