@@ -351,6 +351,23 @@ improved, 4 regressed by a single run each (noise), 24 unchanged; pass@5
 31/35 → 33/36.** The clearest signal is `runtime-correct-1` 2/5 → 4/5 — exactly
 the case the fuzzy applier targets — plus trap-1 0/5 → 2/5.
 
+Multi-turn (3 runs, 0 invalid) is the sharper result:
+
+| Turn | Baseline | +back-ports | 1st-LLM latency |
+|---|---|---|---|
+| uc1-t3 (fix the bug) | 0/3 | **3/3** | 10.0s → 12.5s |
+| uc1-t4/t5/t6 | 0/3 | 0/3 | — |
+| uc1-t6 (deepest context) | 0/3 | 0/3 | **28.9s → 15.2s** |
+| uc2 (all six) | 17/18 | 17/18 | unchanged |
+| uc3 injections | 0/3 | 0/3 | unchanged |
+
+The coding loop's collapse point moved from turn 3 to turn 4: the fuzzy applier
+fixes the *edit-apply* failures that were burning the step budget, and latency
+at the deep end halves because edits land first try instead of spiralling. What
+remains at t4–t6 is the **context cliff** (~2,560+ est. input tokens) — §6's
+work, not an edit problem. uc3's injection compliance is unchanged because that
+needs §7's deterministic safety layer; no prompt or edit fix will move it.
+
 Also shipped in the npurun fork: `usage` reporting (exact completion tokens),
 token-precise `max_tokens`, mid-stream stop-sequence aborts, and the UTF-8
 char-boundary crash fix.
