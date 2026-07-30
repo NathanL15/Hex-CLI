@@ -1294,16 +1294,57 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
             return parsed
     except json.JSONDecodeError:
         pass
-    # Extract first {...} block
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
+    # Extract the FIRST complete {...} object by brace balancing.
+    #
+    # This used to be a greedy re.search(r"\{.*\}"), which spans from the first
+    # brace to the LAST one. When the model emits several actions in a row —
+    # {"action":"edit_file",…},{"action":"verify_syntax",…},{"action":"run_code",…}
+    # — that match is not valid JSON, so the whole response was discarded, the
+    # identical retry was issued up to 3×, and the turn ended with no tool call
+    # at all. Measured 2026-07-30: this is what actually killed uc1-t4/t5/t6
+    # (0/3 each), NOT a context-length cliff. Batching is a natural response to
+    # rules that prescribe an edit→verify→run sequence, so take the first
+    # action and let the loop drive the rest.
+    for candidate in _iter_json_objects(text):
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(candidate)
             if isinstance(parsed, dict):
                 return parsed
         except json.JSONDecodeError:
-            pass
+            continue
     return None
+
+
+def _iter_json_objects(text: str):
+    """Yield complete brace-balanced {...} substrings, in order.
+
+    String-literal aware, so braces inside JSON strings never affect depth.
+    """
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield text[start:i + 1]
+                    start = -1
 
 
 def extract_command(raw_text: str) -> str:
