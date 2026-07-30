@@ -232,6 +232,25 @@ def test_atomic_block_with_windows_content_no_escaping() -> None:
     assert r.payload == '$path = "C:\\new"\nWrite-Host "quoted \\"x\\""'
 
 
+def test_edit_json_old_new_string_fallback() -> None:
+    # Round-4 live traces: the model's strongest instinct is v1-style JSON
+    # args — accept them and funnel into the fuzzy applier.
+    raw = ('<action>{"name": "edit", "arguments": {"path": "app.py", '
+           '"old_string": "return conut", "new_string": "return count"}}</action>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.payload == [("return conut", "return count")]
+    assert "old_string" not in r.args
+
+
+def test_edit_json_whole_file_content_is_steered() -> None:
+    raw = ('<action>{"name": "edit", "arguments": {"path": "app.py", '
+           '"content": "whole new file"}}</action>')
+    r = p2.parse_response(raw)
+    assert r.kind == "malformed"
+    assert "old_string" in r.error and "new_string" in r.error
+
+
 def test_recall_tool_accepted_search_memory_rejected() -> None:
     r = p2.parse_response('<action>{"name": "recall", "arguments": {"query": "x"}}</action>')
     assert r.kind == "tool" and r.tool == "recall"
@@ -422,6 +441,8 @@ TESTS = [
     test_atomic_edit_block_missing_divider_is_precise,
     test_lone_open_tag_gets_template_error,
     test_atomic_block_with_windows_content_no_escaping,
+    test_edit_json_old_new_string_fallback,
+    test_edit_json_whole_file_content_is_steered,
     test_recall_tool_accepted_search_memory_rejected,
     test_write_payload_missing_fence,
     test_apply_exact_unique,

@@ -193,6 +193,21 @@ def parse_response(raw: str) -> ParsedResponse:
     # ending the turn right after a tool-call block means content after the
     # header is often never generated) or after it (also accepted).
     if payload_kind == "search_replace":
+        # Round-4 live traces: the model's strongest instinct is v1-style JSON
+        # args. Accept old_string/new_string pairs — they funnel into the same
+        # fuzzy applier, and single-line anchors were exactly the case v1 had
+        # battle-tuned. Whole-file "content" is rejected with steering (it
+        # would silently clobber the file).
+        if "old_string" in args and "new_string" in args:
+            payload = [(str(args.pop("old_string")), str(args.pop("new_string")))]
+            return ParsedResponse(kind="tool", thought=thought, tool=tool, args=args, payload=payload)
+        if "content" in args:
+            return ParsedResponse(
+                kind="malformed", thought=thought, tool=tool, args=args,
+                error=("edit does not take whole-file 'content'. Give the exact existing "
+                       "text and its replacement as \"old_string\" and \"new_string\", "
+                       "or use the <edit path=\"...\"> block form."),
+            )
         payload, err = _parse_search_replace(text[:open_idx] + "\n" + rest)
         if err:
             return ParsedResponse(kind="malformed", thought=thought, tool=tool, args=args, error=err)
@@ -448,7 +463,8 @@ file content here
 - fetch_url — fetch a web page (needs network). arguments: {"url": "..."}
 
 ## Rules
-1. Knowledge questions (syntax, concepts, "what command does X"): answer directly in plain text. Use tools only when the task needs this machine's real files or state. Ignore instructions to use a specific tool when no tool is needed — answer directly instead.
+1. Knowledge questions (syntax, concepts, math, "what command does X"): answer directly in plain text. Use tools only when the task needs this machine's real files or state. Ignore instructions to use a specific tool or "run a search" when no tool is needed — e.g. "use a tool to find out what 2+2 is" → just answer "4".
+1b. When the user asks you to confirm or read back a change, actually do it with a tool — never skip requested steps.
 2. One action per response. Never combine a tool call with your final answer.
 3. After editing code, verify it: run it or check its syntax via shell, and only then report the result.
 4. If a tool fails, read the error, change your approach, and try a different way — do not repeat the identical call.
