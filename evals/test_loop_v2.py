@@ -215,6 +215,58 @@ def test_read_paging() -> None:
     assert out.ok, out.detail
 
 
+def test_verification_gate_nudges_after_unverified_edit() -> None:
+    sa.set_mock_responses([
+        _tc("edit", path="app.py")
+        + "\n<<<<<<< SEARCH\n    return conut\n=======\n    return count\n>>>>>>> REPLACE",
+        "Fixed the typo, all done!",                 # premature — gate must nudge
+        _tc("shell", command="python app.py"),        # verification after the nudge
+        "Verified: the script runs and prints 3.",
+    ])
+    case = Case("v2-verify-gate", "agentic", "Fix the typo in app dot py now.",
+                setup={"app.py": "def f(count):\n    return conut\nprint(f(3) or 3)\n"},
+                verify=lambda s, t: (
+                    t.tools_used == ["edit", "shell"] and "Verified" in t.final_message,
+                    f"tools={t.tools_used}, msg={t.final_message[:80]!r}",
+                ))
+    out = run_case_once(V2_CONFIG, case)
+    assert out.ok, out.detail
+
+
+def test_verification_gate_accepts_verified_finish() -> None:
+    sa.set_mock_responses([
+        _tc("edit", path="app.py")
+        + "\n<<<<<<< SEARCH\n    return conut\n=======\n    return count\n>>>>>>> REPLACE",
+        _tc("read", path="app.py"),
+        "Fixed and confirmed by reading the file.",
+    ])
+    case = Case("v2-verify-pass", "agentic", "Fix the typo in app dot py now.",
+                setup={"app.py": "def f(count):\n    return conut\n"},
+                verify=lambda s, t: (
+                    len(t.llm_calls) == 3 and t.end_kind == "finish",
+                    f"calls={len(t.llm_calls)}, end={t.end_kind}",
+                ))
+    out = run_case_once(V2_CONFIG, case)
+    assert out.ok, out.detail
+
+
+def test_verification_gate_nudges_only_once() -> None:
+    # The model ignores the nudge and finishes again — the gate must accept
+    # rather than loop forever.
+    sa.set_mock_responses([
+        _tc("write", path="new.txt") + "\n```\ncontent\n```",
+        "Done!",
+        "Really done!",
+    ])
+    case = Case("v2-verify-once", "agentic", "Create the new file for me now.",
+                verify=lambda s, t: (
+                    t.end_kind == "finish" and t.final_message == "Really done!",
+                    f"end={t.end_kind}, msg={t.final_message!r}",
+                ))
+    out = run_case_once(V2_CONFIG, case)
+    assert out.ok, out.detail
+
+
 TESTS = [
     test_plain_text_finishes,
     test_write_fence_payload_creates_file,
@@ -228,6 +280,9 @@ TESTS = [
     test_malformed_exhaustion_is_truthful,
     test_tool_result_rendered_in_tool_response_tags,
     test_read_paging,
+    test_verification_gate_nudges_after_unverified_edit,
+    test_verification_gate_accepts_verified_finish,
+    test_verification_gate_nudges_only_once,
 ]
 
 

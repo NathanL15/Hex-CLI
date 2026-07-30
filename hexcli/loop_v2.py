@@ -24,6 +24,7 @@ so the eval instrument drives both protocols unchanged.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import sys
@@ -62,6 +63,16 @@ _READ_DEFAULT_LIMIT = 400     # lines per read page
 # Persistent shells for REPL sessions, keyed by session id. One-shot and eval
 # runs (session=None) get an ephemeral shell that lives for the turn only.
 _SESSION_SHELLS: dict[str, ShellSession] = {}
+
+
+@atexit.register
+def _close_all_shells() -> None:
+    for sh in list(_SESSION_SHELLS.values()):
+        try:
+            sh.close()
+        except Exception:
+            pass
+    _SESSION_SHELLS.clear()
 
 
 def _get_shell(session: dict[str, Any] | None, cwd: str) -> tuple[ShellSession, bool]:
@@ -224,6 +235,11 @@ def run(
     turn_snapshots: dict[str, str | None] = {}
     recent_sigs: list[tuple[str, bool]] = []  # (signature, was_error)
     last_tool_output = ""
+    # Verification-gated finish (docs/V2_PLAN.md §5.3): after a successful file
+    # mutation, the model must observe SOMETHING (run/read/check) before its
+    # final answer is accepted. One nudge max — the gate guides, never traps.
+    unverified_mutation = False
+    verify_nudge_used = False
 
     def _finish(kind: str, message: str, outcome: str) -> str:
         if session and last_tool_output:
@@ -271,6 +287,20 @@ def run(
                 )
 
             if parsed.kind == "final":
+                if (unverified_mutation and not verify_nudge_used
+                        and config.get("require_verification", True)):
+                    verify_nudge_used = True
+                    messages.append({"role": "assistant", "content": agent.strip_thinking(raw)})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You modified a file but never verified the result. "
+                            "Before finishing, check your work: run the code, or "
+                            "read the changed section back — then report what you "
+                            "actually observed."
+                        ),
+                    })
+                    continue
                 return _finish("finish", parsed.final_text, "completed")
 
             # Tool action.
@@ -300,6 +330,13 @@ def run(
             agent._probe(probe, "on_tool", step, tool, dict(parsed.args or {}),
                          tool_output, tool_latency, tool_status)
             last_tool_output = tool_output
+
+            if tool in ("write", "edit") and tool_status == "ok":
+                unverified_mutation = True
+            elif tool in ("shell", "read") and tool_status == "ok":
+                # Any successful observation after the mutation counts as
+                # verification — the model saw real post-change state.
+                unverified_mutation = False
 
             # Fuzzy loop detection: N consecutive near-identical calls, at
             # least one of which errored, means the agent is spinning.
