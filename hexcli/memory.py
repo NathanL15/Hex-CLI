@@ -18,9 +18,10 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -69,7 +70,7 @@ class _Embedder:
     and are reused across every add()/search() call for the life of the
     process, regardless of how many VectorStore instances are created."""
 
-    _instance: "_Embedder | None" = None
+    _instance: _Embedder | None = None
 
     def __init__(self) -> None:
         self._session: Any = None
@@ -77,7 +78,7 @@ class _Embedder:
         self._unavailable = False
 
     @classmethod
-    def instance(cls) -> "_Embedder":
+    def instance(cls) -> _Embedder:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -93,8 +94,8 @@ class _Embedder:
             self._unavailable = True
             return
         try:
-            from tokenizers import Tokenizer
             import onnxruntime as ort
+            from tokenizers import Tokenizer
             tokenizer = Tokenizer.from_file(str(tok_path))
             tokenizer.enable_padding()
             tokenizer.enable_truncation(max_length=_MAX_SEQ_LEN)
@@ -182,7 +183,7 @@ class VectorStore:
             self._vectors = np.vstack([self._vectors, vec])
             entry = {
                 "id": str(uuid.uuid4()),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "text": text,
                 **metadata,
             }
@@ -331,7 +332,7 @@ def _append_rules(new_rules: list[str]) -> None:
                 for ln in _RULES_PATH.read_text(encoding="utf-8").splitlines()
                 if ln.strip().startswith("- ")
             ]
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M")
         stamped = [f"- [{ts}] {r.lstrip('- ').strip()}" for r in new_rules if r.strip()]
         combined = existing + stamped
         if len(combined) > _MAX_RULES:

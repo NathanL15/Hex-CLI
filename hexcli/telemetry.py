@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,7 @@ class TurnRecorder:
         self.turn_index = turn_index
         self.mode = mode
         self.prompt = prompt[:_MAX_PROMPT_LOG] + ("…" if len(prompt) > _MAX_PROMPT_LOG else "")
-        self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.timestamp = datetime.now(UTC).isoformat()
         self.execution_path = "direct"
         self.tool_calls: list[dict[str, Any]] = []
         self.steps_used = 0
@@ -86,7 +86,7 @@ class SessionTelemetry:
     def __init__(self, config: dict[str, Any], cwd: str | None = None) -> None:
         self.enabled = bool(config.get("telemetry_enabled", True))
         self.session_id = str(uuid.uuid4())
-        self.started_at = datetime.now(timezone.utc).isoformat()
+        self.started_at = datetime.now(UTC).isoformat()
         self.model = str(config.get("model", "unknown"))
         self.backend = str(config.get("backend", "unknown"))
         self.cwd = cwd or str(Path.cwd())

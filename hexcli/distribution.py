@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 import urllib.request
 from pathlib import Path
 from typing import Any

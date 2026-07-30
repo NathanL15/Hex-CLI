@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Patterns checked in order: first match wins.  Destructive > safe > caution.
@@ -66,7 +66,7 @@ def append_audit_log(
         log_dir = Path.cwd() / ".shellai"
         log_dir.mkdir(parents=True, exist_ok=True)
         entry: dict[str, object] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "session": session_id or "",
             "classification": classification,
             "cmd": cmd,
