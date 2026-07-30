@@ -391,6 +391,26 @@ def _apply_one(content: str, search: str, replace: str, block_no: int) -> tuple[
         return "", (f"SEARCH block {block_no} matches {len(hits)} locations "
                     "(ignoring indentation) — add more context lines.")
 
+    # Tier 4 — high-confidence closest match. Live traces (uc1-t4, 2026-07-30)
+    # show the 4B model reconstructing lines from memory instead of copying
+    # them: its old_string lands ~97% similar to exactly one region, and it
+    # repeats the SAME wrong string on every retry even when the error shows
+    # the correct text. When the best window is ≥95% similar AND the runner-up
+    # is clearly worse (<90%), applying to the best window is what the model
+    # meant; the mandatory verify step catches any residual mismatch. Ties and
+    # weaker matches still error with the closest-region report.
+    ratios: list[tuple[float, int]] = []
+    search_text = "\n".join(s_lines)
+    for i in range(max(1, len(c_lines) - win + 1)):
+        cand = "\n".join(c_lines[i:i + win])
+        r = difflib.SequenceMatcher(None, search_text, cand, autojunk=False).ratio()
+        ratios.append((r, i))
+    ratios.sort(reverse=True)
+    if ratios and ratios[0][0] >= 0.95 and (len(ratios) == 1 or ratios[1][0] < 0.90):
+        i = ratios[0][1]
+        new_lines = c_lines[:i] + replace.split("\n") + c_lines[i + win:]
+        return "\n".join(new_lines), ""
+
     # No match at any tier — report the closest region.
     return "", _no_match_error(c_lines, s_lines, block_no)
 
