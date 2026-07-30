@@ -140,7 +140,63 @@ def test_read_file_directory_is_clear_error() -> None:
         assert raised, "reading a directory must raise a helpful error"
 
 
+# ---------------------------------------------------------------------------
+# parse_json_object - first-complete-object extraction
+# ---------------------------------------------------------------------------
+
+MULTI_ACTION = (
+    '{"action":"edit_file","args":{"path":"p.py","old_string":"a","new_string":"b"}},'
+    '{"action":"verify_syntax","args":{"path":"p.py"}},'
+    '{"action":"run_code","args":{"path":"p.py"}}'
+)
+
+FENCED = "```json" + chr(10) + '{"action":"finish","message":"ok"}' + chr(10) + "```"
+PROSE_JSON = "Sure, let me look." + chr(10) + '{"action":"list_directory","args":{"path":"."}}'
+BRACE_IN_STRING = '{"action":"finish","message":"use {} for dicts"}'
+
+
+def test_multi_action_response_yields_first_action() -> None:
+    """The live failure that killed uc1-t4/t5/t6: the model batches the whole
+    edit->verify->run sequence into one response. A greedy brace match spans to
+    the last brace and parses as nothing, so the turn made ZERO tool calls."""
+    a = sa.parse_agent_action(MULTI_ACTION)
+    assert a["action"] == "tool" and a["tool"] == "edit_file", a
+    assert a["args"]["old_string"] == "a", a
+
+
+def test_multi_action_is_parseable_at_all() -> None:
+    assert sa.parse_json_object(MULTI_ACTION) is not None, (
+        "multi-action responses must not be discarded wholesale"
+    )
+
+
+def test_braces_inside_strings_do_not_confuse_scanner() -> None:
+    a = sa.parse_agent_action(BRACE_IN_STRING)
+    assert a["action"] == "finish" and "{}" in a["message"], a
+
+
+def test_single_action_and_fences_still_work() -> None:
+    assert sa.parse_agent_action('{"action":"finish","message":"done"}')["message"] == "done"
+    assert sa.parse_agent_action(FENCED)["message"] == "ok"
+
+
+def test_prose_before_json_still_works() -> None:
+    a = sa.parse_agent_action(PROSE_JSON)
+    assert a["action"] == "tool" and a["tool"] == "list_directory", a
+
+
+def test_plain_prose_is_still_a_finish() -> None:
+    a = sa.parse_agent_action("There is no JSON here at all.")
+    assert a["action"] == "finish" and "no JSON" in a["message"]
+
+
 TESTS = [
+    test_multi_action_response_yields_first_action,
+    test_multi_action_is_parseable_at_all,
+    test_braces_inside_strings_do_not_confuse_scanner,
+    test_single_action_and_fences_still_work,
+    test_prose_before_json_still_works,
+    test_plain_prose_is_still_a_finish,
     test_trim_tool_output_keeps_tail,
     test_trim_tool_output_passthrough_when_short,
     test_trim_text_still_head_only,
