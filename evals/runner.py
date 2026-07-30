@@ -576,15 +576,20 @@ def run_suite_cli(
     parser.add_argument("--case", help="Run only this case/scenario id.")
     parser.add_argument("--runs", type=int, default=default_runs,
                         help=f"Runs per case (default {default_runs}).")
+    parser.add_argument("--protocol", choices=["v1", "v2"],
+                        help="Override the agent protocol for this run (A/B testing).")
     parser.add_argument("--no-save", action="store_true")
     args = parser.parse_args()
 
     config = load_live_config()
+    if args.protocol:
+        config["protocol"] = args.protocol
     payload: dict[str, Any] = {
         "suite": suite_name,
         "timestamp": time.time(),
         "model": config.get("model"),
         "temperature": config.get("temperature"),
+        "protocol": config.get("protocol", "v1"),
         "runs_per_case": args.runs,
     }
     findings: list[str] = []
