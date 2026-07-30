@@ -267,6 +267,38 @@ def test_verification_gate_nudges_only_once() -> None:
     assert out.ok, out.detail
 
 
+def test_read_directory_gives_helpful_redirect() -> None:
+    sa.set_mock_responses([
+        _tc("read", path="."),
+        _tc("shell", command="Get-ChildItem ."),
+        "There are files here.",
+    ])
+    case = Case("v2-read-dir", "agentic", "List whatever is in this directory now.",
+                setup={"a.txt": "a"},
+                verify=lambda s, t: (
+                    "is a directory" in t.tool_calls[0].output
+                    and "Get-ChildItem" in t.tool_calls[0].output
+                    and t.tool_calls[1].tool == "shell",
+                    f"first output: {t.tool_calls[0].output[:100]!r}",
+                ))
+    out = run_case_once(V2_CONFIG, case)
+    assert out.ok, out.detail
+
+
+def test_recall_dispatches_to_v1_memory_tool() -> None:
+    sa.set_mock_responses([
+        _tc("recall", query="past work"),
+        "Nothing relevant found in memory.",
+    ])
+    case = Case("v2-recall", "agentic", "What did we do about the parser earlier?",
+                verify=lambda s, t: (
+                    t.tools_used == ["recall"] and t.end_kind == "finish",
+                    f"tools={t.tools_used}, end={t.end_kind}",
+                ))
+    out = run_case_once(V2_CONFIG, case)
+    assert out.ok, out.detail
+
+
 TESTS = [
     test_plain_text_finishes,
     test_write_fence_payload_creates_file,
@@ -283,6 +315,8 @@ TESTS = [
     test_verification_gate_nudges_after_unverified_edit,
     test_verification_gate_accepts_verified_finish,
     test_verification_gate_nudges_only_once,
+    test_read_directory_gives_helpful_redirect,
+    test_recall_dispatches_to_v1_memory_tool,
 ]
 
 

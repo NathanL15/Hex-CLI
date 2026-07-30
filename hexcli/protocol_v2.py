@@ -48,8 +48,10 @@ PAYLOAD_TOOLS = {"edit": "search_replace", "write": "fence"}
 
 # The v2 tool surface (docs/V2_PLAN.md §5.2). Names are short and distinct;
 # `finish` is deliberately absent — a plain-text reply ends the turn.
+# `recall` (not "search_memory"): measured trap-2 regression — any tool with
+# "search" in its name gets grabbed for "run a search ..." phrasings.
 TOOL_NAMES_V2 = frozenset({
-    "shell", "read", "write", "edit", "grep", "search_memory", "fetch_url",
+    "shell", "read", "write", "edit", "grep", "recall", "fetch_url",
 })
 
 
@@ -124,16 +126,46 @@ def parse_response(raw: str) -> ParsedResponse:
 
     payload: Any = None
     payload_kind = PAYLOAD_TOOLS.get(tool)
+    # Payload may sit BEFORE the action header (preferred — Qwen3's habit of
+    # ending the turn right after a tool-call block means content after the
+    # header is often never generated) or after it (also accepted).
     if payload_kind == "search_replace":
-        payload, err = _parse_search_replace(rest)
+        payload, err = _parse_search_replace(text[:open_idx] + "\n" + rest)
         if err:
             return ParsedResponse(kind="malformed", thought=thought, tool=tool, args=args, error=err)
+        thought = _strip_payload_markers(thought)
     elif payload_kind == "fence":
         payload, err = _parse_fence(rest)
         if err:
-            return ParsedResponse(kind="malformed", thought=thought, tool=tool, args=args, error=err)
+            payload, err2 = _parse_fence(text[:open_idx])
+            if err2:
+                return ParsedResponse(kind="malformed", thought=thought, tool=tool, args=args, error=err)
+        thought = _strip_payload_markers(thought)
 
     return ParsedResponse(kind="tool", thought=thought, tool=tool, args=args, payload=payload)
+
+
+def _strip_payload_markers(thought: str) -> str:
+    """Remove payload blocks from the thought text (payload-before-header layout)."""
+    lines: list[str] = []
+    in_block = False
+    in_fence = False
+    for line in thought.split("\n"):
+        s = line.strip()
+        if s == SEARCH_MARK:
+            in_block = True
+            continue
+        if in_block:
+            if s == REPLACE_MARK:
+                in_block = False
+            continue
+        if s.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def _parse_search_replace(rest: str) -> tuple[list[tuple[str, str]] | None, str]:
@@ -333,26 +365,26 @@ NEVER describe what you are about to do in plain text ("I will list the files...
 After each tool runs, its output comes back inside <tool_response> tags. Base every claim on that literal output — never estimate counts, never report success you have not observed.
 
 ## Tools
-- shell — run a PowerShell command in a persistent session (cwd and variables survive between calls). arguments: {"command": "..."}
-- read — read a file. arguments: {"path": "...", "offset": <line, optional>, "limit": <lines, optional>}
-- write — create or overwrite a file. arguments: {"path": "..."}; the file content goes in a fenced block AFTER </action>, never in the JSON:
-<action>
-{"name": "write", "arguments": {"path": "notes.txt"}}
-</action>
+- shell — run a PowerShell command in a persistent session (cwd and variables survive between calls). Also how you list directories: Get-ChildItem. arguments: {"command": "..."}
+- read — read one FILE (never a directory). arguments: {"path": "...", "offset": <line, optional>, "limit": <lines, optional>}
+- write — create or overwrite a file. The file content goes in a fenced block BEFORE the action header, never in the JSON:
 ```
 file content here
 ```
-- edit — change part of an existing file. arguments: {"path": "..."}; the change goes in a SEARCH/REPLACE block AFTER </action>. SEARCH must copy the existing lines exactly; keep it small but unique:
 <action>
-{"name": "edit", "arguments": {"path": "app.py"}}
+{"name": "write", "arguments": {"path": "notes.txt"}}
 </action>
+- edit — change part of an existing file. The change goes in a SEARCH/REPLACE block BEFORE the action header. SEARCH must copy the existing lines exactly; keep it small but unique. Lines outside the block stay untouched — never rewrite a whole file to change one line:
 <<<<<<< SEARCH
     return f"{conut} items"
 =======
     return f"{count} items"
 >>>>>>> REPLACE
+<action>
+{"name": "edit", "arguments": {"path": "app.py"}}
+</action>
 - grep — search file contents. arguments: {"pattern": "...", "path": "<dir or file, optional>"}
-- search_memory — recall facts from past sessions. arguments: {"query": "..."}
+- recall — memories from PAST sessions with this user only; never for general knowledge, math, or the current files. arguments: {"query": "..."}
 - fetch_url — fetch a web page (needs network). arguments: {"url": "..."}
 
 ## Rules

@@ -104,6 +104,11 @@ def _tool_read(agent: Any, args: dict[str, Any], output_limit: int) -> str:
     agent._check_sensitive_path(path, "read")
     if not path.exists():
         return f"Error: {path} does not exist."
+    if path.is_dir():
+        # The 4B model habitually tries read(".") to list a directory; a raw
+        # PermissionError here reads as "access denied" and derails the task.
+        return (f"Error: {path} is a directory, not a file. To list its "
+                f"contents, use shell with: Get-ChildItem \"{path}\"")
     lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
     total = len(lines)
     offset = max(1, int(args.get("offset") or 1))
@@ -181,8 +186,9 @@ def _dispatch(agent: Any, config: dict[str, Any], sh: ShellSession, parsed: Any,
             action = {"action": "tool", "tool": "search_files",
                       "args": {"pattern": args.get("pattern", ""), "path": args.get("path", ".")}}
             return agent.execute_tool_call(config, action, shell_exe)
-        if tool in ("search_memory", "fetch_url"):
-            action = {"action": "tool", "tool": tool, "args": dict(args)}
+        if tool in ("recall", "fetch_url"):
+            v1_name = "search_memory" if tool == "recall" else tool
+            action = {"action": "tool", "tool": v1_name, "args": dict(args)}
             return agent.execute_tool_call(config, action, shell_exe)
     except agent.UserCancelled:
         raise

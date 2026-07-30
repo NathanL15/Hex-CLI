@@ -166,7 +166,9 @@ def test_eval_env_isolates_memory_rules_and_restores() -> None:
         try:
             with _EvalEnv(Path(box)):
                 assert memory._RULES_PATH != marker_rules
-                assert str(Path(box)) in str(memory._RULES_PATH)
+                # The fake home must sit OUTSIDE the sandbox so it never shows
+                # up in the model's own directory listings.
+                assert str(Path(box)) not in str(memory._RULES_PATH)
                 rules = memory.read_memory_rules()
                 assert not any("HOST_MARKER_RULE" in r for r in rules), \
                     "host rules leaked into the eval environment"
