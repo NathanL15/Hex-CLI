@@ -339,6 +339,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "telemetry_enabled": True,
     "memory_enabled": True,
     "autopilot_confirm_destructive": True,
+    # Agent protocol: "v1" (JSON action loop) or "v2" (native tool-call format,
+    # payload-block edits, persistent shell — see docs/V2_PLAN.md §5).
+    "protocol": "v1",
     "system_prompt": COMMAND_SYSTEM_PROMPT,
     "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
@@ -1990,6 +1993,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
+    "protocol":                       "str",
     "anthropic_api_key":              "str",
     "escalation_model":               "str",
 }
@@ -2394,6 +2398,14 @@ def run_autopilot(
         return meta
     if is_small_talk(query):
         return "Hi — what would you like me to do?"
+
+    if str(config.get("protocol", "v1")).lower() == "v2":
+        from . import loop_v2
+        _CURRENT_SESSION_ID = str(uuid4())
+        return loop_v2.run(
+            config, history, query, shell_exe,
+            session=session, turn=turn, probe=probe,
+        )
 
     # Fresh UUID for this agent loop: lets the npurun server detect
     # continuation turns (messages only appended) and skip reset_dialog(),

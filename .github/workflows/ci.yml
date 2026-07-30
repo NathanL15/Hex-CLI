@@ -33,6 +33,12 @@ jobs:
       - name: Integration tests — eval v2 instrument (mock backend)
         run: python evals/test_runner.py
 
+      - name: Unit tests — v2 protocol + shell session
+        run: python evals/test_protocol_v2.py
+
+      - name: Integration tests — v2 agent loop (mock backend)
+        run: python evals/test_loop_v2.py
+
       - name: Unit tests — core coverage backfill
         run: python evals/test_core.py
 
