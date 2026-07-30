@@ -9,6 +9,9 @@ eval_results.json
 eval_extended_results.json
 .shellai/
 
+# Embedding model binaries — downloaded per-machine (README "Embedding model")
+onnx/
+
 # Third-party clone with its own git history; see README for setup
 npurun/
 
