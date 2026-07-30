@@ -179,7 +179,7 @@ EXTENSION_CASES: list[Case] = [
          setup_fn=_seed_buggy_calc_memory,
          requires_memory_seed=True,
          verify=ck.all_of(
-             ck.tools_called("search_memory"),
+             ck.used_capability("memory"),
              ck.message_contains("buggy_calc.py"),
          ),
          max_steps=4, tag="semantic_memory", expected_tools=("search_memory",)),

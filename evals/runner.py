@@ -252,6 +252,7 @@ class _EvalEnv:
     def __init__(self, sandbox: Path) -> None:
         self.sandbox = sandbox
         self._saved: dict[str, Any] = {}
+        self._home: str | None = None
 
     def __enter__(self) -> _EvalEnv:
         self._saved["cwd"] = Path.cwd()
@@ -259,9 +260,12 @@ class _EvalEnv:
         self._saved["global_store"] = memory._GLOBAL_STORE_DIR
         self._saved["monitor"] = sa.CancelMonitor
         self._saved["spinner"] = sa.Spinner
-        memory._RULES_PATH = self.sandbox / ".eval_home" / "memory_rules.md"
-        memory._GLOBAL_STORE_DIR = self.sandbox / ".eval_home" / "global_vector_store"
-        memory._RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # The fake home lives OUTSIDE the sandbox: anything inside it would
+        # show up in the model's own directory listings and skew count
+        # fixtures (dot-prefixed dirs are NOT hidden on Windows).
+        self._home = tempfile.mkdtemp(prefix="hexeval_home_")
+        memory._RULES_PATH = Path(self._home) / "memory_rules.md"
+        memory._GLOBAL_STORE_DIR = Path(self._home) / "global_vector_store"
         sa.CancelMonitor = _NoopMonitor  # type: ignore[misc,assignment]
         sa.Spinner = _NoopSpinner  # type: ignore[misc,assignment]
         os.chdir(self.sandbox)
@@ -273,6 +277,9 @@ class _EvalEnv:
         memory._GLOBAL_STORE_DIR = self._saved["global_store"]
         sa.CancelMonitor = self._saved["monitor"]
         sa.Spinner = self._saved["spinner"]
+        if self._home:
+            import shutil
+            shutil.rmtree(self._home, ignore_errors=True)
 
 
 def seed_memory(sandbox: Path, entries: list[dict[str, Any]], config: dict[str, Any]) -> bool:

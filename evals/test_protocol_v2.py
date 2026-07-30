@@ -158,6 +158,35 @@ def test_write_payload_fence_with_language_and_inner_backticks() -> None:
     assert r.payload == "# Title\n\n`inline code`"
 
 
+def test_edit_payload_before_header() -> None:
+    # Preferred layout: payload BEFORE the action header — Qwen3 habitually
+    # ends its turn right after a tool-call block, so trailing payloads are
+    # often never generated.
+    raw = ("I'll fix the typo.\n"
+           "<<<<<<< SEARCH\n    return conut\n=======\n    return count\n>>>>>>> REPLACE\n"
+           '<action>{"name": "edit", "arguments": {"path": "app.py"}}</action>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.payload == [("    return conut", "    return count")]
+    assert "SEARCH" not in r.thought, f"payload must be stripped from thought: {r.thought!r}"
+    assert "fix the typo" in r.thought
+
+
+def test_write_payload_before_header() -> None:
+    raw = ("```\nhello world\n```\n"
+           '<action>{"name": "write", "arguments": {"path": "notes.txt"}}</action>')
+    r = p2.parse_response(raw)
+    assert r.kind == "tool", r.error
+    assert r.payload == "hello world"
+
+
+def test_recall_tool_accepted_search_memory_rejected() -> None:
+    r = p2.parse_response('<action>{"name": "recall", "arguments": {"query": "x"}}</action>')
+    assert r.kind == "tool" and r.tool == "recall"
+    r = p2.parse_response('<action>{"name": "search_memory", "arguments": {"query": "x"}}</action>')
+    assert r.kind == "malformed" and "recall" in r.error
+
+
 def test_write_payload_missing_fence() -> None:
     r = p2.parse_response('<action>{"name": "write", "arguments": {"path": "a.txt"}}</action>')
     assert r.kind == "malformed"
@@ -333,6 +362,9 @@ TESTS = [
     test_edit_multiline_content_never_touches_json,
     test_write_payload_fence,
     test_write_payload_fence_with_language_and_inner_backticks,
+    test_edit_payload_before_header,
+    test_write_payload_before_header,
+    test_recall_tool_accepted_search_memory_rejected,
     test_write_payload_missing_fence,
     test_apply_exact_unique,
     test_apply_ambiguous_is_error_not_guess,

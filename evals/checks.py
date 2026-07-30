@@ -72,7 +72,7 @@ CAPABILITIES: dict[str, frozenset[str]] = {
     "run":    frozenset({"run_command", "run_code", "shell"}),
     "verify": frozenset({"verify_syntax", "run_code", "lint_code", "run_command",
                          "shell", "read_file", "read"}),
-    "memory": frozenset({"search_memory"}),
+    "memory": frozenset({"search_memory", "recall"}),
     "mutate": frozenset({"write_file", "append_file", "edit_file", "write", "edit"}),
 }
 
