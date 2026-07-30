@@ -344,6 +344,9 @@ def run_case_once(config: dict[str, Any], case: Case) -> RunOutcome:
                 )
             except Exception as exc:  # noqa: BLE001 — an unhandled loop crash is a FAIL, not a crash of the suite
                 trace.wall_s = time.perf_counter() - t0
+                backend = is_backend_failure(exc)
+                if backend:
+                    return RunOutcome(False, backend, trace, invalid=True)
                 return RunOutcome(False, f"run_autopilot raised: {exc!r}", trace)
             trace.wall_s = time.perf_counter() - t0
             try:
@@ -358,6 +361,32 @@ class _InvalidRun(Exception):
 
 
 InvalidRun = _InvalidRun  # public alias for case modules
+
+
+def is_backend_failure(exc: BaseException) -> str | None:
+    """Return a reason string when `exc` indicates the INFERENCE BACKEND
+    failed (not the model behaving badly).
+
+    Measured 2026-07-30: after a couple of hours of continuous eval traffic
+    the npurun/Genie dialog degrades into sticky ERROR_QUERY_FAILED (-6) and
+    returns HTTP 500 for every request; a fresh server then handles the exact
+    same requests 12/12. Runs hit by that must be INVALID, never counted as
+    model failures — otherwise a degraded server silently manufactures
+    'regressions'.
+    """
+    import urllib.error
+    # HTTPError subclasses URLError, so it MUST be checked first — otherwise a
+    # 4xx (our bug) would be excused as an unreachable backend.
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"backend HTTP {exc.code}" if exc.code >= 500 else None
+    if isinstance(exc, urllib.error.URLError):
+        return f"backend unreachable: {exc.reason}"
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, TimeoutError)):
+        return f"backend connection lost: {type(exc).__name__}"
+    text = str(exc)
+    if "ERROR_QUERY_FAILED" in text or "inference_error" in text:
+        return "backend inference error (Genie dialog degraded)"
+    return None
 
 
 def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, Any]:
@@ -389,9 +418,11 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, A
                     )
                 except Exception as exc:  # noqa: BLE001
                     trace.wall_s = time.perf_counter() - t0
+                    backend = is_backend_failure(exc)
                     if record:
                         recs.append({"turn": spec.id, "ok": False,
-                                     "detail": f"run_autopilot raised: {exc!r}",
+                                     "detail": backend or f"run_autopilot raised: {exc!r}",
+                                     "invalid": bool(backend),
                                      "trace": trace})
                     history.append({"role": "user", "content": spec.query})
                     history.append({"role": "assistant", "content": f"(error: {exc})"})
@@ -457,15 +488,43 @@ def aggregate(outcomes: list[RunOutcome]) -> dict[str, Any]:
 # Suite execution + report
 # ---------------------------------------------------------------------------
 
+def backend_preflight(config: dict[str, Any]) -> str | None:
+    """Verify the inference backend actually answers before a suite starts.
+    Returns None when healthy, else a reason string."""
+    if config.get("backend") == "mock":
+        return None
+    try:
+        sa.openai_chat(config, [{"role": "user", "content": "Reply with OK."}],
+                       "max_output_tokens")
+    except Exception as exc:  # noqa: BLE001
+        return is_backend_failure(exc) or f"preflight failed: {exc!r}"
+    return None
+
+
+_INVALID_STREAK_ABORT = 6  # consecutive backend failures ⇒ the server is down/degraded
+
+
 def run_cases(config: dict[str, Any], cases: list[Case], runs: int,
               progress: bool = True) -> dict[str, Any]:
     results: dict[str, Any] = {}
+    invalid_streak = 0
     for case in cases:
         outcomes: list[RunOutcome] = []
         for i in range(runs):
             if progress:
                 print(f"  {case.id} run {i + 1}/{runs}...", file=sys.stderr, flush=True)
-            outcomes.append(run_case_once(config, case))
+            outcome = run_case_once(config, case)
+            if outcome.invalid and outcome.detail.startswith("backend"):
+                invalid_streak += 1
+                if invalid_streak >= _INVALID_STREAK_ABORT:
+                    raise RuntimeError(
+                        f"Aborting suite: {invalid_streak} consecutive backend failures "
+                        f"({outcome.detail}). Restart the inference server and re-run — "
+                        "results collected against a degraded server are not comparable."
+                    )
+            else:
+                invalid_streak = 0
+            outcomes.append(outcome)
         agg = aggregate(outcomes)
         agg["category"] = case.category
         agg["tag"] = case.tag or case.category
@@ -490,7 +549,8 @@ def run_scenarios(config: dict[str, Any], scenarios: list[Scenario], runs: int,
             for r in all_runs:
                 rec = next((t for t in r["turns"] if t["turn"] == spec.id), None)
                 if rec:
-                    outs.append(RunOutcome(rec["ok"], rec["detail"], rec["trace"]))
+                    outs.append(RunOutcome(rec["ok"], rec["detail"], rec["trace"],
+                                           invalid=bool(rec.get("invalid"))))
             agg = aggregate(outs)
             agg["traces"] = [o.trace.to_json() for o in outs]
             per_turn[spec.id] = agg
@@ -597,6 +657,13 @@ def run_suite_cli(
     config = load_live_config()
     if args.protocol:
         config["protocol"] = args.protocol
+
+    problem = backend_preflight(config)
+    if problem:
+        print(f"BACKEND PREFLIGHT FAILED: {problem}\n"
+              "Restart the inference server before running a suite — a degraded "
+              "server manufactures false regressions.", file=sys.stderr)
+        return 2
     payload: dict[str, Any] = {
         "suite": suite_name,
         "timestamp": time.time(),
