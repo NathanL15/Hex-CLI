@@ -326,7 +326,12 @@ def test_apply_blocks_in_order() -> None:
 
 def test_system_prompt_is_stable_and_within_budget() -> None:
     est_tokens = len(p2.SYSTEM_PROMPT_V2) // 4
-    assert est_tokens <= 900, f"v2 core prompt is ~{est_tokens} est tokens; budget is ≤900"
+    # Budget raised from 900 after round-5 live A/B: the behavioral rules
+    # ported from v1's tuned template are worth far more than the ~0.4s of
+    # extra prefill they cost at ~700 tok/s. Still 41% below v1's ~2,000-token
+    # template (which grows to ~2,400 with conditional schemas) and, unlike
+    # v1's, byte-stable across turns.
+    assert est_tokens <= 1300, f"v2 core prompt is ~{est_tokens} est tokens; budget is ≤1300"
     # Byte-stability: no formatting placeholders, no date/cwd interpolation.
     assert "{" not in p2.SYSTEM_PROMPT_V2.replace('{"name"', "").replace("{...}", "").replace(
         '{"command"', "").replace('{"path"', "").replace('{"pattern"', "").replace(
