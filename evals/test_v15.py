@@ -24,9 +24,8 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import hexcli.memory as mem
 import hexcli.agent as sa
-
+import hexcli.memory as mem
 
 # ---------------------------------------------------------------------------
 # Feature 13 — Global vs project memory split

@@ -137,7 +137,8 @@ def _verify_runtime_corrected(
     p = sandbox / filename
     if not p.exists():
         return False, f"{filename} is missing from sandbox"
-    import subprocess, sys as _sys
+    import subprocess
+    import sys as _sys
     r = subprocess.run(
         [_sys.executable, str(p)],
         capture_output=True, text=True, encoding="utf-8", timeout=10,

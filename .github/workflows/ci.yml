@@ -25,10 +25,13 @@ jobs:
         run: python -m compileall hexcli/ evals/ -q
 
       - name: ruff check
-        run: ruff check hexcli/
+        run: ruff check hexcli/ evals/
 
       - name: Unit tests — v1.1 suite
         run: python evals/test_v11.py
+
+      - name: Integration tests — eval v2 instrument (mock backend)
+        run: python evals/test_runner.py
 
       - name: Unit tests — core coverage backfill
         run: python evals/test_core.py

@@ -10,7 +10,6 @@ Usage:
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -25,7 +24,6 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
 import hexcli.network as net
-
 
 # ---------------------------------------------------------------------------
 # Dynamic tool injection — build_autopilot_prompt

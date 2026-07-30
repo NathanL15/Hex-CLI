@@ -26,7 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
 import hexcli.lockfile as lf
 
-
 # ---------------------------------------------------------------------------
 # Process lock — hexcli.lockfile
 # ---------------------------------------------------------------------------
@@ -34,7 +33,7 @@ import hexcli.lockfile as lf
 def test_lock_acquire_writes_pid() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         lf._LOCK_PATH = None
-        warning = lf.acquire(Path(tmp))
+        lf.acquire(Path(tmp))
         lock = Path(tmp) / "shellai.lock"
         assert lock.exists(), "lock file must be created"
         assert int(lock.read_text().strip()) == os.getpid()
@@ -106,7 +105,7 @@ def test_lock_acquire_survives_readonly_parent() -> None:
         lf._LOCK_PATH = None
         with unittest.mock.patch("pathlib.Path.write_text", side_effect=PermissionError("read-only")):
             try:
-                warning = lf.acquire(Path(tmp))
+                lf.acquire(Path(tmp))
             except Exception:
                 assert False, "acquire must not raise on PermissionError"
         lf._LOCK_PATH = None

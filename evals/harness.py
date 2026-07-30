@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -27,7 +28,6 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent.parent  # project root
 sys.path.insert(0, str(APP_DIR))
 import hexcli.agent as sa  # noqa: E402
-import shutil
 
 CONFIG_PATH = APP_DIR / "shellai_npurun.json"
 RESULTS_PATH = Path(__file__).resolve().parent / "results" / "harness_results.json"
