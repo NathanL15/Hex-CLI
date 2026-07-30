@@ -424,3 +424,32 @@ the §4 dual-model plan and §7 safety layer, not harness bugs.
 **Remaining Phase 2 scope (next session):** Qwen3-4B-Thinking-2507 self-compile
 + escalation ladder, and the 8K bundle recompile — multi-hour toolchain
 projects (verify the llm_on_genie RAM appetite first, §13.1).
+
+### 14.8 The escalation ladder is built; the 8B escalation model is not viable here
+
+The ladder itself shipped (`hexcli/local_escalation.py` + three triggers in
+`run_autopilot`, each matched to a measured failure mode, one consult per
+turn, off by default, 11 tests in CI): loop-detector trip, ignored
+verification nudge, and prose-instead-of-action on edit requests (with the
+clarifying-question exemption preserving rule 12). It consults any local
+OpenAI-serving model — the model is a config key.
+
+The intended de-risked escalation model failed its hardware audition.
+Qwen3-4B-Thinking-2507 is precompiled **nowhere** (verified: AI Hub public S3
+across release versions, and the qualcomm HF org — zero "thinking" models),
+so the precompiled `qualcomm/Qwen3-8B` v0.59.0 X-Elite bundle was pulled
+(4.6 GB, registry entry added to the npurun fork) and benched solo:
+
+> **TTFT 2.55s, decode 0.9 tok/s** — with ~7 CPU-cores pegged for the whole
+> run and the NPU device healthy. Prefill reaches the HTP; decode falls back
+> to CPU. Same failure class as the 2026-06 Qwen2.5-7B attempt: an 8B's
+> weight graphs don't fully initialise on HTP within a 16 GB machine's
+> memory, and Genie degrades silently rather than erroring.
+
+At 0.9 tok/s a 300-token consultation costs 5+ minutes — unusable. The 8B
+registry entry stays (correct on 32 GB machines; `npurun rm qwen3-8b`
+reclaims the 4.6 GB here). **Conclusion: on 16 GB hardware the escalation
+model must stay in the 4B weight class — which makes the Thinking-2507
+self-compile the single remaining unlock for the ladder,** alongside the 8K
+recompile. Both run through the AI Hub cloud-compile path
+(`llm_on_genie`), which needs a free Qualcomm AI Hub account + API token.
