@@ -22,7 +22,6 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.safety as sf
 
-
 # ---------------------------------------------------------------------------
 # Safety classifier — destructive
 # ---------------------------------------------------------------------------
@@ -159,9 +158,9 @@ def test_audit_log_appends() -> None:
             sf.append_audit_log(None, "safe", "git status", 0)
             sf.append_audit_log(None, "caution", "git commit -m x", 0)
             log = Path(tmp) / ".shellai" / "audit.log"
-            lines = [l for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+            lines = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
             assert len(lines) == 2, "both entries must be present"
-            cmds = [json.loads(l)["cmd"] for l in lines]
+            cmds = [json.loads(ln)["cmd"] for ln in lines]
             assert "git status" in cmds and "git commit -m x" in cmds
         finally:
             os.chdir(orig)

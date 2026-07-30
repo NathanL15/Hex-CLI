@@ -396,6 +396,35 @@ def _pop_mock_response() -> tuple[str, int]:
         return (_MOCK_RESPONSE_QUEUE.pop(0), _MOCK_EVAL_COUNT)
     return ('{"action":"finish","message":"Mock queue exhausted."}', 0)
 
+class AutopilotProbe:
+    """Optional instrumentation hook for run_autopilot, used by evals/ to
+    observe the production agent loop without reimplementing it. Every
+    callback is a no-op here; subclass and override what you need. Probe
+    failures must never break the agent loop — call sites go through
+    _probe(), which swallows exceptions.
+    """
+
+    def on_start(self, system_prompt: str, messages: list[dict[str, str]]) -> None: ...
+
+    def on_llm(self, step: int, attempt: int, raw: str, latency_s: float) -> None: ...
+
+    def on_tool(
+        self, step: int, tool: str, args: dict[str, Any], output: str,
+        latency_s: float, status: str,
+    ) -> None: ...
+
+    def on_end(self, kind: str, message: str) -> None: ...
+
+
+def _probe(probe: AutopilotProbe | None, event: str, *args: Any) -> None:
+    if probe is None:
+        return
+    try:
+        getattr(probe, event)(*args)
+    except Exception:
+        pass
+
+
 REFUSAL_PHRASES = (
     "i don't have access", "i do not have access", "i cannot access",
     "i'm sorry", "i am sorry", "unable to access",
@@ -2354,6 +2383,7 @@ def run_autopilot(
     shell_exe: str,
     session: dict[str, Any] | None = None,
     turn: telemetry.TurnRecorder | None = None,
+    probe: AutopilotProbe | None = None,
 ) -> str:
     global _CURRENT_SESSION_ID
     _CURRENT_SESSION_ID = None  # clear before early-return paths
@@ -2385,6 +2415,7 @@ def run_autopilot(
         *history,
         {"role": "user", "content": user_content},
     ]
+    _probe(probe, "on_start", system_prompt, [dict(m) for m in messages])
 
     output_limit = int(config.get("tool_output_limit", 12000))
     last_tool_output = ""
@@ -2409,9 +2440,11 @@ def run_autopilot(
             raw, eval_count = call_llm(
                 config, messages, "autopilot_max_output_tokens", label=step_label, json_format=True
             )
+            llm_latency = time.monotonic() - llm_start
             if turn:
-                turn.record_llm(time.monotonic() - llm_start, eval_count)
+                turn.record_llm(llm_latency, eval_count)
             total_eval += eval_count
+            _probe(probe, "on_llm", step, attempt, raw, llm_latency)
             action = parse_agent_action(raw)
 
             # Retry only if we got a malformed finish on early steps
@@ -2451,12 +2484,15 @@ def run_autopilot(
                 cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+            _probe(probe, "on_end", "finish", result)
             return result
 
         if action["action"] != "tool" or not action.get("tool"):
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
-            return action.get("message", "") or last_tool_output or "Done."
+            fallthrough = action.get("message", "") or last_tool_output or "Done."
+            _probe(probe, "on_end", "fallthrough", fallthrough)
+            return fallthrough
 
         tool_name = action["tool"]
         tools_used.append(tool_name)
@@ -2476,6 +2512,7 @@ def run_autopilot(
 
         ui.tool_header(tool_name)
         tool_start = time.monotonic()
+        tool_status = "ok"
         try:
             tool_output = execute_tool_call(config, action, shell_exe)
             if turn:
@@ -2486,9 +2523,14 @@ def run_autopilot(
             raise
         except Exception as exc:
             tool_output = f"Error: {exc}"
+            tool_status = "error"
             ui.error_box(str(exc))
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
+        _probe(
+            probe, "on_tool", step, tool_name, action.get("args", {}) or {},
+            tool_output, time.monotonic() - tool_start, tool_status,
+        )
 
         last_tool_output = tool_output
         # Error-loop detection: if the last 3 (tool, output) pairs are identical,
@@ -2516,6 +2558,7 @@ def run_autopilot(
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="error_loop")
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+            _probe(probe, "on_end", "loop_stop", last_tool_output or "Done.")
             return last_tool_output or "Done."
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
         messages.append({"role": "user", "content": f"Tool output:\n{trim_text(tool_output, output_limit)}"})
@@ -2527,6 +2570,7 @@ def run_autopilot(
         cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
     if session:
         _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+    _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
     return last_tool_output or "Done."
 
 

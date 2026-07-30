@@ -20,7 +20,6 @@ import json
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest.mock
 from pathlib import Path
@@ -31,10 +30,12 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datetime import UTC
+
 import hexcli.agent as sa
 import hexcli.distribution as dist
-import hexcli.safety as safety
 import hexcli.memory as mem
+import hexcli.safety as safety
 
 # ============================================================================
 # deep_merge
@@ -230,9 +231,9 @@ def test_upsert_session_ignores_empty_session() -> None:
 # ============================================================================
 
 def test_load_history_store_prunes_old_sessions() -> None:
-    from datetime import datetime, timezone, timedelta
-    old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
-    new_ts = datetime.now(timezone.utc).isoformat()
+    from datetime import datetime, timedelta
+    old_ts = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    new_ts = datetime.now(UTC).isoformat()
 
     store = {"sessions": [
         {"id": "old", "title": "Old", "modified_at": old_ts, "messages": [{"role": "user", "content": "hi"}]},
@@ -252,8 +253,8 @@ def test_load_history_store_prunes_old_sessions() -> None:
 
 
 def test_load_history_store_keeps_all_when_within_retention() -> None:
-    from datetime import datetime, timezone, timedelta
-    recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    from datetime import datetime, timedelta
+    recent_ts = (datetime.now(UTC) - timedelta(days=5)).isoformat()
     store = {"sessions": [
         {"id": "a", "title": "A", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
         {"id": "b", "title": "B", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
@@ -302,8 +303,8 @@ def test_load_history_store_accepts_naive_timestamps() -> None:
 
 
 def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
-    from datetime import datetime, timezone
-    recent_ts = datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    recent_ts = datetime.now(UTC).isoformat()
     store = {"sessions": [
         {"id": "legacy", "modified_at": recent_ts, "messages": [{"role": "user", "content": "hi"}]},
     ]}
@@ -762,8 +763,9 @@ def test_show_context_critical_fires_at_1600_tokens() -> None:
 
 def test_format_relative_time_naive_does_not_crash() -> None:
     """format_relative_time must not raise TypeError when the timestamp has no tz offset."""
-    import hexcli.ui as ui
     from datetime import datetime
+
+    import hexcli.ui as ui
     naive_ts = datetime.now().isoformat()  # no tzinfo
     result = ui.format_relative_time(naive_ts)
     assert isinstance(result, str) and result != "unknown", (
@@ -777,18 +779,20 @@ def test_format_relative_time_unknown_for_garbage() -> None:
 
 
 def test_format_relative_time_aware_timestamp() -> None:
+    from datetime import datetime
+
     import hexcli.ui as ui
-    from datetime import datetime, timezone
-    aware_ts = datetime.now(timezone.utc).isoformat()
+    aware_ts = datetime.now(UTC).isoformat()
     result = ui.format_relative_time(aware_ts)
     assert result in ("now", ) or result.endswith(("m ago", "h ago", "d ago"))
 
 
 def test_format_relative_time_future_timestamp_returns_now() -> None:
     """A timestamp in the future (e.g. clock skew) must return 'now', not a negative string."""
+    from datetime import datetime, timedelta
+
     import hexcli.ui as ui
-    from datetime import datetime, timezone, timedelta
-    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    future_ts = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     result = ui.format_relative_time(future_ts)
     assert result == "now", f"future timestamp must show 'now', got: {result!r}"
 

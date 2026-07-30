@@ -12,10 +12,10 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
-
 
 # ---------------------------------------------------------------------------
 # CoT stripping
@@ -157,8 +157,6 @@ def _run(fn: Any) -> bool:
         print(f"  ERROR {fn.__name__}: {exc}")
         return False
 
-
-from typing import Any
 
 TESTS = [
     test_strip_thinking_removes_block,
