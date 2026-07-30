@@ -287,24 +287,39 @@ def render_models_error(exc: BaseException) -> None:
 # Context estimate
 # ---------------------------------------------------------------------------
 
-def show_context(session: dict[str, Any], config: dict[str, Any]) -> None:
+def show_context(
+    session: dict[str, Any],
+    config: dict[str, Any],
+    budget: tuple[int, int] | None = None,
+    system_prompt_tokens: int | None = None,
+) -> None:
+    """Show context usage against the REAL per-turn budget.
+
+    Pre-v1.8 this printed hardcoded 1,300/1,600 thresholds that were calibrated
+    to a system prompt half the actual size, so it told users they had headroom
+    they did not have. Thresholds now come from the caller's measured budget.
+    """
     messages: list[dict[str, str]] = session.get("messages", [])
     total_chars = sum(len(m.get("content", "")) for m in messages)
     est_tokens = total_chars // 4
     compact_count = session.get("compact_count", 0)
+    warn, crit = budget if budget else (1_300, 1_600)
     print()
     cprint("Context estimate", C.BOLD)
     print(f"  Messages:         {len(messages)}")
     print(f"  Chars (total):    {total_chars:,}")
-    print(f"  Tokens (est.):    ~{est_tokens:,}")
+    print(f"  History (est.):   ~{est_tokens:,} tokens  (budget {warn:,})")
+    if system_prompt_tokens:
+        print(f"  System prompt:    ~{system_prompt_tokens:,} tokens")
+        print(f"  Turn total:       ~{est_tokens + system_prompt_tokens:,} tokens")
     print(f"  Compact runs:     {compact_count}")
     print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
     print(f"  Model:            {config.get('model', 'unknown')}")
     print(f"  Backend:          {config.get('backend', 'ollama')}")
-    if est_tokens >= 1600:
-        cprint("  ✗ Past 4B degradation threshold — auto-compact will fire after the next turn.", C.BRED)
-    elif est_tokens >= 1300:
-        cprint("  ⚠ Approaching 4B degradation threshold — auto-compact fires after this turn.", C.BYELLOW)
+    if est_tokens >= crit:
+        cprint("  ✗ Past the degradation threshold — auto-compact fires after the next turn.", C.BRED)
+    elif est_tokens >= warn:
+        cprint("  ⚠ At the history budget — auto-compact fires after this turn.", C.BYELLOW)
     print()
 
 

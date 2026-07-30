@@ -397,6 +397,7 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, A
         history: list[dict[str, str]] = []
 
         def _play(sc: Scenario, record: bool) -> list[dict[str, Any]]:
+            nonlocal history  # compaction rebinds it
             recs: list[dict[str, Any]] = []
             traces: list[Trace] = []
             for name, content in sc.setup.items():
@@ -435,9 +436,18 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, A
                     except Exception as exc:  # noqa: BLE001
                         ok, detail = False, f"VERIFIER ERROR (fix the eval): {exc!r}"
                     recs.append({"turn": spec.id, "ok": ok, "detail": detail, "trace": trace})
-                # Mirror the production REPL: condensed (query, final message) pairs.
+                # Mirror the production REPL exactly: condensed (query, final
+                # message) pairs, THEN the auto-compact check. Without the
+                # compaction step the eval would never exercise the context
+                # safety net that production relies on.
                 history.append({"role": "user", "content": spec.query})
                 history.append({"role": "assistant", "content": trace.final_message})
+                _session = {"id": f"eval-{sc.id}", "messages": history}
+                try:
+                    sa._maybe_auto_compact(run_config, _session, [_session])
+                except Exception:
+                    pass
+                history = _session["messages"]
                 traces.append(trace)
             return recs
 

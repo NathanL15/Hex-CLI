@@ -537,8 +537,10 @@ def test_read_file_tool_large_file_truncated_without_oom() -> None:
 # ---------------------------------------------------------------------------
 
 def test_maybe_auto_compact_fires_above_threshold() -> None:
-    """_maybe_auto_compact must call compact_history when session exceeds 1300 est. tokens."""
-    cfg = {**_CFG}
+    """_maybe_auto_compact must compact above the derived budget. Since v1.8 the
+    default path is deterministic (no LLM); the LLM summariser is opt-in via
+    auto_compact_uses_llm."""
+    cfg = {**_CFG, "auto_compact_uses_llm": True}
     session = sa.create_session()
     # 2600 est. tokens (> 1300): 8 messages × 1300 chars / 4 = 2600
     for _ in range(4):

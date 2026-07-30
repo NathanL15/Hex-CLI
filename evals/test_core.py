@@ -733,16 +733,24 @@ def test_show_context_no_warning_below_1300_tokens() -> None:
     assert "degradation" not in joined.lower()
 
 
-def test_show_context_warning_fires_at_1300_tokens() -> None:
-    """At exactly 1300 estimated tokens the approaching-threshold warning appears."""
+def test_show_context_warning_fires_at_the_supplied_budget() -> None:
+    """The warning fires against the CALLER'S measured budget, not a hardcoded
+    constant. (Pre-v1.8 this asserted a fixed 1,300 that was calibrated to a
+    system prompt half the real size — see docs/V2_PLAN.md 14.)"""
     import hexcli.ui as ui
-    session = {"messages": [{"content": "a" * (1300 * 4)}], "compact_count": 0}
+    session = {"messages": [{"content": "a" * (500 * 4)}], "compact_count": 0}
     config = {"max_agent_steps": 15, "model": "test", "backend": "mock"}
     printed: list[str] = []
     with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
-        ui.show_context(session, config)
-    joined = " ".join(printed)
-    assert "degradation" in joined.lower(), "expected approaching-threshold warning at 1300 tokens"
+        ui.show_context(session, config, budget=(400, 500))
+    joined = " ".join(printed).lower()
+    assert "budget" in joined or "threshold" in joined, "expected a budget warning"
+
+    # Below the budget: no warning at all.
+    printed.clear()
+    with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+        ui.show_context(session, config, budget=(5000, 6000))
+    assert "threshold" not in " ".join(printed).lower(), "must not warn below budget"
 
 
 def test_show_context_critical_fires_at_1600_tokens() -> None:
@@ -1041,7 +1049,7 @@ TESTS = [
     test_first_run_check_does_not_crash,
     test_git_pull_timeout_returns_false,
     test_show_context_no_warning_below_1300_tokens,
-    test_show_context_warning_fires_at_1300_tokens,
+    test_show_context_warning_fires_at_the_supplied_budget,
     test_show_context_critical_fires_at_1600_tokens,
     test_deep_merge_flat_override,
     test_deep_merge_nested_dict_merges_recursively,
