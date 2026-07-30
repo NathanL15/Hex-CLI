@@ -390,3 +390,37 @@ and §4's dual-model plan.
 independent variables, and this model is far more sensitive to the former.
 Future work should change one at a time and measure — which the instrument now
 makes cheap.
+
+### 14.7 Phase 2 harness work (2026-07-30, second round)
+
+The uc1 multi-turn collapse was peeled apart in three layers, each invisible
+until the previous fix landed:
+
+1. **Stale compaction calibration** — auto-compact was keyed to a "~1,000
+   token" prompt that is really ~2,100, so it fired ~905 tokens PAST the
+   cliff; the safety net had never once fired in time. Now derived from the
+   measured prompt, with deterministic (no-LLM) compaction; `/context` reports
+   the real budget. Real, but not the collapse cause.
+2. **A greedy JSON regex** — the model batches the edit→verify→run sequence
+   its own rules prescribe into one response; `re.search(r"\{.*\}")` spans
+   first-to-last brace, parses as nothing, and the whole turn died with zero
+   tool calls. THE actual collapse cause (uc1 failed at 2,477 tokens while
+   uc2 passed at 2,911 — never a length cliff). Replaced with a
+   string-literal-aware first-complete-object scan.
+3. **Memory-reconstructed old_string** — with edits finally executing, the
+   model writes its edit anchor from memory (~97% similar to exactly one
+   region) and repeats the same wrong string on every retry, ignoring the
+   correction shown in the error. Tier-4 fuzzy apply (≥95% similar, unique,
+   runner-up <90%) absorbs it; ambiguity still errors.
+
+Measured (extended ×5, fresh server): **24/36 pass^5 vs the 22/35 baseline —
+the first build to beat v1 on the honest instrument** (33/36 pass@5).
+Multi-turn progression: 23/45 → 26/45 turn-runs; uc1-t3 firm at 3/3 and
+uc1-t4 passing for the first time (1/3). What remains at uc1-t5/t6 is the
+model declining to emit any edit at deep context ("no edit-class tool used" —
+prose answers), and uc3's injections — both genuine model-ceiling items for
+the §4 dual-model plan and §7 safety layer, not harness bugs.
+
+**Remaining Phase 2 scope (next session):** Qwen3-4B-Thinking-2507 self-compile
++ escalation ladder, and the 8K bundle recompile — multi-hour toolchain
+projects (verify the llm_on_genie RAM appetite first, §13.1).
