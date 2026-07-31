@@ -652,3 +652,64 @@ runtime on this hardware.** Remaining gains must come from the harness —
 prompt, context budget, tooling, protocol — not from the weights. Every
 measured win since §14.5 has come from exactly there, so this is a
 redirection of effort, not a dead end.
+### 14.15 Conditional rules: measured, and REJECTED as a default (2026-07-31)
+
+Phase 1's "tool consolidation 15 → ~8, ≤800-token stable prefix" was the last
+unbuilt quality item. Budgeting the prompt first changed the target entirely:
+
+| section | tokens | share |
+|---|---|---|
+| RULES (14 rules) | 1,459 | **73%** |
+| all 15 tool schemas | ~450 | 23% |
+| header | 50 | 3% |
+
+**Tool consolidation was never the lever.** Merging 15 tools into 8 saves ~200
+tokens; the rules are where the budget goes. So the experiment became: omit
+rules whose own wording scopes them to a situation the query reveals.
+
+`_AUTOPILOT_TEMPLATE` was restructured into `_AUTOPILOT_HEAD` +
+`_AUTOPILOT_RULES[1..14]` + `_AUTOPILOT_TAIL`, with selecting every rule
+reproducing the original template **byte for byte** (asserted in
+`evals/test_v13.py`) so omission was the only variable.
+
+**Result: neutral-to-negative on quality, positive on cost. Not shipped on.**
+
+Extended suite, 37 cases × 3 runs, fresh server per arm:
+
+| | baseline | conditional |
+|---|---|---|
+| pass^3 | 26/37 | 25/37 |
+| individual runs | 89/111 | 87/111 |
+| mean first-LLM latency | 9.76s | **8.17s (−16.3%)** |
+| base prompt | 2,104 tok | **1,413 tok** |
+
+The aggregate is a wash, but per-case triage found a real signal. Four cases
+moved; re-running each at n=5 reversed two (`agentic-5` 3/5→5/5, `factual-2`
+level) and confirmed two. Crucially the confirmed pair had *different* causes:
+`ambiguous-1` lost rule 10, `trap-4` lost 13/14.
+
+Restoring 10 and 12 (the **restraint** rules — rule 10 carries the prompt's
+clearest worked example of finishing with zero tool calls) made
+`ambiguous-1`'s prompt byte-identical to baseline and restored it exactly.
+`trap-4` did not recover:
+
+| trap-4 config | score |
+|---|---|
+| baseline, all 14 rules | 5/8 |
+| omit 10, 12, 13, 14 | 2/8 |
+| omit 13, 14 | 1/5 |
+| omit **14 only** | 0/5 |
+
+Combined 5/8 vs **3/18** (Fisher p≈0.017). The decisive detail is that the
+damage **does not scale with how many rules are dropped** — dropping one rule
+scored worse than dropping four. No single rule carries the behaviour; the
+model is simply specialised to this exact prompt, which is §14.3's finding
+arriving from a completely different direction.
+
+**Shipped:** the restructure (strictly better organisation, byte-identical
+output) and `conditional_rules`, defaulting to **False**. Revisit only with a
+bigger-context bundle or a different model — and only behind a fresh A/B.
+
+**Process note:** the instrument gained `--set KEY=VALUE`, so any config key
+can now be A/B'd and the override is recorded in the saved results.
+

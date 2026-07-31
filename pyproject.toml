@@ -56,3 +56,11 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+# prompts.py is prompt TEXT, where whitespace is part of the payload the model
+# reads. One rule contains a trailing space before a line break (a `\n` written
+# inside a non-raw string, so it became a real newline). Auto-stripping it
+# would silently change the tuned prompt, so whitespace lint is off here.
+# Do not "clean up" this file — edit it only against evals/cases_extended.py.
+"hexcli/prompts.py" = ["W291", "W293"]

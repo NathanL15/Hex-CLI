@@ -15,6 +15,7 @@
   "use_streaming": true,
   "live_streaming": true,
   "show_diffs": true,
+  "conditional_rules": false,
   "rich_input": true,
   "input_history_file": "",
   "input_history_limit": 500,

@@ -50,13 +50,27 @@ def test_budget_is_derived_not_hardcoded() -> None:
 def test_budget_never_below_floor() -> None:
     # Even a pathologically huge prompt must leave a usable floor rather than
     # demanding compaction of an empty history.
-    original = sa._AUTOPILOT_TEMPLATE
+    # Patch the HEAD, not _AUTOPILOT_TEMPLATE: the rules section is now
+    # assembled per turn, so the template constant is no longer what
+    # build_autopilot_prompt reads. The head is always included, so a huge head
+    # is still a pathologically huge prompt. (Patching the old name would have
+    # been a silent no-op — this test caught exactly that when the rules were
+    # made conditional.)
+    # Patch BOTH sources: with conditional_rules off (the shipped default) the
+    # prompt comes from _AUTOPILOT_TEMPLATE, and with it on the rules section
+    # is assembled from _AUTOPILOT_HEAD. Patching only one silently stops
+    # reaching the prompt if that default ever flips — the assertion below is
+    # what turns that into a failure instead of a vacuous pass.
+    orig_tpl, orig_head = sa._AUTOPILOT_TEMPLATE, sa._AUTOPILOT_HEAD
     try:
-        sa._AUTOPILOT_TEMPLATE = "x" * 40_000 + "{date}{cwd}{max_steps}"
+        sa._AUTOPILOT_TEMPLATE = "x" * 40_000
+        sa._AUTOPILOT_HEAD = "x" * 40_000
+        inflated = len(sa.build_autopilot_prompt(cwd=".", max_steps=15))
+        assert inflated > 40_000, "the patch did not reach the built prompt"
         warn, _ = sa._history_budget_tokens(_CFG)
         assert warn == sa._MIN_HISTORY_BUDGET_TOKENS, warn
     finally:
-        sa._AUTOPILOT_TEMPLATE = original
+        sa._AUTOPILOT_TEMPLATE, sa._AUTOPILOT_HEAD = orig_tpl, orig_head
 
 
 def test_budget_respects_explicit_override() -> None:

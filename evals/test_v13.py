@@ -405,7 +405,140 @@ def _run(fn: Any) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Conditional rules — the 690-token half of the prompt budget
+# ---------------------------------------------------------------------------
+
+def _rule_text(n: int) -> str:
+    """A distinctive fragment of rule n, for presence checks.
+
+    Formatted the same way the real prompt is — rule 6 embeds {max_steps}, so
+    the raw text never appears in a built prompt.
+    """
+    first = sa._AUTOPILOT_RULES[n].strip().split("\n")[0]
+    return first.format(date="", cwd="", max_steps=15)[:50]
+
+
+def test_all_rules_selected_reproduces_the_original_template() -> None:
+    """The fidelity guarantee that makes the A/B meaningful: selecting every
+    rule must rebuild the original single template byte for byte, so rule
+    OMISSION is the only variable the live comparison measures."""
+    from hexcli import prompts
+    assembled = (sa._AUTOPILOT_HEAD
+                 + "".join(sa._AUTOPILOT_RULES[n] for n in sorted(sa._AUTOPILOT_RULES))
+                 + sa._AUTOPILOT_TAIL)
+    assert assembled == prompts._AUTOPILOT_TEMPLATE
+
+
+def test_unconditional_rules_are_always_present() -> None:
+    for query in ("", "what is a list comprehension", "list the files here"):
+        selected = sa._select_autopilot_rules(query, [])
+        for n in sorted(set(sa._AUTOPILOT_RULES) - set(sa._CONDITIONAL_RULES)):
+            assert n in selected, f"rule {n} must never be dropped (query={query!r})"
+
+
+def test_restraint_rules_are_never_dropped() -> None:
+    """Rules 10 (tool-bait) and 12 (ambiguous edit) were conditional in the
+    first cut and measured back to unconditional: live A/B 2026-07-31 put
+    trap-4 at 5/8 -> 2/8 and ambiguous-1 at 3/8 -> 1/8 across two independent
+    runs. They are the restraint rules, and rule 10 carries the prompt's
+    clearest worked example of finishing with zero tool calls — the model
+    leans on it well beyond the case that triggers it.
+
+    Do not make these conditional again without new live evidence."""
+    for query in ("", "what is 2+2", "how many files are here", "list things"):
+        selected = sa._select_autopilot_rules(query, [])
+        assert 10 in selected, f"rule 10 dropped for {query!r}"
+        assert 12 in selected, f"rule 12 dropped for {query!r}"
+
+
+def test_only_the_procedural_rules_are_conditional() -> None:
+    assert set(sa._CONDITIONAL_RULES) == {13, 14}
+
+
+def test_ambiguous_rule_covers_the_extended_suite_phrasings() -> None:
+    """The three ambiguous cases in evals/cases_extended.py are the exact
+    requests rule 12 exists to deflect, so all three must carry it. 'Make it
+    better.' was missed by the first trigger list and found by the live A/B."""
+    for query in ("Fix my code.", "Update the file.", "Make it better."):
+        assert 12 in sa._select_autopilot_rules(query, []), query
+
+
+def test_verify_rule_fires_for_add_not_just_fix() -> None:
+    """Regression: the first trigger list had only fix/edit/update verbs, so a
+    plain 'add a key to config.json' dropped the verification rule. That is the
+    exact shape of smoke's agentic-3."""
+    assert 13 in sa._select_autopilot_rules(
+        'add a "version": "1.0" key to config.json', [])
+    assert 13 in sa._select_autopilot_rules("create a README for this project", [])
+
+
+def test_verify_rule_follows_a_prior_edit() -> None:
+    """Trigger on history too: a second turn that just says 'now try again'
+    still needs the verify rule if the previous turn edited a file."""
+    assert 13 in sa._select_autopilot_rules("now try again", ["edit_file"])
+
+
+def test_run_code_rule_for_debugging_intent() -> None:
+    assert 14 in sa._select_autopilot_rules("run the tests, there's a traceback", [])
+    assert 14 not in sa._select_autopilot_rules("what time is it", [])
+
+
+def test_conditional_rules_actually_shrink_the_prompt() -> None:
+    sa.set_active_config({**sa.DEFAULT_CONFIG, "conditional_rules": True})
+    try:
+        simple = len(sa.build_autopilot_prompt(".", 15, query="list the files here"))
+    finally:
+        sa.set_active_config(None)
+    full = len(sa.build_autopilot_prompt(".", 15, query="list the files here"))
+    saved = (full - simple) // 4
+    # ~330: rules 13 and 14 only.
+    assert saved > 250, f"expected ~330 tokens saved on a simple query, got {saved}"
+
+
+def test_conditional_rules_are_off_by_default() -> None:
+    """Measured OFF. Live A/B 2026-07-31: saves ~330 tokens and 16% of
+    first-token latency, but extended trap-4 fell 5/8 -> 3/18 across three
+    independent runs (Fisher p~=0.017), and the drop did not scale with how
+    many rules were dropped — the signature of a model specialised to this
+    exact prompt (§14.3), not of any one rule carrying the behaviour.
+
+    Do not flip this default without a fresh live A/B."""
+    assert sa.DEFAULT_CONFIG["conditional_rules"] is False
+
+
+def test_default_config_sends_every_rule() -> None:
+    """With the shipped default, the prompt must be exactly the tuned one."""
+    from hexcli import prompts
+    for q in ("", "fix my code", "list files", "use read_file to explain a BST"):
+        built = sa.build_autopilot_prompt(".", 15, query=q)
+        for n in sorted(sa._AUTOPILOT_RULES):
+            assert _rule_text(n) in built, f"rule {n} missing at default config"
+    assert prompts._AUTOPILOT_TEMPLATE  # canonical constant still exported
+
+
+def test_edit_request_keeps_every_rule_it_needs() -> None:
+    """The case most likely to regress: a real edit task must still carry the
+    ambiguity, verification and run_code rules."""
+    prompt = sa.build_autopilot_prompt(
+        ".", 15, query="fix the median calculation in processor.py")
+    for n in (12, 13, 14):
+        assert _rule_text(n) in prompt, f"rule {n} missing from an edit request"
+
+
 TESTS = [
+    test_all_rules_selected_reproduces_the_original_template,
+    test_unconditional_rules_are_always_present,
+    test_restraint_rules_are_never_dropped,
+    test_only_the_procedural_rules_are_conditional,
+    test_ambiguous_rule_covers_the_extended_suite_phrasings,
+    test_verify_rule_fires_for_add_not_just_fix,
+    test_verify_rule_follows_a_prior_edit,
+    test_run_code_rule_for_debugging_intent,
+    test_conditional_rules_actually_shrink_the_prompt,
+    test_conditional_rules_are_off_by_default,
+    test_default_config_sends_every_rule,
+    test_edit_request_keeps_every_rule_it_needs,
     test_search_memory_injected_for_past_reference,
     test_search_memory_not_injected_for_generic_query,
     test_search_memory_injected_for_last_time,
