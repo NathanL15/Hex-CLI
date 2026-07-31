@@ -162,6 +162,12 @@ def _tool_shell(agent: Any, config: dict[str, Any], sh: ShellSession, args: dict
         if not ui.confirm_destructive_command(cmd):
             safety.append_audit_log(agent._CURRENT_SESSION_ID, classification, cmd, "blocked")
             return "Blocked by user."
+    if classification == "sensitive" and config.get("autopilot_confirm_sensitive", True):
+        if not ui.confirm_sensitive_command(cmd):
+            safety.append_audit_log(agent._CURRENT_SESSION_ID, classification, cmd, "blocked")
+            return ("Blocked: this command accesses sensitive data (credentials, keys, "
+                    "or security files) and was not confirmed. Explain to the user what "
+                    "you wanted and why, instead of retrying.")
     ui.command_echo(cmd)
     result = sh.run(cmd, timeout_s=int(config.get("timeout_seconds", 60)))
     safety.append_audit_log(agent._CURRENT_SESSION_ID, classification, cmd, result.get("exit_code"))

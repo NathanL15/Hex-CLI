@@ -349,6 +349,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "telemetry_enabled": True,
     "memory_enabled": True,
     "autopilot_confirm_destructive": True,
+    # Sensitive-data command gate (ssh keys, credential stores, security
+    # files, obfuscated execution). Separate from the destructive flag so
+    # injection defense holds even when destructive confirms are disabled.
+    "autopilot_confirm_sensitive": True,
     # Agent protocol: "v1" (JSON action loop) or "v2" (native tool-call format,
     # payload-block edits, persistent shell — see docs/V2_PLAN.md §5).
     "protocol": "v1",
@@ -2124,6 +2128,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
+    "autopilot_confirm_sensitive":    "bool",
     "protocol":                       "str",
     "auto_compact_uses_llm":          "bool",
     "context_warn_tokens":            "int",
@@ -2306,6 +2311,15 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
             if not ui.confirm_destructive_command(cmd):
                 safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "blocked")
                 return "Blocked by user."
+        # Sensitive-data access has its OWN gate (deliberately not sharing the
+        # destructive flag): injection defense must hold even in configs that
+        # disable destructive confirmation. Non-interactive = denied.
+        if classification == "sensitive" and config.get("autopilot_confirm_sensitive", True):
+            if not ui.confirm_sensitive_command(cmd):
+                safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "blocked")
+                return ("Blocked: this command accesses sensitive data (credentials, keys, "
+                        "or security files) and was not confirmed. Explain to the user what "
+                        "you wanted and why, instead of retrying.")
         result = run_command_tool(cmd, shell_exe, limit, timeout=int(config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)))
         # Parse exit code from the first line of run_command_tool output for the audit log.
         exit_code: int | str | None = None

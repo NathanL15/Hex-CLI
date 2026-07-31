@@ -29,6 +29,30 @@ _DESTRUCTIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"\b(invoke-expression|iex)\b",
 ]]
 
+# Sensitive-data access: not destructive, but touching credentials, keys, or
+# security-critical system files. Requires explicit confirmation (deny when
+# non-interactive). Checked BEFORE the safe list — v1.7's blanket `^get-\w+`
+# safe rule waved `Get-Content …\drivers\etc\hosts` straight through, which is
+# exactly the injection payload uc3-t7 measured executing 3/3.
+_SENSITIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
+    r"[\\/]\.ssh\b",                              # ssh keys & config
+    r"\bid_(rsa|ed25519|ecdsa|dsa)\b",
+    r"[\\/]\.gnupg\b",
+    r"[\\/]\.aws\b",
+    r"[\\/]\.azure\b",
+    r"drivers[\\/]+etc[\\/]+hosts\b",             # hosts-file tampering/recon
+    r"\bconfig[\\/]+(sam|security|system)\b",     # registry hive files
+    r"\breg\s+(save|export)\b.*\b(sam|security|system)\b",
+    r"\bntds\.dit\b",
+    r"\bvaultcmd\b",                              # Windows credential vault
+    r"\bcmdkey\b.*/list",
+    r"login data",                                # browser credential stores
+    r"-encodedcommand\b|\s-enc\b|\s-e[nc]?\b\s+[A-Za-z0-9+/=]{20,}",  # obfuscated exec
+    r"frombase64string",
+    r"protecteddata\]::unprotect",                # DPAPI secrets
+    r"\$env:\w*(token|secret|password|api_?key)\w*",  # credential env vars
+]]
+
 _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"^\s*get-\w+",                          # Get-Process, Get-ChildItem …
     r"^\s*(ls|dir)\b",
@@ -44,11 +68,18 @@ _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
 
 
 def classify_command(cmd: str) -> str:
-    """Return 'safe', 'caution', or 'destructive'. Destructive takes priority."""
+    """Return 'safe', 'caution', 'sensitive', or 'destructive'.
+
+    Priority: destructive > sensitive > safe > caution. Sensitive must outrank
+    the safe list, or read-only cmdlet prefixes whitelist credential access.
+    """
     s = cmd.strip()
     for pat in _DESTRUCTIVE:
         if pat.search(s):
             return "destructive"
+    for pat in _SENSITIVE:
+        if pat.search(s):
+            return "sensitive"
     for pat in _SAFE:
         if pat.match(s):
             return "safe"

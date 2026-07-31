@@ -368,6 +368,21 @@ def repl_prompt(config: dict[str, Any], mode: str) -> str:
 # Result rendering
 # ---------------------------------------------------------------------------
 
+def confirm_sensitive_command(cmd: str) -> bool:
+    """Sensitive-data access (keys, credentials, security files, obfuscated
+    execution) requires explicit consent; denied when non-interactive."""
+    print()
+    cprint("⚠  Agent wants to access sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
+    cprint(f"   {cmd}", C.RED)
+    cprint("   (credentials / keys / security files — deny unless YOU asked for exactly this)", C.DIM)
+    print()
+    try:
+        answer = input("Allow? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes"}
+
+
 def confirm_destructive_command(cmd: str) -> bool:
     """Print a destructive-command warning and return True only if the user types y/yes."""
     print()
