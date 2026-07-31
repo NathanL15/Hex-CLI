@@ -682,10 +682,28 @@ def save_history_store(sessions: list[dict[str, Any]]) -> None:
 def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
     if HISTORY_PATH.exists():
-        with HISTORY_PATH.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        raw = data.get("sessions", []) if isinstance(data, dict) else []
-        sessions = [s for s in raw if isinstance(s, dict)]
+        # A truncated or corrupted history file used to raise here and take
+        # the whole app down on EVERY launch — unrecoverable without knowing
+        # to delete a file you were never told about. Past history is never
+        # worth more than a working CLI: quarantine it and carry on.
+        try:
+            with HISTORY_PATH.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            raw = data.get("sessions", []) if isinstance(data, dict) else []
+            sessions = [s for s in raw if isinstance(s, dict)]
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            quarantine = HISTORY_PATH.with_suffix(".corrupt")
+            try:
+                HISTORY_PATH.replace(quarantine)
+                cprint(
+                    f"\n  History file was unreadable ({exc.__class__.__name__}). "
+                    f"Moved it to {quarantine.name} and started a fresh history.",
+                    C.YELLOW,
+                )
+            except OSError:
+                cprint("\n  History file is unreadable and could not be moved; "
+                       "continuing with an empty history.", C.YELLOW)
+            sessions = []
 
     cutoff = utc_now() - timedelta(days=int(config.get("history_retention_days", 30)))
     filtered: list[dict[str, Any]] = []
@@ -3211,6 +3229,82 @@ def _maybe_auto_compact(
 # REPL
 # ---------------------------------------------------------------------------
 
+def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
+    """Explain a backend failure and offer to restart it in place.
+
+    Covers both "server is down" and the measured degradation mode where the
+    Genie dialog goes sticky-failed and 500s everything (V2_PLAN §14.4). In
+    both cases the fix is the same — a fresh server — so offer it here rather
+    than making the user leave the session.
+    """
+    cprint(f"\n  The model backend failed: {reason}.", C.BRED)
+    if str(config.get("backend")) != "openai" or "_npurun_model" not in config:
+        cprint("  Restart it, then try again.", C.DIM)
+        return
+    cprint("  This usually means the NPU server needs a restart "
+           "(it degrades after a few hours of use).", C.DIM)
+    try:
+        answer = input("  Restart the model server now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+    if answer in ("", "y", "yes"):
+        if restart_backend(config):
+            cprint("  Server restarted — your session is intact, try the request again.", C.BGREEN)
+        else:
+            cprint("  Restart failed. Run: python launcher.py", C.YELLOW)
+
+
+def restart_backend(config: dict[str, Any]) -> bool:
+    """Stop and respawn the local npurun server. Returns True when healthy."""
+    model = str(config.get("_npurun_model") or "")
+    if not model:
+        return False
+    exe = Path.home() / ".cargo" / "bin" / "npurun.exe"
+    if not exe.exists():
+        return False
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "npurun.exe"],
+                       capture_output=True, timeout=15)
+    except Exception:
+        pass
+    time.sleep(2)
+    sdk = Path(os.environ.get("QNN_SDK_ROOT", r"C:\Qualcomm\AIStack\QAIRT_2.47.0"))
+    env = os.environ.copy()
+    env["QNN_SDK_ROOT"] = str(sdk)
+    env["ADSP_LIBRARY_PATH"] = str(sdk / "lib" / "hexagon-v73" / "unsigned")
+    env["PATH"] = (f"{sdk / 'bin' / 'aarch64-windows-msvc'};"
+                   f"{sdk / 'lib' / 'aarch64-windows-msvc'};{env.get('PATH', '')}")
+    bind = _backend_url(config).split("//")[-1].split("/")[0]
+    try:
+        subprocess.Popen(
+            [str(exe), "serve", "--model", model, "--bind", bind],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, creationflags=0x00000008,  # DETACHED_PROCESS
+        )
+    except Exception:
+        return False
+    with Spinner("restarting the model server"):
+        for _ in range(45):
+            time.sleep(2)
+            if ping_backend(config):
+                return True
+    return False
+
+
+REPL_COMMANDS = (
+    "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/new",
+    "/compact", "/context", "/config", "/memory", "/mode", "/model",
+    "/tools", "/undo", "/save", "/load", "/stats", "/diff", "/doctor",
+)
+
+
+def _closest_command(word: str) -> str | None:
+    """Nearest known slash command, for typo hints."""
+    import difflib
+    matches = difflib.get_close_matches(word.lower(), REPL_COMMANDS, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
 def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     shell_exe = detect_shell(str(config.get("shell_exe", "") or ""))
     sessions = load_history_store(config)
@@ -3260,8 +3354,17 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             render_history_list(sessions, str(current_session.get("id", "")))
             continue
 
-        # ── new / clear ───────────────────────────────────────────────────
-        if norm in {"/new", "/clear"}:
+        # ── clear screen ──────────────────────────────────────────────────
+        # /clear used to be an ALIAS for /new, so anyone typing it with the
+        # universal shell meaning ("clear my screen") silently ended their
+        # session and lost the conversation. It now does what every other
+        # terminal does; /new still starts a session.
+        if norm == "/clear":
+            os.system("cls" if os.name == "nt" else "clear")
+            continue
+
+        # ── new session ───────────────────────────────────────────────────
+        if norm == "/new":
             sync_session_store(sessions, current_session)
             current_session = create_session()
             cprint("New session started.", C.DIM)
@@ -3461,6 +3564,16 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             cprint(f"  Loaded checkpoint '{cp_name}' ({n} messages).", C.BCYAN)
             continue
 
+        # Unknown slash command: catch typos HERE. Falling through sends
+        # "/hlep" to the model as a task — a 10+ second turn on a 4B that
+        # may then start running tools to satisfy a typo.
+        if query.startswith("/"):
+            cmd_word = query.split()[0]
+            suggestion = _closest_command(cmd_word)
+            hint = f" Did you mean {suggestion}?" if suggestion else ""
+            cprint(f"  Unknown command {cmd_word}.{hint} Type /help for the list.", C.YELLOW)
+            continue
+
         # ── dispatch to mode ──────────────────────────────────────────────
         history: list[dict[str, str]] = current_session.get("messages", [])
 
@@ -3523,10 +3636,21 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         except (UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
+        except urllib.error.HTTPError as exc:
+            # Measured 2026-07-30 (V2_PLAN §14.4): after 1-2h of traffic the
+            # npurun/Genie dialog degrades into sticky ERROR_QUERY_FAILED and
+            # 500s EVERY request until restarted. The eval harness was taught
+            # to detect this; the REPL was not — a user just saw errors and
+            # had to figure out the restart ritual themselves. Now it is
+            # named, and recovery is one keypress.
+            if exc.code >= 500:
+                _handle_backend_failure(config, f"HTTP {exc.code} from the model server")
+            else:
+                ui.error_box(f"Backend rejected the request (HTTP {exc.code}).")
+            tel.record_turn(turn, status="error")
         except urllib.error.URLError:
             if not ping_backend(config):
-                cprint(f"\n  Backend at {_backend_url(config)} is not responding.", C.BRED)
-                cprint("  Restart it with: python launcher.py", C.DIM)
+                _handle_backend_failure(config, "the model server is not responding")
             else:
                 ui.error_box("Network error — backend returned an unexpected response.")
             tel.record_turn(turn, status="error")
