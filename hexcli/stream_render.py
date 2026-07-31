@@ -82,6 +82,9 @@ class StreamRenderer:
             return
         if st == "done":
             return
+        if st == "v2_tag":
+            self._feed_v2_char(ch)
+            return
         if st == "message":
             self._feed_message_char(ch)
             return
@@ -110,6 +113,13 @@ class StreamRenderer:
                         self._emit_text(self._buf)
                         self._buf = ""
                 return  # still ambiguous until the fence line completes
+            elif stripped[0] == "<":
+                # Protocol v2 emits <action>{...}</action> / <write path=…>.
+                # Without this branch the probe classified it as prose and
+                # streamed the raw block to the user — the exact thing this
+                # renderer exists to prevent.
+                self._state = "v2_tag"
+                return
             else:
                 # Definitely prose: release everything buffered so far.
                 self._state = "prose"
@@ -144,6 +154,24 @@ class StreamRenderer:
             self._buf = ""
             for ch in rest:
                 self._feed_message_char(ch)
+
+    def _feed_v2_char(self, ch: str) -> None:
+        """Protocol-v2 action block: announce the tool, show nothing else."""
+        self._buf += ch
+        if self._announced:
+            return
+        buf = self._buf
+        # <write path="x"> / <edit path="x"> — the tag itself is the tool.
+        for tag in ("write", "edit"):
+            if buf.lower().startswith(f"<{tag}") and ">" in buf:
+                self._announce(tag)
+                return
+        # <action>{"name":"shell",...}</action>
+        if buf.startswith("<action") and '"name"' in buf:
+            name = _completed_string_value(buf, "name")
+            if name:
+                self._announce(name)
+
 
     def _feed_message_char(self, ch: str) -> None:
         if self._unicode is not None:

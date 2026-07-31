@@ -182,7 +182,45 @@ def test_agent_loop_reports_block_to_model() -> None:
         assert "could not write" in result.lower()
 
 
+# ---------------------------------------------------------------------------
+# Protocol v2 must enforce the SAME boundary
+# ---------------------------------------------------------------------------
+
+def test_v2_edit_outside_workspace_blocked() -> None:
+    """Regression: loop_v2._tool_edit reimplements the edit and originally
+    called only the sensitive-path guard, so protocol v2 could edit any file
+    on disk while v1 was contained."""
+    import hexcli.agent as agent_mod
+    from hexcli import loop_v2
+    with _Workspace() as (_, outside):
+        victim = outside / "v2_victim.txt"
+        victim.write_text("original", encoding="utf-8")
+        raised = ""
+        try:
+            out = loop_v2._tool_edit(
+                agent_mod, {"path": str(victim)}, [("original", "tampered")])
+            raised = out  # dispatch converts raises to "Error: ..." strings
+        except RuntimeError as exc:
+            raised = str(exc)
+        assert "outside the workspace" in raised, raised
+        assert victim.read_text(encoding="utf-8") == "original"
+
+
+def test_v2_edit_inside_workspace_allowed() -> None:
+    import hexcli.agent as agent_mod
+    from hexcli import loop_v2
+    with _Workspace() as (root, _):
+        target = root / "ok.txt"
+        target.write_text("original", encoding="utf-8")
+        out = loop_v2._tool_edit(
+            agent_mod, {"path": str(target)}, [("original", "updated")])
+        assert "Edited" in out, out
+        assert target.read_text(encoding="utf-8") == "updated"
+
+
 TESTS = [
+    test_v2_edit_outside_workspace_blocked,
+    test_v2_edit_inside_workspace_allowed,
     test_write_inside_workspace_allowed,
     test_nested_write_inside_workspace_allowed,
     test_edit_and_append_inside_workspace_allowed,
