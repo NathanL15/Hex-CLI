@@ -772,6 +772,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command-only", action="store_true")
     parser.add_argument("--print-config", action="store_true")
     parser.add_argument("--version", action="store_true", help="Print version and exit.")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Diagnose the installation (SDK, models, server) and exit.")
     parser.add_argument("--debug", action="store_true", help="Verbose error output (full tracebacks).")
     parser.add_argument("--fast", action="store_true", help="Trim spinner/streaming overhead for quicker turnaround.")
     parser.add_argument("--raw", action="store_true", help="Disable ANSI colour/styling; plain stdout only.")
@@ -2135,10 +2137,50 @@ def workspace_snapshot(cwd: str) -> str:
             break
 
     tag_line = "[" + " | ".join(parts) + "]"
+    sections = [tag_line]
+
+    project = read_project_instructions(p)
+    if project:
+        sections.append("Project instructions:\n" + project)
+
     rules = memory.read_memory_rules(5)
     if rules:
-        return tag_line + "\nPrior knowledge:\n" + "\n".join(f"  {r}" for r in rules)
-    return tag_line
+        sections.append("Prior knowledge:\n" + "\n".join(f"  {r}" for r in rules))
+    return "\n".join(sections)
+
+
+# Per-project instructions, in precedence order. AGENTS.md is the cross-tool
+# convention; the .shellai/ variant lets you keep it out of the repo.
+_PROJECT_INSTRUCTION_FILES = ("AGENTS.md", ".shellai/AGENTS.md", "HEXCLI.md")
+_PROJECT_INSTRUCTIONS_MAX_CHARS = 1200  # ~300 tokens — see docs/V2_PLAN.md §6.2
+
+
+def read_project_instructions(cwd: Path, max_chars: int = _PROJECT_INSTRUCTIONS_MAX_CHARS) -> str:
+    """Read the project's agent instructions, hard-capped.
+
+    Every character here is prompt tokens on EVERY turn, against a measured
+    ~2,600-token degradation cliff — so the cap is deliberate and the
+    truncation is loud rather than silent, otherwise a long AGENTS.md would
+    quietly push the model over the edge and look like a model regression.
+    """
+    for name in _PROJECT_INSTRUCTION_FILES:
+        path = cwd / name
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        # Drop comment-only and heading-only noise to spend the budget on rules.
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        body = "\n".join(ln for ln in lines if ln.strip())
+        if len(body) > max_chars:
+            body = body[:max_chars].rsplit("\n", 1)[0]
+            body += f"\n  […{name} truncated to {max_chars} chars to protect the context budget]"
+        return body
+    return ""
 
 
 def _extract_tools_from_history(history: list[dict[str, str]], last_n: int = 4) -> list[str]:
@@ -3441,6 +3483,12 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             _show_stats(config, tel, current_session)
             continue
 
+        # ── doctor: diagnose the installation without leaving the REPL ────
+        if norm == "/doctor":
+            from . import doctor
+            doctor.run_doctor(config, APP_DIR)
+            continue
+
         # ── clear screen ──────────────────────────────────────────────────
         # /clear used to be an ALIAS for /new, so anyone typing it with the
         # universal shell meaning ("clear my screen") silently ended their
@@ -3798,6 +3846,10 @@ def main() -> int:
         config["model"] = args.model
     if args.fast:
         config["use_streaming"] = False
+
+    if args.doctor:
+        from . import doctor
+        return doctor.run_doctor(config, APP_DIR)
 
     if args.print_config:
         print(json.dumps(config, indent=2))
