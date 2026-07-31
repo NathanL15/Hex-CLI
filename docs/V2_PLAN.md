@@ -453,3 +453,35 @@ model must stay in the 4B weight class — which makes the Thinking-2507
 self-compile the single remaining unlock for the ladder,** alongside the 8K
 recompile. Both run through the AI Hub cloud-compile path
 (`llm_on_genie`), which needs a free Qualcomm AI Hub account + API token.
+
+### 14.9 The 8K bundle: compiled, benched, measured — and rejected (2026-07-30)
+
+The AI Hub cloud-compile path WORKS from this machine. Getting there required
+four Windows-ARM toolchain fixes worth recording: `pip install wmi`; a
+resume-retry wrapper for the 17.8 GB quantized-checkpoint download; a version
+bisect (0.59.0 imports Unix-only `fcntl`; ≤0.58.0 crashes on a model-card
+publishing gate) landing on locally-patched 0.58.0; and neutering that
+publishing validator in `info_yaml.py` (a Qualcomm CI check with no bearing on
+exports). Pipeline: 17.8 GB checkpoint → local prep (never approached the
+feared 40 GB RAM wall — the pre-quantized path is light) → ~17 GB upload →
+cloud compile for X Elite at ctx 8192 → 2.4 GB bundle. Reusable end-to-end
+for Thinking-2507 once a quantized checkpoint exists.
+
+The bundle itself: loads, runs on the NPU, `npurun list` shows 8192 ctx —
+**TTFT 1.19s, decode 6.0 tok/s** (vs ~15 on the 4K bundle; the 8K graphs
+carry ~2.5× per-step cost, presumably from wider attention buffers).
+
+Measured on uc1 ×3: **10/18 → 9/18. Same t5/t6 failures, roughly double the
+latency.** The token column explains why: at t4–t6 the context was only
+~2,400–2,600 est. tokens — §14.7's deterministic compaction already keeps
+sessions under the model cliff on the 4K bundle. The context WINDOW stopped
+being the binding constraint the moment compaction fired on time; what
+remains is the model's behavioral degradation with conversation depth, which
+no amount of window fixes.
+
+**Decision: 4K bundle stays the default.** The 8K bundle remains installed
+(`qwen3-4b-instruct-2507-8k`) as an opt-in for genuinely long single-turn
+inputs (big file dumps), where TTFT-dominant workloads suit it. This result
+re-confirms the §4 conclusion from the other direction: every remaining
+quality lever now runs through a better MODEL (Thinking-2507), not more
+context, and the compile pipeline for it is now proven.
