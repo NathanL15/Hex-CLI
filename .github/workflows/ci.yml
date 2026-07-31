@@ -48,6 +48,12 @@ jobs:
       - name: Unit tests — injection defense (sensitive-command gate)
         run: python evals/test_injection_defense.py
 
+      - name: Unit tests — live stream rendering
+        run: python evals/test_stream_render.py
+
+      - name: Unit tests — workspace write-scoping
+        run: python evals/test_write_scope.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 

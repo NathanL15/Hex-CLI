@@ -346,6 +346,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
+    # Render streamed answers live (text as it arrives, tool intent announced
+    # early). Off = the old token-counter behaviour.
+    "live_streaming": True,
+    # Confine file MUTATIONS to the working directory (reads stay free).
+    "workspace_write_scope": True,
+    # Extra roots the agent may write to (absolute paths, ~ expanded).
+    "workspace_write_allow": [],
     "telemetry_enabled": True,
     "memory_enabled": True,
     "autopilot_confirm_destructive": True,
@@ -402,6 +409,16 @@ TOOL_NAMES = frozenset({
 # fresh (undo = delete).  Stored in-process only — not persisted to history.json
 # because snapshots are only useful within the current session.
 _SESSION_UNDO_SNAPSHOTS: dict[str, dict[str, str | None]] = {}
+
+# The config in force for the current turn. File tools are called from many
+# places (dispatch, batch, delegate, /undo) with no config parameter, so the
+# write-scope guard reads it from here. Set by run_autopilot / the REPL.
+_ACTIVE_CONFIG: dict[str, Any] | None = None
+
+
+def set_active_config(config: dict[str, Any] | None) -> None:
+    global _ACTIVE_CONFIG
+    _ACTIVE_CONFIG = config
 
 # ---------------------------------------------------------------------------
 # Mock backend (Feature 19) — deterministic offline testing via fixture queues
@@ -1058,6 +1075,7 @@ def _openai_stream_chat(
 
     parts: list[str] = []
     tok = 0
+    renderer = _make_live_renderer(config, label)
 
     # Dedicated per-call connection — see _ollama_stream_chat for why the
     # shared keep-alive pool isn't used here.
@@ -1095,10 +1113,13 @@ def _openai_stream_chat(
                     if delta:
                         parts.append(delta)
                         tok += 1
-                        sys.stderr.write(
-                            f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
-                        )
-                        sys.stderr.flush()
+                        if renderer is not None:
+                            renderer.feed(delta)
+                        else:
+                            sys.stderr.write(
+                                f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                            )
+                            sys.stderr.flush()
 
         if "value" in err_box:
             exc = err_box["value"]
@@ -1108,8 +1129,62 @@ def _openai_stream_chat(
                 return openai_chat(config, messages, token_key, json_format=json_format), 0
             raise exc
 
+        if renderer is not None:
+            renderer.finish()
         return "".join(parts), tok
     finally:
+        if renderer is not None:
+            _end_live_render(renderer)
+        else:
+            sys.stderr.write("\r" + " " * 60 + "\r")
+            sys.stderr.flush()
+
+
+# ---------------------------------------------------------------------------
+# Live streaming render (docs/V2_PLAN.md §10)
+# ---------------------------------------------------------------------------
+
+def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
+    """Renderer that prints the answer as it arrives, or None when live
+    rendering is off / inappropriate (evals, delegate sub-loops, compaction).
+
+    v1.7 showed only a token counter, so a 20-90s answer looked like a hang
+    (review finding W6). The renderer streams the finish message's TEXT and
+    announces tool intent early, without ever showing raw JSON.
+    """
+    if not config.get("live_streaming", True):
+        return None
+    if _in_delegate or label in ("compacting", "summarising"):
+        return None
+    if not sys.stderr.isatty():
+        return None  # eval/CI capture: keep logs clean
+
+    from .stream_render import StreamRenderer
+
+    state = {"started": False}
+
+    def emit(text: str) -> None:
+        if not state["started"]:
+            sys.stderr.write("\r" + " " * 60 + "\r")
+            state["started"] = True
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def on_tool(name: str) -> None:
+        sys.stderr.write(f"\r{C.DIM}  → {name}{C.RESET}" + " " * 20)
+        sys.stderr.flush()
+
+    r = StreamRenderer(emit, on_tool)
+    r._live_started = state  # type: ignore[attr-defined]
+    return r
+
+
+def _end_live_render(renderer: Any) -> None:
+    started = getattr(renderer, "_live_started", {}).get("started", False)
+    if started:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    else:
         sys.stderr.write("\r" + " " * 60 + "\r")
         sys.stderr.flush()
 
@@ -1286,6 +1361,68 @@ def resolve_path(raw: str) -> Path:
 
 _SENSITIVE_HOME_DIRS = frozenset({".ssh", ".gnupg", ".gpg", ".aws"})
 _HOME = Path.home().resolve()
+
+# Workspace write-scoping (docs/V2_PLAN.md §7). Reads stay unrestricted —
+# the agent must be able to consult docs and libraries outside the project —
+# but MUTATIONS are confined to the working directory unless explicitly
+# allowed. This is the containment half of the safety story: the sensitive-
+# command gate stops exfiltration, this stops collateral damage.
+_ALWAYS_WRITABLE_PREFIXES = ("temp", "tmp")
+
+
+def _check_write_scope(path: Path, op: str, config: dict[str, Any] | None = None) -> None:
+    """Deny AGENT-INITIATED mutations outside the workspace.
+
+    Scoping is a policy on what the agent may do during a turn, not a
+    property of the file helpers themselves. When no config is active
+    (config is None) the tools are being driven programmatically — by
+    /undo restore, checkpoint load, or a test — and the policy does not
+    apply. run_autopilot and the REPL both set the active config before any
+    tool can run, so every agent mutation IS scoped; this exemption cannot
+    be reached from a model-issued action.
+    """
+    if config is None:
+        return
+    cfg = config
+    if not cfg.get("workspace_write_scope", True):
+        return
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = path
+    root = Path(cwd_resolved()).resolve()
+    if _is_within(resolved, root):
+        return
+    # NOTE: system temp is deliberately NOT blanket-allowed. It looks harmless
+    # and was allowed in the first draft, but %TEMP% is a large shared area
+    # (other apps' state, other agents' sandboxes) and exempting it puts a
+    # hole through the containment guarantee for no benefit: eval sandboxes
+    # and run_code already run with the workspace AS cwd, so their writes are
+    # covered by the rule above. Anything else goes through the allow list.
+    for extra in cfg.get("workspace_write_allow", []) or []:
+        try:
+            if _is_within(resolved, Path(str(extra)).expanduser().resolve()):
+                return
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"{op} is blocked: {resolved} is outside the workspace "
+        f"({root}). Mutations are confined to the working directory. If this "
+        "is intended, the user can add the path to workspace_write_allow."
+    )
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def cwd_resolved() -> str:
+    """Indirection so tests can pin the workspace root."""
+    return str(Path.cwd())
 
 
 def _check_sensitive_path(path: Path, op: str) -> None:
@@ -1491,12 +1628,31 @@ def run_command_tool(
     t = threading.Thread(target=reader, daemon=True)
     t.start()
     def _terminate() -> None:
+        """Kill the command AND everything it spawned.
+
+        process.terminate() only signals the direct child (powershell.exe).
+        A command like `npm test` or `python -m http.server` leaves the real
+        work running as grandchildren — orphaned, still holding ports/files,
+        invisible to the user who just pressed Esc. taskkill /T walks the
+        whole tree; the plain kill stays as the fallback.
+        """
         if process.poll() is None:
-            process.terminate()
+            killed_tree = False
             try:
-                process.wait(timeout=2)
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                    capture_output=True, timeout=10,
+                )
+                killed_tree = True
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=3 if killed_tree else 2)
             except subprocess.TimeoutExpired:
-                process.kill()
+                try:
+                    process.kill()
+                except Exception:
+                    pass
 
     parts: list[str] = []
     parts_chars = 0
@@ -1580,6 +1736,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
 
     path = resolve_path(path_text)
     _check_sensitive_path(path, "edit_file")
+    _check_write_scope(path, "edit_file", _ACTIVE_CONFIG)
     if not old_string:
         raise RuntimeError("edit_file requires a non-empty 'old_string'. Use write_file to overwrite the whole file.")
     if not path.exists():
@@ -1602,6 +1759,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
 def write_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "write_file")
+    _check_write_scope(path, "write_file", _ACTIVE_CONFIG)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
@@ -1613,6 +1771,7 @@ def write_file_tool(path_text: str, content: str) -> str:
 def append_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
     _check_sensitive_path(path, "append_file")
+    _check_write_scope(path, "append_file", _ACTIVE_CONFIG)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     tmp = path.parent / (path.name + ".tmp")
@@ -2132,6 +2291,8 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "stream_delay_ms":                "int",
     "history_retention_days":         "int",
     "use_streaming":                  "bool",
+    "live_streaming":                 "bool",
+    "workspace_write_scope":          "bool",
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
@@ -2631,6 +2792,7 @@ def run_autopilot(
     # so Genie re-prefills only the new tokens via SentenceCode::Rewind.
     _CURRENT_SESSION_ID = str(uuid4())
 
+    set_active_config(config)
     cwd = str(Path.cwd())
     max_steps = int(config.get("max_agent_steps", 15))
     recent_tools = _extract_tools_from_history(history)
