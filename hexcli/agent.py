@@ -104,9 +104,100 @@ _FETCH_KW = prompts._FETCH_KW
 _BATCH_KW = prompts._BATCH_KW
 _LINT_KW = prompts._LINT_KW
 
+_AUTOPILOT_HEAD = prompts._AUTOPILOT_HEAD
+_AUTOPILOT_RULES = prompts._AUTOPILOT_RULES
+_AUTOPILOT_TAIL = prompts._AUTOPILOT_TAIL
+_CONDITIONAL_RULES = prompts._CONDITIONAL_RULES
+
 # Flag set while a delegate sub-loop is running — blocks nested delegate calls.
 _in_delegate: bool = False
 
+# Triggers for the four situational rules. Measured 2026-07-31: the rules are
+# 1,459 of the prompt's 1,990 tokens, and these four are 690 of those. The
+# compiled window is 4,096 with a degradation cliff near 2,600 (§14.7), so
+# carrying a rule that cannot apply costs headroom the history needs.
+#
+# Deliberately generous: including a rule needlessly costs tokens, omitting a
+# needed one costs behaviour. When in doubt these say yes.
+# Rule 12's own vocabulary — it scopes itself to "fix, edit, update, refactor,
+# or improve" and explicitly exempts create/write/generate tasks.
+_EDIT_INTENT_KW = frozenset({
+    "fix", "edit", "update", "change", "modify", "refactor", "improve",
+    "rename", "rewrite", "patch", "correct", "clean up", "tidy",
+    # "better"/"optimise" caught by the A/B: extended's ambiguous-3 is the bare
+    # phrase "Make it better.", which is precisely the request rule 12 exists
+    # to deflect, and none of the verbs above appear in it.
+    "better", "optimize", "optimise", "polish", "improve on",
+})
+# Rule 13 fires on any file mutation, so it needs the wider set. "add" was
+# missing at first and would have dropped the verify rule from a plain
+# "add a version key to config.json" — the exact shape of smoke's agentic-3.
+_WRITE_INTENT_KW = _EDIT_INTENT_KW | {
+    "add", "insert", "remove", "delete", "append", "create", "write",
+    "generate", "implement", "make", "replace", "set",
+}
+_RUN_INTENT_KW = frozenset({
+    "run", "execute", "test", "debug", "diagnose", "error", "exception",
+    "traceback", "crash", "fails", "failing", "broken", "stack trace",
+    "output of", "why does", "does not work", "doesn't work",
+})
+_CODE_HINT_KW = frozenset({
+    "code", "script", "function", "class", "module", "bug", "syntax",
+    "import", "variable", "method",
+})
+_CODE_EXTENSIONS = (".py", ".ps1", ".js", ".ts", ".mjs", ".cjs", ".json",
+                    ".tsx", ".jsx")
+
+
+def _select_autopilot_rules(query: str, recent_tools: list[str]) -> set[int]:
+    """Which numbered rules belong in this turn's prompt.
+
+    Every rule not in _CONDITIONAL_RULES is unconditional. The four that are
+    conditional are scoped by their own wording to a situation the query
+    reveals, so this only ever omits a rule that could not have fired.
+    """
+    selected = set(_AUTOPILOT_RULES) - set(_CONDITIONAL_RULES)
+    q = (query or "").lower()
+    tools = set(recent_tools or [])
+    mentions_code = (any(ext in q for ext in _CODE_EXTENSIONS)
+                     or any(kw in q for kw in _CODE_HINT_KW))
+    edit_intent = any(kw in q for kw in _EDIT_INTENT_KW)
+    write_intent = any(kw in q for kw in _WRITE_INTENT_KW)
+    run_intent = any(kw in q for kw in _RUN_INTENT_KW)
+
+    # 10 — bait compliance. Only bites when the user's wording names a tool.
+    if any(name in q for name in TOOL_NAMES) or "tool" in q:
+        selected.add(10)
+    # 12 — ambiguous edit/fix requests, by its own first line.
+    if edit_intent:
+        selected.add(12)
+    # 13 — verify_syntax after writing a code file. The harness-side
+    # verification gate still enforces this even when the rule is absent, so a
+    # missed trigger degrades to a nudge rather than to unverified edits.
+    if mentions_code or write_intent or tools & {"edit_file", "write_file"}:
+        selected.add(13)
+    # 14 — the run_code debugging sequence.
+    if run_intent or mentions_code or "run_code" in tools:
+        selected.add(14)
+    return selected
+
+
+def _autopilot_template(query: str, recent_tools: list[str]) -> str:
+    """Assemble the template for this turn.
+
+    With every rule selected the result is byte-identical to
+    prompts._AUTOPILOT_TEMPLATE — asserted in evals/test_v13.py.
+    """
+    config = _ACTIVE_CONFIG or {}
+    # Fallback read from DEFAULT_CONFIG rather than a literal: outside an agent
+    # turn there is no active config, and a hardcoded default here would drift
+    # from the shipped one silently.
+    if not config.get("conditional_rules", DEFAULT_CONFIG["conditional_rules"]):
+        return _AUTOPILOT_TEMPLATE
+    selected = _select_autopilot_rules(query, recent_tools)
+    return (_AUTOPILOT_HEAD
+            + "".join(_AUTOPILOT_RULES[n] for n in sorted(selected))
+            + _AUTOPILOT_TAIL)
 
 
 def build_autopilot_prompt(
@@ -120,7 +211,7 @@ def build_autopilot_prompt(
     if recent_tools is None:
         recent_tools = []
 
-    prompt = _AUTOPILOT_TEMPLATE.format(
+    prompt = _autopilot_template(query, recent_tools).format(
         date=datetime.now().strftime("%Y-%m-%d"),
         cwd=cwd,
         max_steps=max_steps,
@@ -177,6 +268,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_streaming": True,
     # Print a diff after every successful file mutation.
     "show_diffs": True,
+    # Omit the procedural rules (13/14) when the query cannot trigger them.
+    # OFF by default on measured evidence: it saves ~330 prompt tokens and 16%
+    # of first-token latency, but extended trap-4 went 5/8 -> 3/18 across three
+    # independent A/B runs (Fisher p~=0.017). See docs/V2_PLAN.md §14.15.
+    # Opt in only with a bigger-context bundle or a different model.
+    "conditional_rules": False,
     # Rich input line: persistent history, Tab completion, multi-line paste.
     # Falls back to bare input() automatically when stdin/stdout is not a tty.
     "rich_input": True,
@@ -2075,6 +2172,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "workspace_write_allow":          "list",
     "require_verification":           "bool",
     "show_diffs":                     "bool",
+    "conditional_rules":              "bool",
     "rich_input":                     "bool",
     "input_history_file":             "str",
     "input_history_limit":            "int",

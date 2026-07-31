@@ -661,12 +661,38 @@ def run_suite_cli(
                         help=f"Runs per case (default {default_runs}).")
     parser.add_argument("--protocol", choices=["v1", "v2"],
                         help="Override the agent protocol for this run (A/B testing).")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override any config key for this run (repeatable), "
+                             "e.g. --set conditional_rules=false. The override is "
+                             "recorded in the saved results so the two arms of an "
+                             "A/B stay identifiable after the fact.")
     parser.add_argument("--no-save", action="store_true")
     args = parser.parse_args()
 
     config = load_live_config()
     if args.protocol:
         config["protocol"] = args.protocol
+
+    overrides: dict[str, Any] = {}
+    for item in args.set:
+        key, _, raw = item.partition("=")
+        key = key.strip()
+        if not key or not _:
+            print(f"--set expects KEY=VALUE, got {item!r}", file=sys.stderr)
+            return 2
+        raw = raw.strip()
+        low = raw.lower()
+        value: Any
+        if low in ("true", "false"):
+            value = low == "true"
+        elif raw.lstrip("-").isdigit():
+            value = int(raw)
+        else:
+            value = raw
+        config[key] = value
+        overrides[key] = value
+    if overrides:
+        print(f"config overrides for this run: {overrides}")
 
     problem = backend_preflight(config)
     if problem:
@@ -681,6 +707,7 @@ def run_suite_cli(
         "temperature": config.get("temperature"),
         "protocol": config.get("protocol", "v1"),
         "runs_per_case": args.runs,
+        "overrides": overrides,
     }
     findings: list[str] = []
 
