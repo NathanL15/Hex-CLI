@@ -263,8 +263,6 @@ def run(
     verify_nudge_used = False
 
     def _finish(kind: str, message: str, outcome: str) -> str:
-        if session and last_tool_output:
-            agent.store_observation(session, query, last_tool_output)
         memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome=outcome)
         if session:
             agent._SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = turn_snapshots

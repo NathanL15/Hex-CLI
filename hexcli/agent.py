@@ -229,8 +229,13 @@ def build_autopilot_prompt(
     ):
         prompt += "\n\n    " + _LINT_TOOL_SCHEMA
 
-    # fetch_url — inject when online and query suggests web lookup
-    fetch_relevant = bool(re.search(r"https?://", q) or any(kw in q for kw in _FETCH_KW))
+    # fetch_url — inject when online and query suggests web lookup. Never
+    # advertise it under network_access="deny": a schema for a hard-blocked
+    # tool wastes tokens and invites a call that can only be refused.
+    _net_policy = str((_ACTIVE_CONFIG or {}).get(
+        "network_access", DEFAULT_CONFIG["network_access"])).strip().lower()
+    fetch_relevant = (_net_policy != "deny" and bool(
+        re.search(r"https?://", q) or any(kw in q for kw in _FETCH_KW)))
     if fetch_relevant:
         try:
             if network.is_online():
@@ -268,6 +273,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_streaming": True,
     # Print a diff after every successful file mutation.
     "show_diffs": True,
+    # Network policy for fetch_url, the agent's only outbound channel:
+    # "ask" (default) confirms each fetch and denies when non-interactive;
+    # "allow" fetches silently; "deny" disables the tool and drops its schema.
+    "network_access": "ask",
     # Omit the procedural rules (13/14) when the query cannot trigger them.
     # OFF by default on measured evidence: it saves ~330 prompt tokens and 16%
     # of first-token latency, but extended trap-4 went 5/8 -> 3/18 across three
@@ -375,6 +384,48 @@ def _pop_mock_response() -> tuple[str, int]:
     if _MOCK_RESPONSE_QUEUE:
         return (_MOCK_RESPONSE_QUEUE.pop(0), 0)
     return ('{"action":"finish","message":"Mock queue exhausted."}', 0)
+
+
+class _TokenEstimator:
+    """Data-driven replacement for the blanket chars/4 token estimate.
+
+    Every live completion returns an exact token count (the fork emits one
+    Genie chunk per generated token), and the text length is known locally —
+    so the real chars-per-token ratio of THIS model on THIS workload is
+    observable for free. The estimate feeds the context budget, where assuming
+    4 chars/token while code-heavy turns actually run ~3.3 means firing
+    compaction PAST the ~2,600-token degradation cliff — the v1.7 calibration
+    bug one layer down.
+
+    EMA over completions, clamped so one garbage usage report cannot poison
+    the budget. Starts at 4.0, which is byte-for-byte the old behaviour until
+    real observations arrive. A lower ratio means a HIGHER token estimate and
+    therefore earlier compaction — the safe direction.
+    """
+
+    def __init__(self) -> None:
+        self.ratio = 4.0
+        self.observations = 0
+
+    def observe(self, chars: int, tokens: int) -> None:
+        if tokens < 20 or chars < 40:
+            return  # too small to carry signal
+        sample = chars / tokens
+        if not 1.5 <= sample <= 8.0:
+            return  # implausible; likely a broken usage report
+        self.ratio = min(4.5, max(2.5, 0.9 * self.ratio + 0.1 * sample))
+        self.observations += 1
+
+    def estimate(self, text_len: int) -> int:
+        return int(text_len / self.ratio)
+
+
+_TOKEN_ESTIMATOR = _TokenEstimator()
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimated token count of `text` for budget decisions."""
+    return _TOKEN_ESTIMATOR.estimate(len(text))
 
 # One escalation server per (model, bind) for the process lifetime — spawning
 # a fresh 4.6 GB bundle load per consult would make escalation useless.
@@ -550,7 +601,6 @@ save_history_store = sessions.save_history_store
 load_history_store = sessions.load_history_store
 upsert_session = sessions.upsert_session
 sync_session_store = sessions.sync_session_store
-store_observation = sessions.store_observation
 
 
 # ---------------------------------------------------------------------------
@@ -1064,13 +1114,21 @@ def call_llm(
     """
     with memory._NPU_INFERENCE_LOCK:
         if config.get("backend") == "mock":
+            # Mock fixtures carry no real token counts — never feed the
+            # estimator from them.
             return _pop_mock_response()
 
         if config["backend"] == "ollama" and config.get("use_streaming", True):
-            return _ollama_stream_chat(config, messages, token_key, label=label, json_format=json_format)
+            text, count = _ollama_stream_chat(
+                config, messages, token_key, label=label, json_format=json_format)
+            _TOKEN_ESTIMATOR.observe(len(text), count)
+            return text, count
 
         if config["backend"] == "openai" and config.get("use_streaming", True):
-            return _openai_stream_chat(config, messages, token_key, label=label, json_format=json_format)
+            text, count = _openai_stream_chat(
+                config, messages, token_key, label=label, json_format=json_format)
+            _TOKEN_ESTIMATOR.observe(len(text), count)
+            return text, count
 
         result_box: dict[str, Any] = {}
         error_box: dict[str, BaseException] = {}
@@ -1425,9 +1483,33 @@ def parse_agent_action(raw_text: str) -> dict[str, Any]:
 
         message = str(parsed.get("message") or "").strip()
         if message:
-            return {"action": "finish", "message": message}
+            # Valid JSON, but the action name (if any) matched nothing. Tag it
+            # so the loop can distinguish "model typo'd a tool name" (worth a
+            # retry naming the bad action) from an intended finish.
+            return {"action": "finish", "message": message,
+                    "fallback": "unknown-action", "bad_action": action}
 
-    return {"action": "finish", "message": strip_thinking(raw_text).strip()}
+    # No parseable JSON anywhere: the message is just the raw prose. This is
+    # the deliberate direct-answer path for knowledge questions — but the loop
+    # retries it when the text shows signs of an ATTEMPTED action (see
+    # _looks_like_botched_action), because "prose instead of action" was the
+    # uc1-t5/t6 failure mode.
+    return {"action": "finish", "message": strip_thinking(raw_text).strip(),
+            "fallback": "prose"}
+
+
+def _looks_like_botched_action(raw_text: str) -> bool:
+    """Does an unparseable response look like it TRIED to be an action?
+
+    Braces or code fences mean attempted JSON; a tool name means attempted
+    tool use. Pure prose with none of those is accepted as an implicit finish
+    — that path is load-bearing for direct answers, so this must stay
+    conservative about flagging it.
+    """
+    text = strip_thinking(raw_text)
+    if "{" in text or "```" in text:
+        return True
+    return any(name in text for name in TOOL_NAMES)
 
 
 # ---------------------------------------------------------------------------
@@ -2173,6 +2255,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "require_verification":           "bool",
     "show_diffs":                     "bool",
     "conditional_rules":              "bool",
+    "network_access":                 "str",
     "rich_input":                     "bool",
     "input_history_file":             "str",
     "input_history_limit":            "int",
@@ -2345,7 +2428,7 @@ def _show_profile(config: dict[str, Any], mode: str, session: dict[str, Any]) ->
     cprint(f"  Backend status  {status_str}", status_col)
     msgs = session.get("messages", [])
     title = session.get("title", "New Chat")
-    est = sum(len(m.get("content", "")) for m in msgs) // 4
+    est = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
     print(f"  Session         {title!r}  ({len(msgs)} messages, ~{est:,} tokens)")
     print()
 
@@ -2463,6 +2546,21 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         url = str(args.get("url") or "").strip()
         if not url:
             raise RuntimeError("fetch_url requires 'url'.")
+        # Network deny-by-default (V2_PLAN §11): "fully offline" is enforced,
+        # not assumed. "ask" confirms each fetch and denies when
+        # non-interactive — same posture as the sensitive-command tier, and
+        # for the same reason: a prompt-injected fetch_url is an exfiltration
+        # channel, and the defence must not depend on the model resisting.
+        policy = str(config.get("network_access", "ask")).strip().lower()
+        if policy == "deny":
+            raise RuntimeError(
+                "fetch_url is disabled (network_access is \"deny\"). This is a "
+                "hard boundary — do not attempt another route. Tell the user "
+                "what you wanted to fetch and why.")
+        if policy != "allow" and not ui.confirm_network_fetch(url):
+            raise RuntimeError(
+                "fetch_url was not approved by the user. Do not attempt "
+                "another route; continue without the network.")
         return network.fetch_url(url)
 
     if tool == "batch":
@@ -2648,6 +2746,20 @@ def chat_turn(
 # Autopilot: multi-step agentic loop
 # ---------------------------------------------------------------------------
 
+def _loop_target(args: dict[str, Any]) -> str:
+    """What a tool call is aimed at, for loop detection.
+
+    Same tool + same target + repeated failure = stuck, even when each error
+    reads slightly differently. Commands are truncated so a long one-liner
+    with a changing tail still counts as the same attempt.
+    """
+    for key in ("path", "url", "query", "task"):
+        value = str(args.get(key) or "").strip()
+        if value:
+            return value.lower()
+    return str(args.get("command") or "").strip().lower()[:80]
+
+
 def run_autopilot(
     config: dict[str, Any],
     history: list[dict[str, str]],
@@ -2707,7 +2819,8 @@ def run_autopilot(
     # can restore the exact pre-turn state. None means file was created fresh.
     _turn_snapshots: dict[str, str | None] = {}
     # Rolling window for error-loop detection: (tool_name, output) tuples.
-    _loop_tracker: list[tuple[str, str]] = []
+    # Entries are (tool, target, is_error, output) — see the trip logic below.
+    _loop_tracker: list[tuple[str, str, bool, str]] = []
     # Verification-gated finish: after a successful file mutation the model
     # must observe something (run/read/check) before its answer is accepted.
     # One nudge per turn — it guides, never traps.
@@ -2763,22 +2876,41 @@ def run_autopilot(
             _probe(probe, "on_llm", step, attempt, raw, llm_latency)
             action = parse_agent_action(raw)
 
-            # Retry only if we got a malformed finish on early steps
-            if (
-                attempt < 2
-                and step < 3
-                and action["action"] == "finish"
-                and any(name in raw for name in TOOL_NAMES)
-                and not parse_json_object(raw)
-            ):
-                messages.append({"role": "assistant", "content": strip_thinking(raw)})
-                messages.append({
-                    "role": "user",
-                    "content": (
+            # Retry-with-feedback on parse failures (V2_PLAN §5.1). The v1
+            # condition also required step < 3 and a verbatim tool-name
+            # substring in the text — so a typo'd action name, truncated JSON,
+            # or a late-step botch was silently accepted as a prose finish and
+            # the turn ended with zero tool calls. Now any fallback finish that
+            # looks like an attempted action earns a retry, at any step, with
+            # feedback naming what was wrong; the failed attempt stays in
+            # context so the model has the evidence to adapt.
+            fallback = action.get("fallback")
+            should_retry = attempt < 2 and action["action"] == "finish" and (
+                (fallback == "unknown-action" and action.get("bad_action"))
+                or (fallback == "prose" and _looks_like_botched_action(raw))
+            )
+            if should_retry:
+                if fallback == "unknown-action":
+                    feedback = (
+                        f"Your JSON used action \"{action.get('bad_action')}\", which is not "
+                        "a valid tool. Valid actions are the tool names listed in the "
+                        "system prompt, or \"finish\". Respond with exactly one JSON "
+                        "object. No prose."
+                    )
+                elif parse_json_object(raw):
+                    feedback = (
+                        "Your JSON did not match either valid shape. Use "
+                        '{"action":"<tool_name>","args":{...}} or '
+                        '{"action":"finish","message":"..."}. Respond with exactly '
+                        "one JSON object. No prose."
+                    )
+                else:
+                    feedback = (
                         "Your response was not valid JSON. "
                         "Respond with exactly one JSON object as specified. No prose."
-                    ),
-                })
+                    )
+                messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                messages.append({"role": "user", "content": feedback})
                 continue
             break
 
@@ -2827,8 +2959,6 @@ def run_autopilot(
                 })
                 continue
             result = msg or last_tool_output or "Done."
-            if session and last_tool_output:
-                store_observation(session, query, last_tool_output)
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
             if total_eval:
                 cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
@@ -2903,13 +3033,25 @@ def run_autopilot(
         elif tool_name in {"read_file", "run_code", "verify_syntax", "lint_code",
                            "run_command"} and not _is_error:
             _unverified_mutation = False
-        # Error-loop detection: if the last 3 (tool, output) pairs are identical,
-        # the agent is cycling — stop early rather than burning the full step budget.
-        _loop_tracker.append((tool_name, tool_output))
+        # Error-loop detection. Two trips (V2_PLAN §5.3):
+        #   (a) 3 identical (tool, output) pairs — the original detector;
+        #   (b) 3 consecutive FAILURES of the same tool on the same target,
+        #       even when the error text varies. The v1.7 audit's 9-edit retry
+        #       spiral never tripped (a) because each attempt failed slightly
+        #       differently — same wrong edit, different closest-match report.
+        _loop_tracker.append(
+            (tool_name, _loop_target(action.get("args", {}) or {}), _is_error, tool_output))
         if len(_loop_tracker) > 3:
             _loop_tracker.pop(0)
-        if len(_loop_tracker) == 3 and len(set(_loop_tracker)) == 1:
-            cprint("\n  ⚠ Agent appears stuck in a repeat loop (3 identical results).", C.BYELLOW)
+        _identical_trip = (len(_loop_tracker) == 3
+                           and len({(t, out) for t, _tgt, _e, out in _loop_tracker}) == 1)
+        _failure_trip = (len(_loop_tracker) == 3
+                         and all(err for _t, _tgt, err, _out in _loop_tracker)
+                         and len({(t, tgt) for t, tgt, _e, _out in _loop_tracker}) == 1)
+        if _identical_trip or _failure_trip:
+            reason = ("3 identical results" if _identical_trip
+                      else "3 straight failures of the same call")
+            cprint(f"\n  ⚠ Agent appears stuck in a repeat loop ({reason}).", C.BYELLOW)
             # Escalation trigger A — the loop detector: consult the local
             # model BEFORE giving up (the cloud path stays as the fallback).
             if _consult_and_inject(
@@ -2926,7 +3068,7 @@ def run_autopilot(
                 except (EOFError, KeyboardInterrupt):
                     answer = "n"
                 if answer in ("y", "yes"):
-                    tool_seq = [t for t, _ in _loop_tracker]
+                    tool_seq = [entry[0] for entry in _loop_tracker]
                     suggestion = escalate.escalate(config, messages, tool_seq)
                     cprint("\n── Cloud suggestion ──────────────────────────────────────────────", C.BCYAN)
                     print(suggestion)
@@ -2941,8 +3083,6 @@ def run_autopilot(
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
         messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, output_limit)}"})
 
-    if session and last_tool_output:
-        store_observation(session, query, last_tool_output)
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
     if total_eval:
         cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
@@ -3063,9 +3203,9 @@ def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
     if override:
         return int(override), int(override) * 5 // 4
     try:
-        base = len(build_autopilot_prompt(
+        base = estimate_tokens(build_autopilot_prompt(
             cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15)),
-        )) // 4
+        ))
     except Exception:
         base = 2_100
     warn = max(_MIN_HISTORY_BUDGET_TOKENS,
@@ -3086,7 +3226,7 @@ def _maybe_auto_compact(
     The full summary is suppressed (quiet=True); only a one-line notice prints.
     """
     msgs = session.get("messages", [])
-    est = sum(len(m.get("content", "")) for m in msgs) // 4
+    est = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
     warn_tokens, crit_tokens = _history_budget_tokens(config)
     if est < warn_tokens:
         return
@@ -3432,8 +3572,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
 
         # ── context ───────────────────────────────────────────────────────
         if norm == "/context":
-            _sys_tokens = len(build_autopilot_prompt(
-                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15)))) // 4
+            _sys_tokens = estimate_tokens(build_autopilot_prompt(
+                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
             show_context(current_session, config,
                          budget=_history_budget_tokens(config),
                          system_prompt_tokens=_sys_tokens)

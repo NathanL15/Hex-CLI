@@ -382,6 +382,22 @@ def repl_prompt(config: dict[str, Any], mode: str) -> str:
 # Result rendering
 # ---------------------------------------------------------------------------
 
+def confirm_network_fetch(url: str) -> bool:
+    """Outbound network access is the exception in an offline-first product;
+    require explicit consent per fetch. Denied when non-interactive."""
+    print()
+    cprint("⚠  Agent wants to fetch a URL (the only network access it has):", C.BYELLOW, bold=True)
+    cprint(f"   {url}", C.CYAN)
+    print()
+    if not sys.stdin.isatty():
+        return False
+    try:
+        answer = input("Allow this fetch? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes"}
+
+
 def confirm_sensitive_command(cmd: str) -> bool:
     """Sensitive-data access (keys, credentials, security files, obfuscated
     execution) requires explicit consent; denied when non-interactive."""

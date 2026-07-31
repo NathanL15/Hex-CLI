@@ -713,3 +713,50 @@ bigger-context bundle or a different model — and only behind a fresh A/B.
 **Process note:** the instrument gained `--set KEY=VALUE`, so any config key
 can now be A/B'd and the override is recorded in the saved results.
 
+### 14.16 Final v2 audit: the four remaining correctness items, closed (2026-07-31)
+
+A line-item audit of §§5–11 against the code found four cheap, real gaps —
+each something the plan explicitly called for and the implementation rounds
+had not delivered. All four are now shipped, offline-tested, and smoke-checked
+live (10/10):
+
+1. **Retry-with-feedback is unconditional (§5.1).** The v1 retry required
+   `step < 3` *and* a verbatim tool-name substring in the malformed text — so
+   a typo'd action (`"edit-file"`), truncated JSON, or any late-step botch was
+   silently accepted as a prose finish: the exact "prose instead of action"
+   shape of uc1-t5/t6. `parse_agent_action` now tags fallback finishes, and
+   any fallback that looks like an attempted action (braces / fences / tool
+   name) earns a retry at any step, with feedback that names what was wrong
+   (unknown action vs wrong shape vs not JSON). Pure prose stays an implicit
+   finish — that path is load-bearing for direct answers.
+2. **The loop detector is fuzzy (§5.3).** Second trip added: three consecutive
+   failures of the same tool on the same target, even when the error text
+   varies — the audit's 9-edit retry spiral never tripped the identical-tuple
+   detector because each attempt failed slightly differently. Distinct targets
+   still never trip (exploration is not a loop).
+3. **Token accounting is calibrated (§6.2).** Shipping the Qwen tokenizer was
+   never done; the honest cheap version: the fork emits one Genie chunk per
+   generated token, so every live completion is an exact (chars, tokens)
+   observation. `_TokenEstimator` EMAs the real chars-per-token ratio
+   (clamped [2.5, 4.5], starts at 4.0 = old behaviour, mock backend never
+   feeds it) and now backs the context budget, auto-compact, `/context` and
+   `/stats`. Assuming 4.0 while code-heavy turns run ~3.3 was the v1.7
+   too-late-compaction bug one layer down.
+4. **Network deny-by-default is enforced, not asserted (§11).** `fetch_url` —
+   the agent's only outbound channel — now runs under `network_access`:
+   `ask` (default) confirms per fetch and refuses when non-interactive;
+   `deny` disables the tool *and drops its schema from the prompt* (a schema
+   for a hard-blocked tool invites a call that can only be refused); `allow`
+   restores the old behaviour. Refusals use the hard-boundary wording — a
+   refusal must never teach its own bypass (§14.11).
+
+Also removed: `last_observation`, written every turn from three call sites and
+read by nothing.
+
+**With these, the v2 scope is closed.** Everything else in §§5–11 is either
+shipped, measured-and-rejected (§§14.3, 14.8, 14.9, 14.15), unreachable
+(§14.14), or explicitly deferred product work (plan ledger, memory-v2,
+git-snapshot undo, background commands, persistent shell in v1 — each big,
+unproven at 4B, and none gating a release). Remaining work is packaging,
+the agent.py split (2 of ~8 stages done), and product features — v2.x, not v2.
+

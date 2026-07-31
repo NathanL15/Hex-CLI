@@ -97,8 +97,10 @@ def test_deep_merge_three_levels_deep() -> None:
 
 def test_create_session_has_required_keys() -> None:
     session = sa.create_session()
-    for key in ("id", "title", "created_at", "modified_at", "messages", "last_observation"):
+    for key in ("id", "title", "created_at", "modified_at", "messages", "compact_count"):
         assert key in session, f"missing key: {key}"
+    # last_observation was removed in v2.0: written every turn, read nowhere.
+    assert "last_observation" not in session
 
 
 def test_create_session_starts_with_empty_messages() -> None:
@@ -320,7 +322,6 @@ def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     s = sessions[0]
     assert s.get("title") == "New Chat"
-    assert "last_observation" in s
     assert "compact_count" in s
 
 
