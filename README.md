@@ -118,6 +118,26 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | `/doctor` | diagnose the installation |
 | `Esc` | cancel the running step (kills the whole process tree) |
 
+### The input line
+
+Persistent history, completion, and real editing — no dependency, just
+`msvcrt`. Falls back to plain `input()` when stdin is not a terminal, so pipes
+and CI are unaffected.
+
+| | |
+|---|---|
+| `↑` · `↓` | history. With text already typed, it searches by that prefix |
+| `Tab` | complete slash commands, `/config` keys, `/mode` values, file paths |
+| `←` `→` · `Ctrl+←` `Ctrl+→` | by character · by word |
+| `Home` · `End` | start · end of the current line |
+| `Ctrl+W` · `Ctrl+U` · `Ctrl+K` | kill the word before · to line start · to line end |
+| `Esc` | clear the line |
+| paste | multi-line pastes stay one message instead of submitting line by line |
+| `\` then `Enter` | continue on a new line deliberately |
+
+History lives in `~/.shellai/input_history`. `rich_input: false` turns all of
+this off.
+
 ### Project instructions
 
 Drop an **`AGENTS.md`** in a project and the agent reads it every turn —
@@ -192,6 +212,7 @@ The ones most worth knowing:
 | `protocol` | `"v1"` | agent protocol; `"v2"` is experimental |
 | `max_agent_steps` | `15` | tool calls per turn |
 | `live_streaming` | `true` | render answers as they arrive |
+| `rich_input` | `true` | history, Tab completion, multi-line paste |
 | `show_diffs` | `true` | print a diff after each mutation |
 | `workspace_write_scope` | `true` | confine writes to the working directory |
 | `autopilot_confirm_sensitive` | `true` | gate credential/key access |
@@ -204,13 +225,17 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**19 offline suites** — no LLM required, all against a mock backend:
+**20 offline suites (583 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage
 python evals/test_agent_loop.py     # the loop, end to end
-python evals/test_product_shell.py  # diffs, AGENTS.md, doctor
+python evals/test_product_shell.py  # diffs, AGENTS.md, doctor, example config
+python evals/test_lineedit.py       # input line: history, completion, paste
 ```
+
+The input line injects its key source and output sink, so all 65 of its cases
+run with no terminal at all.
 
 **Live evals** (need the NPU server) grade real model behaviour:
 
