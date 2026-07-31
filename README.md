@@ -5,7 +5,7 @@ Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
 cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
 LangChain.
 
-Current version: **1.8.0-dev**
+Current version: **2.0.0**
 
 ```
 you ▸ the median calc in processor.py is wrong for even-length lists — fix it
