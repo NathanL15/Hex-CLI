@@ -57,6 +57,9 @@ jobs:
       - name: Unit tests — product shell (diffs, AGENTS.md, doctor)
         run: python evals/test_product_shell.py
 
+      - name: Unit tests — input line (history, completion, multi-line)
+        run: python evals/test_lineedit.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 

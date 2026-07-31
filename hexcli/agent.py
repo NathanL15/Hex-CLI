@@ -34,6 +34,7 @@ from hexcli import (
     diffview,
     distribution,
     escalate,
+    lineedit,
     local_escalation,
     lockfile,
     memory,
@@ -351,6 +352,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_streaming": True,
     # Print a diff after every successful file mutation.
     "show_diffs": True,
+    # Rich input line: persistent history, Tab completion, multi-line paste.
+    # Falls back to bare input() automatically when stdin/stdout is not a tty.
+    "rich_input": True,
+    "input_history_file": "",
+    "input_history_limit": 500,
     # After an unverified file mutation, deflect the first "done" once and ask
     # the agent to check its work. (Was read from config but declared nowhere,
     # so `/config require_verification false` reported an unknown key.)
@@ -2357,6 +2363,9 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "workspace_write_allow":          "list",
     "require_verification":           "bool",
     "show_diffs":                     "bool",
+    "rich_input":                     "bool",
+    "input_history_file":             "str",
+    "input_history_limit":            "int",
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
@@ -3427,10 +3436,14 @@ def restart_backend(config: dict[str, Any]) -> bool:
     return False
 
 
+# Every slash command run_repl handles. Drives Tab completion and the
+# did-you-mean hint, so anything missing here is invisible to both;
+# evals/test_lineedit.py cross-checks this against run_repl's source.
 REPL_COMMANDS = (
-    "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/new",
-    "/compact", "/context", "/config", "/memory", "/mode", "/model",
-    "/tools", "/undo", "/save", "/load", "/stats", "/diff", "/doctor",
+    "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/open",
+    "/new", "/compact", "/context", "/config", "/memory", "/mode", "/model",
+    "/models", "/profile", "/checkpoints", "/tools", "/undo", "/save",
+    "/load", "/stats", "/diff", "/doctor", "/cwd",
 )
 
 
@@ -3451,10 +3464,16 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")), mode)
     memory.start_dreaming(lambda: config, llm_generate)
 
+    # Rich line editing where the terminal supports it; bare input() otherwise
+    # (piped stdin, CI, --raw) so nothing depends on it being available.
+    read_line = lineedit.make_reader(
+        config, REPL_COMMANDS, lambda: sorted(_CONFIG_SETTABLE)
+    ) or (lambda p: input(p))
+
     while True:
         prompt = repl_prompt(config, mode)
         try:
-            query = input(prompt).strip()
+            query = read_line(prompt).strip()
         except EOFError:
             print()
             sync_session_store(sessions, current_session)

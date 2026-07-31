@@ -167,9 +167,19 @@ HELP_TEXT = textwrap.dedent("""
       /save <name>                  save a named checkpoint of the current session
       /load <name>                  restore a checkpoint into the current session
       /checkpoints                  list all saved checkpoints
+      /diff                         show what the agent changed this turn
+      /stats                        turns, elapsed time, tokens, tool usage
+      /doctor                       diagnose the installation
       /tools                        list agent tools
       /exit  /quit                  exit
-      Esc                           cancel the current agent step
+
+    KEYS:
+      Up / Down                     history (prefix-searched once you type)
+      Tab                           complete commands, config keys, file paths
+      Ctrl+Left / Ctrl+Right        move by word
+      Ctrl+W / Ctrl+U / Ctrl+K      kill word back / to line start / to line end
+      Esc                           clear the line — or cancel a running step
+      \\ then Enter                  continue on a new line (pastes keep theirs)
 
     AGENT TOOLS (autopilot):
       run_command     read_file      edit_file      write_file    append_file

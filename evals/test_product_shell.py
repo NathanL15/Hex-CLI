@@ -167,7 +167,45 @@ def test_doctor_every_failing_check_offers_a_fix() -> None:
                     assert c.fix, f"{c.name} fails with no remedy — that's a useless check"
 
 
+# ---------------------------------------------------------------------------
+# Example config
+# ---------------------------------------------------------------------------
+
+def _example_config_generator() -> Any:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import gen_example_config
+    return gen_example_config
+
+
+def test_example_config_matches_defaults() -> None:
+    """The example config is copy-paste documentation, so drift is a real bug:
+    it once shipped a prompt override that replaced the tuned agent prompt."""
+    gen = _example_config_generator()
+    current = gen.TARGET.read_text(encoding="utf-8")
+    assert current == gen.render(), \
+        "shellai.example.json is stale — run tools/gen_example_config.py"
+
+
+def test_example_config_excludes_prompt_overrides() -> None:
+    import json
+    gen = _example_config_generator()
+    data = json.loads(gen.TARGET.read_text(encoding="utf-8"))
+    offenders = [k for k in data if gen.is_prompt_override(k)]
+    assert not offenders, f"prompt overrides must never be suggested: {offenders}"
+
+
+def test_example_config_has_no_unknown_keys() -> None:
+    import json
+    gen = _example_config_generator()
+    data = json.loads(gen.TARGET.read_text(encoding="utf-8"))
+    unknown = set(data) - set(sa.DEFAULT_CONFIG) - {"_comment"}
+    assert not unknown, f"example config documents keys that do not exist: {unknown}"
+
+
 TESTS = [
+    test_example_config_matches_defaults,
+    test_example_config_excludes_prompt_overrides,
+    test_example_config_has_no_unknown_keys,
     test_diff_shows_added_and_removed,
     test_diff_for_created_file,
     test_diff_no_change_is_quiet,
