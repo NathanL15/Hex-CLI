@@ -36,6 +36,11 @@ _CFG: dict[str, Any] = {
     "autopilot_confirm_destructive": False,
     "memory_enabled": False,
     "anthropic_api_key": "",  # suppress escalation prompt
+    # These tests drive the loop with fixtures at absolute temp paths
+    # while cwd is the repo — a shape production never has (an agent
+    # turn's cwd IS the workspace). Scoping has its own suite:
+    # evals/test_write_scope.py, which covers the loop path too.
+    "workspace_write_scope": False,
 }
 
 _SHELL = "powershell.exe"

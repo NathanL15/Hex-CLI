@@ -225,6 +225,7 @@ def run(
 ) -> str:
     import hexcli.agent as agent  # late import; agent imports us lazily too
 
+    agent.set_active_config(config)
     cwd = str(Path.cwd())
     max_steps = int(config.get("max_agent_steps", 15))
     output_limit = int(config.get("tool_output_limit", 12000))

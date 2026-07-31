@@ -41,6 +41,9 @@ _CFG: dict[str, Any] = {
     "telemetry_enabled": False,
     "anthropic_api_key": "",
     "escalation_local_model": "qwen3-8b",
+    # Fixtures live at absolute temp paths; scoping is covered by
+    # evals/test_write_scope.py (see note there).
+    "workspace_write_scope": False,
 }
 
 _SHELL = "powershell.exe"
