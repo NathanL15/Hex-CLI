@@ -1,8 +1,26 @@
 # Hex CLI
 
-`hexcli` is a local terminal agent for Windows on ARM, running on the Snapdragon Hexagon NPU via **npurun**. It uses a ReAct-style JSON action loop with on-device semantic memory and a full tool suite — entirely in Python stdlib + NumPy/ONNX (no LangChain, no cloud required).
+A terminal agent that runs **entirely on your machine** — Qwen3-4B on the
+Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
+cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
+LangChain.
 
-Current version: **1.7.0**
+Current version: **1.8.0-dev**
+
+```
+you ▸ the median calc in processor.py is wrong for even-length lists — fix it
+  → read_file
+  → edit_file
+~ processor.py  (+3 −1)
+@@ -12,4 +12,6 @@
+-    return sorted(data)[len(data) // 2]
++    mid = len(data) // 2
++    if len(data) % 2 == 0:
++        return (sorted(data)[mid - 1] + sorted(data)[mid]) / 2
+  → run_code
+Fixed: even-length lists now average the two middle values. Verified — the
+test file prints 3.5 for [1, 2, 5, 6].
+```
 
 ---
 
@@ -10,319 +28,229 @@ Current version: **1.7.0**
 
 | Mode | What it does |
 |---|---|
-| **Autopilot** | Full agentic loop — dispatches tools, executes PowerShell, reads/writes files, corrects its own errors, and loops until the task is done. |
-| **Chat** | Prose answer first; only suggests a command when it genuinely helps. |
-| **Command-only** | Returns a single PowerShell command, then prompts **Execute / Copy / Abort**. |
+| **Autopilot** (default) | Full agentic loop — runs tools, edits files, verifies its own work, loops until done. |
+| **Chat** | Prose answer; suggests a command only when it genuinely helps. |
+| **Command-only** | Returns one PowerShell command, then prompts Execute / Copy / Abort. |
 
 ---
 
 ## Quick start
 
 ```powershell
-Copy-Item .\shellai.example.json .\shellai.json
-python .\shellai.py                        # autopilot REPL
-python .\shellai.py "what can you do?"     # one-shot question
-python .\shellai.py --command-only "list the ten largest files here"
+python -m hexcli.agent --doctor      # check your install first
+python -m hexcli.agent               # autopilot REPL
+python -m hexcli.agent "what changed in this repo today?"
+python -m hexcli.agent --command-only "list the ten largest files here"
 ```
 
-Or via the Start Menu launcher: **Hex CLI**
+`--doctor` tells you exactly what is missing and the command that fixes it.
+Start there — several dependencies (the QAIRT SDK, model bundles, the
+embedding model) cannot be bundled and must be fetched once.
+
+**Config is optional.** The built-in defaults are complete; a `shellai.json`
+only needs the keys you want to override. `shellai.example.json` shows every
+available key with its default value.
 
 PowerShell alias (add to `$PROFILE`):
 
 ```powershell
-$ShellAiRoot = "C:\path\to\Hex-CLI"
-function shellai { python "$ShellAiRoot\shellai.py" @Args }
-function ??      { shellai @Args }
-Set-Alias sai shellai
+function hex { python -m hexcli.agent @Args }
 ```
 
 ---
 
-## Project layout
+## Setup
 
+Four things, once. `--doctor` verifies each one.
+
+**1. Python deps** — `pip install numpy onnxruntime` (`ruff` is optional and
+enables the `lint_code` tool).
+
+**2. QAIRT SDK** — free Qualcomm developer account; not redistributable.
+Install to `C:\Qualcomm\AIStack\QAIRT_2.47.0`, then set both variables:
+
+```powershell
+setx QNN_SDK_ROOT "C:\Qualcomm\AIStack\QAIRT_2.47.0"
+setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.47.0\lib\hexagon-v73\unsigned"
 ```
-hexcli/              Python package — the agent runtime
-  agent.py           config, sessions, tools, autopilot loop, mock backend
-  ui.py              colours, spinner, REPL help text
-  memory.py          semantic vector store, global/project split, dreaming daemon
-  safety.py          command classifier + audit log
-  escalate.py        cloud escalation (Anthropic API fallback) + secret redaction
-  telemetry.py       silent structured session logger
-  lockfile.py        single-instance guard
 
-evals/               offline test suite + live eval harnesses
-  test_v11.py        CoT stripping, undo, lint_code (requires no LLM)
-  test_v12.py        safety classifier, audit log, error-loop detection
-  test_v13.py        workspace snapshot, network, tool injection, batch
-  test_v14.py        lockfile, /config, /memory, /profile, delegate
-  test_v15.py        global/project memory, dreaming daemon, rules injection
-  test_v16.py        secret redaction, escalation, checkpoints, config merge
-  test_core.py       pure-function unit tests: deep_merge, session CRUD, parse_agent_action, etc.
-  test_agent_loop.py integration tests using the mock backend (no NPU required)
-  fixtures/          JSON fixture files for mock-backend tests
-  harness.py         9-case live smoke test (requires running LLM endpoint)
-  extended.py        35-case adversarial regression suite
-  multiturn.py       multi-turn adversarial suite
+Without `ADSP_LIBRARY_PATH`, npurun dies with `STATUS_STACK_BUFFER_OVERRUN`.
 
-.github/workflows/
-  ci.yml             GitHub Actions CI — syntax, ruff, all offline test suites
+**3. npurun + a model** — this repo vendors a **fork** of npurun carrying fixes
+the tooling depends on (usage reporting, token-precise `max_tokens`, mid-stream
+stop sequences, a UTF-8 crash fix). Build from `npurun/` here, not upstream:
 
-shellai.py           entry-point shim
-launcher.py          backend detection: npurun NPU → Phi-4-mini DirectML → Ollama CPU
-shellai.example.json config template
+```powershell
+cd npurun
+cmd /c "scripts\dev-shell-local.bat cargo install --path crates\npurun-cli"
+npurun pull qwen3-4b-instruct-2507      # ~2.5 GB
 ```
+
+**4. Embedding model** — powers semantic memory (~23 MB). Skipping it silently
+disables memory, which is why `--doctor` checks for it:
+
+```powershell
+curl -L -o onnx/model_qint8_arm64.onnx https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx
+curl -L -o onnx/tokenizer.json https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
+```
+
+Then `python launcher.py` starts the NPU server and the REPL together.
 
 ---
 
-## REPL commands
+## Using it
 
-```text
-/help                   show all commands
-/history                list recent sessions
-/resume <n>             resume session by list position
-/new                    start a new session (keeps checkpoints)
-/clear                  clear screen
-/mode autopilot         switch to full agentic mode
-/mode chat              switch to prose-first mode
-/mode command           switch to command-only mode
-/undo                   revert file edits from the last agent turn
-/memory search <query>  query the semantic memory store
-/memory status          show memory store status
-/memory list [n]        list recent memory entries
-/memory clear           clear project memory for the current directory
-/memory prune           enforce the max-rules cap now
-/profile                show current session's tool-call profile
-/config <key>           print a config value
-/config <key> <value>   update a config value at runtime
-/save <name>            save a named checkpoint of the current session
-/load <name>            restore a previously saved checkpoint
-/checkpoints            list all checkpoints for the current directory
-/tools                  list agent tools
-/exit                   quit
-```
+### Slash commands
 
----
-
-## Tool suite
-
-The autopilot loop has access to these tools:
-
-| Tool | What it does |
+| | |
 |---|---|
-| `run_command` | Execute a PowerShell command and capture its output |
-| `read_file` | Read a file's content (blocks SSH/GPG key dirs and Windows credential stores) |
-| `write_file` | Write or overwrite a file (captures undo snapshot) |
-| `edit_file` | Replace an exact string in a file (captures undo snapshot) |
-| `append_file` | Append text to a file |
-| `list_directory` | List files and subdirectories at a path |
-| `search_files` | Grep — search across files by content |
-| `find_files` | Find files by glob pattern |
-| `search_memory` | Cosine-similarity search over the session memory store |
-| `verify_syntax` | Non-destructive syntax check for .py, .json, .ps1, .js/.ts |
-| `run_code` | Execute a .py/.ps1/.js script in a sandboxed subprocess |
-| `lint_code` | Run ruff/pylint/eslint on a file and return findings (requires ruff) |
-| `fetch_url` | Fetch a URL with optional headers (no auth headers in untrusted turns) |
-| `batch` | Run up to 8 read-only tools in parallel in a single turn |
-| `delegate` | Run a sub-task in a fresh agent session |
+| `/help` | full command list |
+| `/new` · `/clear` | new session · clear the screen |
+| `/history` · `/resume <n>` | list · reopen a past session |
+| `/diff` | what the agent changed this turn |
+| `/undo` | revert the last exchange, restoring any files it wrote |
+| `/stats` | turns, time, tokens, tool usage |
+| `/context` · `/compact` | context budget · compress history now |
+| `/save <name>` · `/load <name>` | session checkpoints |
+| `/memory [status\|list\|search\|clear\|prune]` | inspect the memory store |
+| `/config [key [value]]` | view or set config at runtime |
+| `/tools` · `/model <name>` · `/mode <mode>` · `/cwd [path]` | |
+| `/doctor` | diagnose the installation |
+| `Esc` | cancel the running step (kills the whole process tree) |
+
+### Project instructions
+
+Drop an **`AGENTS.md`** in a project and the agent reads it every turn —
+conventions, commands, gotchas. Keep it short: it is capped at ~1,200
+characters, because every character competes with your actual request for the
+model's limited context.
+
+### Tools
+
+`run_command` · `read_file` · `edit_file` · `write_file` · `append_file` ·
+`list_directory` · `search_files` · `find_files` · `verify_syntax` ·
+`run_code` · `lint_code` · `search_memory` · `fetch_url` · `batch` ·
+`delegate` — `/tools` prints full signatures.
+
+Worth knowing:
+- **`edit_file` matches fuzzily.** Exact first, then whitespace- and
+  indentation-tolerant, then a high-confidence closest match. Ambiguous
+  matches are always an error, never a guess; a miss reports the closest
+  region with line numbers so the next attempt can succeed.
+- **`read_file` pages** through large files via `offset`/`limit`.
+- Every mutation prints a **diff** and is captured for `/undo`.
 
 ---
 
-## Features by version
+## Safety
 
-### v1.1 — Quality of life
-- **`/undo`** — reverts all file writes/edits from the previous agent turn. Snapshots are captured automatically before every `write_file`/`edit_file` call.
-- **`lint_code` tool** — calls `ruff`/`pylint`/`eslint` and returns structured findings.
-- **CoT stripping** — `<think>…</think>` blocks are stripped from model output before JSON parsing. Works transparently with reasoning models (Qwen3, etc.).
+Four risk levels, checked in order — **destructive > sensitive > safe > caution**:
 
-### v1.2 — Safety & reliability
-- **Safety classifier** — every `run_command` output is classified as `safe`, `caution`, or `destructive` (first-match wins over ordered regex patterns). Destructive commands prompt for confirmation unless `autopilot_confirm_destructive` is false.
-- **Audit log** — every `run_command` call is appended to `.shellai/audit.jsonl` with session ID, classification, command, and exit code.
-- **Error-loop detection** — if the agent produces three identical `(tool, output)` pairs in a row, it stops automatically rather than looping indefinitely.
-
-### v1.3 — Capability expansion
-- **`verify_syntax` + `run_code`** — self-correction loop for code files: verify after edit, run to confirm zero exit code.
-- **`search_memory` tool** — explicit in-prompt recall via cosine similarity.
-- **`fetch_url`** — outbound network access (GET) from the agent loop.
-- **`batch`** — run several read-only tools in one turn.
-- **`delegate`** — spawn a nested sub-agent for complex subtasks.
-- **Workspace snapshot** — each autopilot turn prepends `[mode | model | cwd | turns]` context to the user message.
-
-### v1.4 — Operational
-- **Lockfile** — `hexcli/lockfile.py` prevents two REPL instances from fighting over the same session store. Stale locks (process dead) are auto-cleared.
-- **`/config [key [value]]`** — live config mutation without restarting the REPL. All settable keys are type-checked.
-- **`/memory` subcommands** — `search`, `show`, `clear`, `prune`.
-- **`/profile`** — prints the current session's per-tool call count.
-
-### v1.5 — Memory intelligence
-- **Global vs project memory** — turns with `key_paths` (file edits) go to a cwd-scoped store (`.shellai/vector_store/`, max 500 entries); general turns go to a cross-project global store (`~/.shellai/global_vector_store/`, max 1,000 entries). `search_memory` queries both and merges by cosine score.
-- **Dreaming daemon** — a background thread (`start_dreaming`) wakes every 30 s; after 5 min of idle time it loads the 20 most-recent global entries, calls the LLM under `_NPU_INFERENCE_LOCK`, and appends distilled bullet rules to `~/.shellai/memory_rules.md` (capped at 50 via FIFO eviction).
-- **Memory rules injection** — each autopilot turn's workspace snapshot appends the last 5 rules from `memory_rules.md` as a "Prior knowledge:" block (~60-token budget).
-
-### v1.6 — Reliability & escape hatch
-- **Cloud escalation** — when error-loop detection fires and `ANTHROPIC_API_KEY` (or `anthropic_api_key` in config) is set, the agent offers to escalate to Claude Haiku. All context is redacted before the outbound call (API keys, passwords, tokens, connection strings, SSH/AWS paths).
-- **`/save` / `/load` checkpoints** — named workspace snapshots stored in `.shellai/checkpoints/<name>.json`. Independent of `/new`; survives session resets.
-- **Per-project config** — `.shellai/config.json` in the working directory deep-merges over the global `shellai.json`. Useful for per-repo model or token-limit overrides.
-
-### v1.7 — Quality gate
-- **Mock backend** — `backend: "mock"` + `set_mock_responses([...])` lets any test drive the full autopilot loop offline with no LLM endpoint.
-- **CI workflow** — `.github/workflows/ci.yml` runs syntax compile, ruff, and all offline test suites on every push.
-- **Core coverage backfill** — `evals/test_core.py` covers all v1.0-era pure functions (deep_merge, session CRUD, history retention, parse_json_object/parse_agent_action edge cases, `_check_sensitive_path`, safety classifier, memory rule helpers).
-- **Agent loop tests** — `evals/test_agent_loop.py` tests the full `run_autopilot` loop end-to-end: tool dispatch, undo snapshots, error-loop detection, safety gating, step budget, history injection.
-
----
-
-## Configuration reference
-
-All keys live in `shellai.json` (global) or `.shellai/config.json` (per-project override). The per-project file deep-merges over the global one.
-
-| Key | Default | Description |
+| Level | Examples | Behaviour |
 |---|---|---|
-| `backend` | `"ollama"` | LLM backend: `"ollama"`, `"openai"`, `"mock"` |
-| `model` | `"qwen2.5-coder:3b"` | Model name for the active backend |
-| `temperature` | `0.1` | Sampling temperature |
-| `timeout_seconds` | `240` | Request timeout for non-streaming calls |
-| `max_output_tokens` | `96` | Token limit for command-only mode |
-| `chat_max_output_tokens` | `220` | Token limit for chat mode |
-| `autopilot_max_output_tokens` | `220` | Token limit per autopilot step |
-| `compact_max_output_tokens` | `512` | Token limit for session compact summaries |
-| `max_agent_steps` | `8` | Maximum tool-call steps per autopilot turn |
-| `tool_output_limit` | `12000` | Max bytes returned from any tool call |
-| `stream_delay_ms` | `8` | Delay between streamed tokens (ms) |
-| `use_streaming` | `true` | Enable token-by-token streaming output |
-| `history_retention_days` | `30` | Delete sessions older than this |
-| `memory_enabled` | `true` | Enable/disable the semantic memory store |
-| `telemetry_enabled` | `true` | Enable/disable session telemetry logs |
-| `autopilot_confirm_destructive` | `true` | Prompt before running destructive commands |
-| `shell_hint` | `""` | Override the shell executable path |
-| `ollama.host` | `"http://127.0.0.1:11434"` | Ollama server base URL |
-| `openai_compatible.base_url` | `"http://127.0.0.1:8000/v1"` | OpenAI-compatible endpoint |
-| `openai_compatible.api_key` | `"local"` | API key for the OpenAI-compatible endpoint |
-| `anthropic_api_key` | `""` | Anthropic API key for cloud escalation fallback |
-| `escalation_model` | `"claude-haiku-4-5-20251001"` | Claude model used when escalating |
+| destructive | `Remove-Item`, `git reset --hard`, `format-*`, `iex` | confirm before running |
+| **sensitive** | ssh/gpg/aws keys, hosts file, registry hives, credential vaults, `-EncodedCommand` | confirm before running; **denied automatically when non-interactive** |
+| safe | `Get-*`, `ls`, `git status` | runs |
+| caution | everything else | runs |
+
+Plus:
+- **Writes are confined to the working directory.** Reads are not — the agent
+  can still consult docs and libraries elsewhere. Widen with
+  `workspace_write_allow`; disable with `workspace_write_scope`.
+- **Key and credential paths are hard boundaries** for file tools, regardless
+  of confirmation.
+- Every classified command is appended to `.shellai/audit.log`.
+- Text inside files and tool output is treated as data, never as instructions.
+
+The sensitive tier exists because measured injection tests showed the model
+complying with planted instructions while the old three-level classifier
+happily allowed `Get-Content …\drivers\etc\hosts` — it matched the blanket
+"`Get-*` is safe" rule. **The defence deliberately does not depend on the
+model resisting**, because at 4B it frequently doesn't.
 
 ---
 
-## Safety model
+## Memory
 
-The safety classifier in `hexcli/safety.py` assigns every `run_command` call one of three risk levels:
+Two on-device stores (project + global) over MiniLM embeddings with cosine
+similarity — no external services. An idle "dreaming" pass consolidates recent
+turns into durable rules that ride along in later prompts. `/memory` inspects
+it; `memory_enabled: false` turns it off.
 
-| Level | Meaning | Default behaviour |
+---
+
+## Configuration
+
+`shellai.json` (global) and `.shellai/config.json` (per project) are deep-merged
+over the defaults, so you only specify what you change. `/config` lists and sets
+values at runtime; `shellai.example.json` documents every key.
+
+The ones most worth knowing:
+
+| Key | Default | Effect |
 |---|---|---|
-| `safe` | Read-only: `Get-*`, `ls`, `dir`, `git status/log/diff`, `echo`, `pwd`, `type`, `cat`, `pip list`, etc. | Runs without confirmation |
-| `caution` | All other commands | Runs without confirmation in autopilot (config: `autopilot_confirm_destructive: false`) |
-| `destructive` | `Remove-Item`, `rm`, `rd`, `del`, `git reset --hard`, `git push -f`, `git clean -f`, `Format-Volume`, `diskpart`, `-Force -Recurse` together, etc. | Prompts for confirmation when `autopilot_confirm_destructive: true` |
-
-Every command is appended to `.shellai/audit.jsonl` regardless of risk level, for post-hoc review.
-
----
-
-## Memory architecture
-
-```
-hexcli/memory.py
-│
-├── Project store  (.shellai/vector_store/)       — cwd-scoped, max 500 entries
-│     Indexed when: a turn touches files (key_paths non-empty)
-│
-├── Global store   (~/.shellai/global_vector_store/)  — cross-project, max 1,000 entries
-│     Indexed when: general turns (no file edits)
-│
-└── Memory rules   (~/.shellai/memory_rules.md)   — capped at 50 bullets
-      Written by: dreaming daemon (background, after 5 min idle)
-      Read by:    workspace_snapshot() → injected into every autopilot turn
-```
-
-**Embedding model:** `sentence-transformers/all-MiniLM-L6-v2` ARM64-quantized ONNX (`onnx/model_qint8_arm64.onnx`, ~23 MB, int8). Runs via `onnxruntime` on CPU. Cold load ~0.2 s; warm inference ~3 ms.
-
-**Search:** query both stores, merge candidates by cosine score, deduplicate by content hash, return top-k (floor: 0.15 similarity).
-
-**`_NPU_INFERENCE_LOCK`:** a `threading.Lock()` serialising all LLM calls. `call_llm()` holds it for the full streaming duration. The dreaming daemon acquires with `timeout=5` and skips the consolidation step if the main thread is mid-inference.
+| `protocol` | `"v1"` | agent protocol; `"v2"` is experimental |
+| `max_agent_steps` | `15` | tool calls per turn |
+| `live_streaming` | `true` | render answers as they arrive |
+| `show_diffs` | `true` | print a diff after each mutation |
+| `workspace_write_scope` | `true` | confine writes to the working directory |
+| `autopilot_confirm_sensitive` | `true` | gate credential/key access |
+| `require_verification` | `true` | nudge the agent to check its own edits |
+| `escalation_local_model` | `""` | bigger local model to consult when stuck |
+| `memory_enabled` | `true` | semantic memory |
 
 ---
 
 ## Testing
 
-### Offline suites (no LLM required)
+CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
+**19 offline suites** — no LLM required, all against a mock backend:
 
 ```powershell
-python .\evals\test_v11.py        # CoT stripping, undo, lint_code
-python .\evals\test_v12.py        # safety classifier, error-loop detection
-python .\evals\test_v13.py        # workspace snapshot, network, tool injection
-python .\evals\test_v14.py        # lockfile, /config, /memory, /profile
-python .\evals\test_v15.py        # global/project memory, dreaming, rules injection
-python .\evals\test_v16.py        # redaction, escalation, checkpoints, config merge
-python .\evals\test_core.py       # pure-function unit tests
-python .\evals\test_agent_loop.py # full autopilot loop with mock backend
+python evals/test_core.py           # core coverage
+python evals/test_agent_loop.py     # the loop, end to end
+python evals/test_product_shell.py  # diffs, AGENTS.md, doctor
 ```
 
-All suites combined: **200+ tests**, all offline.
-
-### Live eval harnesses (require running LLM endpoint)
+**Live evals** (need the NPU server) grade real model behaviour:
 
 ```powershell
-python .\evals\harness.py         # 9-case smoke test — required gate before prompt changes
-python .\evals\extended.py        # 35-case adversarial regression suite
-python .\evals\multiturn.py       # multi-turn adversarial suite
+python evals/cases_smoke.py                    # fast gate
+python evals/cases_extended.py --runs 5        # pass^5 over 36 cases
+python evals/cases_multiturn.py --runs 3       # deep-context scenarios
+python evals/compare.py <before.json> <after.json>
 ```
 
-### CI
+Cases are graded on **filesystem state and answer content**, not string
+matching, and run N times to report pass@k and pass^k — a 4B model is
+stochastic, so single runs mean very little.
 
-Every push runs the full offline suite via `.github/workflows/ci.yml`:
-- `python -m compileall hexcli/ evals/ -q` — syntax compile gate
-- `ruff check hexcli/` — lint
-- All offline test suites (`test_v11` through `test_core` and `test_agent_loop`)
+> **Restart the NPU server before each suite.** After 1–2 hours of continuous
+> traffic the Genie dialog degrades and returns errors for everything, which
+> looks exactly like a model regression. The runner detects this and marks
+> those runs invalid rather than failed, but a fresh server keeps results
+> comparable.
+
+`evals/harness.py`, `extended.py`, and `multiturn.py` are the superseded v1
+instrument, kept for reference only.
 
 ---
 
-## Backend setup
+## How it works
 
-### npurun (Snapdragon Hexagon NPU — recommended)
+`docs/V2_PLAN.md` is the design record: measured hardware numbers, the protocol
+experiment and why it was rejected, the eval methodology, and the findings
+behind each safety layer. `ARCHITECTURE.md` covers module layout.
 
-1. Clone and build npurun:
-   ```powershell
-   git clone https://github.com/bpbonker/npurun
-   cd npurun
-   cargo install --path crates\npurun-cli
-   ```
-   Build must run with MSVC's `link.exe` first on PATH — see `npurun/scripts/dev-shell-local.bat`.
-
-2. Install the [QAIRT SDK](https://developer.qualcomm.com/software/ai-stack) (free Qualcomm account required) and set:
-   ```powershell
-   $env:QNN_SDK_ROOT = "C:\Qualcomm\AIStack\QAIRT_2.47.0"
-   $env:ADSP_LIBRARY_PATH = "$env:QNN_SDK_ROOT\lib\hexagon-v73\unsigned"
-   ```
-   Without `ADSP_LIBRARY_PATH`, npurun crashes with `STATUS_STACK_BUFFER_OVERRUN` inside libGenie.
-
-3. Pull the model:
-   ```powershell
-   npurun pull qwen3-4b-instruct-2507
-   ```
-
-`launcher.py` auto-detects npurun + QAIRT, starts `npurun serve` on `127.0.0.1:11435`, and pulls the model on first run.
-
-**Model:** `qwen3-4b-instruct-2507` (w4a16, ~2.5 GB). Chosen for its agentic benchmark results (BFCLv3 65.9, MultiIF 66.3), 262K context window, and ~15 tok/s throughput on Snapdragon X Elite.
-
-### Fallback paths
-
-| Priority | Backend | Notes |
-|---|---|---|
-| 1 | npurun + `qwen3-4b-instruct-2507` | Hexagon NPU, best quality |
-| 2 | Phi-4-mini via ONNX Runtime DirectML | Adreno GPU; requires conda + ONNX RT GenAI |
-| 3 | Ollama on CPU | Zero setup; CPU only on Windows ARM |
-
-Recommended Ollama models:
-
-| Model | Use case |
-|---|---|
-| `qwen2.5-coder:1.5b` | Fastest, lowest RAM |
-| `qwen2.5-coder:3b` | Best CPU balance |
-| `deepseek-coder:6.7b` | Better reasoning, higher latency |
+Hardware reality on a Snapdragon X Elite: **~15 tok/s decode, ~700 tok/s
+prefill, 4,096-token compiled context.** Those numbers shape every design
+decision here — terse output, aggressive compaction, and one action per turn
+are consequences, not preferences.
 
 ---
 
 ## Notes
 
-- **stdlib only** — no third-party packages beyond `numpy` and `onnxruntime` (both used only in `memory.py`).
-- Every public method in `memory.py` swallows its own exceptions — a failed embedding is a silent no-op, never a REPL crash.
-- `.shellai/` is gitignored (telemetry, memory, checkpoints, audit log, project config).
-- Secret redaction runs before any outbound API call (escalation). Patterns: `sk-*`, `Bearer *`, `password=*`, `api_key=*`, `token=*`, connection strings, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.gpg` paths.
+- Windows on ARM only (uses `msvcrt`, PowerShell, and the Hexagon NPU).
+- Fully offline at runtime. The only network paths are the one-time setup
+  downloads and the opt-in cloud escalation, which is disabled by default.
