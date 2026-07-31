@@ -81,38 +81,53 @@ in the model's instruction-following that no amount of prompt tuning fully close
 
 ## 3. Testing Infrastructure
 
-Because the actual production logic lives in a system prompt rather than in code,
-conventional unit tests can't catch a regression introduced by rewording a rule. The project
-instead runs two tiers of **live-model eval harnesses** against the real local endpoint —
-not mocks — driving the same JSON-action parsing and tool-dispatch loop used in production,
-with file-system side effects verified on disk rather than trusted from the model's own
-claims.
+Two tiers, and the split matters: **deterministic logic is tested offline against a mock
+backend; model behaviour is measured live and statistically.** Conflating the two was the
+original sin of the v1 instrument — it graded string matches from single live runs, so
+stochastic 4B variance and real regressions were indistinguishable.
 
-### Tier 1 — `evals/harness.py` (CI/CD smoke gate)
+### Tier 1 — offline suites (the merge gate)
 
-```powershell
-python evals/harness.py                # run all 9 cases, save + print report
-python evals/harness.py --case casual-1
-python evals/harness.py --no-save
-```
-
-Nine cases across `casual` / `factual` / `agentic`. This is the **required merge gate** for
-any change to `_AUTOPILOT_TEMPLATE` or the tool dispatch logic. It must pass with:
-
-- **0 tool hallucinations** on casual/factual questions.
-- **Strict literal-output adherence** — any count or fact in an agentic result must trace
-  back to the literal tool output already in the conversation, never an estimate.
-- **0 findings** in the printed report.
-
-### Tier 2 — `evals/extended.py` (deep regression & adversarial suite)
+20 suites, 583 tests, no LLM and no NPU required. This is what CI (windows-latest) runs,
+alongside the compile gate and `ruff check hexcli/ evals/`:
 
 ```powershell
-python evals/extended.py                  # full 30+ case matrix
-python evals/extended.py --case trap-1
+python evals/test_core.py           # core coverage
+python evals/test_agent_loop.py     # the loop end to end, mock backend
+python evals/test_write_scope.py    # writes confined to the workspace
+python evals/test_injection_defense.py
+python evals/test_lineedit.py       # input line, injected key source
 ```
 
-Builds on the Tier 1 fixtures and runner (imports, doesn't duplicate) and adds categories
-specifically designed to break the routing rules in §2:
+Anything that can be pinned deterministically lives here — parsing, safety classification,
+write-scoping, compaction, diffing, the input line. Injecting the seams (mock backend,
+scripted key source) is what makes that possible.
+
+### Tier 2 — live evals (`evals/runner.py`, `evals/cases_*.py`)
+
+```powershell
+python evals/cases_smoke.py                    # fast gate
+python evals/cases_extended.py --runs 5        # pass^5 over 36 cases
+python evals/cases_multiturn.py --runs 3       # deep-context scenarios
+python evals/compare.py <before.json> <after.json>
+```
+
+These drive the **production** `run_autopilot` (via `AutopilotProbe`, not a reimplementation)
+against the real NPU endpoint, and grade **filesystem state and answer content**, never string
+matches. Each case runs N times and reports pass@k and pass^k with Wilson intervals, because
+a single run of a 4B model means very little.
+
+Two hard-won rules encoded in the runner:
+
+- **Backend failures are not model failures.** `is_backend_failure` marks a run invalid rather
+  than failed when the NPU server is unreachable or has degraded. The Genie dialog starts
+  returning errors for everything after 1–2 hours of traffic, which looks exactly like a
+  catastrophic regression; this trap cost a full day before it was identified.
+- **Restart the server between suites**, so results stay comparable.
+
+`evals/harness.py`, `extended.py` and `multiturn.py` are the **superseded v1 instrument**,
+retained for reference only. The categories below describe that older suite, and are kept
+because they document the failure modes the routing rules in §2 target:
 
 | Category | What it pressure-tests |
 | --- | --- |
@@ -124,11 +139,10 @@ specifically designed to break the routing rules in §2:
 | `self_correct` | A `.py` file seeded with a deliberate syntax error; model must fix it and call `verify_syntax` to confirm before finishing. |
 | `semantic_memory` | A past session is pre-seeded into the vector store; model must call `search_memory` to recall it rather than guessing or claiming no memory exists. |
 
-This tier is intentionally adversarial and run after any prompt change for deeper confidence
-than the fast smoke test alone — not a hard merge gate, since live-model run-to-run variance
-means a small number of findings here have to be triaged by rerunning the specific failing
-case in isolation before concluding a change introduced a real regression (see §5 for two
-worked examples of that triage process).
+These categories carried over into `evals/cases_extended.py`, which grades them on state
+rather than strings and repeats each N times. The triage habit they taught remains correct:
+a handful of findings is run-to-run variance until a rerun of the specific case says
+otherwise (see §5 for two worked examples).
 
 ## 4. On-Device Semantic Memory
 

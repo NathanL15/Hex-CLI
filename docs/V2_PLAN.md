@@ -557,6 +557,9 @@ not depend on it.
 
 ### 14.12 WSL2 enablement status (2026-07-31) — needs a reboot
 
+> **Superseded by §14.13 and §14.14.** The reboot did not help, and §14.14
+> shows the target model was not reachable by this path in the first place.
+
 Toward the Thinking-2507 quantization (the last Phase-2 lever), run elevated:
 - `Microsoft-Windows-Subsystem-Linux` → **enabled successfully**
 - `VirtualMachinePlatform` → **failed 0x80240021** (Windows Update timeout;
@@ -573,3 +576,79 @@ returns "Class not registered" until the machine reboots.
    followed by `run-export.sh qwen3_4b_thinking_2507` — and §14.9's four
    toolchain fixes apply on the Linux side too, except `fcntl` (Linux-native),
    so 0.59.0 may work there without the version pin.
+
+### 14.13 WSL2: blocked in the Windows servicing stack, not in our setup (2026-07-31)
+
+Post-reboot, `VirtualMachinePlatform` still will not enable. This is **not** a
+transient WU timeout, and retrying will not fix it. Diagnosed from
+`C:\Windows\Logs\CBS\CBS.log`:
+
+```
+CBS  DWLD: Downloading update (0 of 0 bytes)...[0 of 0 bytes overall - 0%]
+CBS  FC:   FCAcquirerWUClient: WULib DownloadProgress: [0 / 100]  ×1216
+```
+
+Windows Update offers a **zero-byte package** and the feature-config acquirer
+retries it about once a second, forever. It never errors, so DISM simply hangs
+at 14.6% indefinitely (observed >20 min; TiWorker parked at constant CPU).
+
+What was tried, and what each attempt proved:
+
+| Attempt | Result |
+|---|---|
+| Retry after reboot | Same infinite zero-byte loop |
+| `/LimitAccess` (forbid WU) | Reached 100%, then `0x800f0912 CBS_E_ONDEMAND_LOCALSOURCE_NOT_FOUND` |
+| Bogus WSUS policy (fail WU fast) | Same `0x800f0912` — proves the loop is the *only* thing WU contributes |
+| Clear `SoftwareDistribution\Download` + reset `catroot2` | Loop returns; cache was not the cause |
+| No WSUS/`LocalSourcePath` policy, updates not paused | Ruled out the usual culprits |
+
+**Conclusion.** The feature reports `State : Disabled` rather than "Disabled with
+Payload Removed", but `CBS_E_ONDEMAND_LOCALSOURCE_NOT_FOUND` proves the payload
+is genuinely absent from the component store — so it *must* come from WU, and
+WU on this machine cannot serve it. The only remaining fix is an explicit local
+source: mount a Windows 11 **ARM64** ISO and
+
+```powershell
+dism /online /enable-feature /featurename:VirtualMachinePlatform /all `
+     /Source:wim:D:\sources\install.wim:1 /LimitAccess
+```
+
+That is a multi-GB download and a user decision, so it is left as a choice
+rather than assumed. The machine was returned to its prior state: WU policy
+removed, services restarted, no `pending.xml`, `catroot2` rebuilt (the old copy
+lingers as `catroot2.old-20260731` and can be deleted).
+
+### 14.14 The model lever is exhausted — and Thinking-2507 was never reachable anyway
+
+Checked before spending anything more on WSL2, and it reframes the whole plan.
+
+npurun consumes **Genie multi-graph w4a16** bundles. Only these AI Hub models
+publish one (`grep '^\s\+genie:' perf.yaml` across the zoo):
+
+```
+falcon_v3_7b_instruct          llama_v3_2_1b_instruct     llama_v3_8b_instruct
+llama_v3_1_8b_instruct         llama_v3_2_3b_instruct     llama_v3_elyza_jp_8b
+llama_v3_1_sea_lion_3_5_8b_r   llama_v3_2_3b_instruct_ssd llama_v3_taide_8b_chat
+qwen2_5_vl_7b_instruct         qwen3_4b                   qwen3_4b_instruct_2507
+```
+
+Three findings follow:
+
+1. **`qwen3_4b_thinking_2507` is not in the AI Hub zoo at all.** So even a
+   working WSL2 would not have produced it from AI Hub — it would require a
+   full AIMET self-quantization from the HuggingFace weights. The WSL2 work was
+   pursuing a much more expensive path than assumed.
+2. **Qwen3.5 exists but is unreachable.** `qwen3_5_2b` and `qwen3_5_0_8b` are
+   published, and the 2B benchmarks at **28-34 tok/s decode / 306-423 tok/s
+   prefill** — roughly double our 15 tok/s. But they ship **only** for
+   `geniex_llamacpp`; there is no `genie` bundle. Using them means a new npurun
+   runtime backend, not a model swap.
+3. **Everything else Genie-compatible is worse here.** The 7-8B options are all
+   ruled out by §14.8's measured 0.9 tok/s; the 1B/3B Llamas are weaker at tool
+   use than what we run.
+
+**Qwen3-4B-Instruct-2507 is therefore already the best available model for this
+runtime on this hardware.** Remaining gains must come from the harness —
+prompt, context budget, tooling, protocol — not from the weights. Every
+measured win since §14.5 has come from exactly there, so this is a
+redirection of effort, not a dead end.
