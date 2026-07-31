@@ -179,6 +179,11 @@ Plus:
   `workspace_write_allow`; disable with `workspace_write_scope`.
 - **Key and credential paths are hard boundaries** for file tools, regardless
   of confirmation.
+- **Network access is deny-by-default.** `fetch_url` — the agent's only
+  outbound channel — asks before every fetch and is refused automatically
+  when non-interactive. `network_access: "deny"` removes the tool entirely;
+  `"allow"` trusts it. An injected fetch is an exfiltration channel, so this
+  does not depend on the model resisting either.
 - Every classified command is appended to `.shellai/audit.log`.
 - Text inside files and tool output is treated as data, never as instructions.
 
@@ -216,6 +221,7 @@ The ones most worth knowing:
 | `show_diffs` | `true` | print a diff after each mutation |
 | `workspace_write_scope` | `true` | confine writes to the working directory |
 | `autopilot_confirm_sensitive` | `true` | gate credential/key access |
+| `network_access` | `"ask"` | confirm each `fetch_url`; `"deny"` / `"allow"` |
 | `require_verification` | `true` | nudge the agent to check its own edits |
 | `escalation_local_model` | `""` | bigger local model to consult when stuck |
 | `memory_enabled` | `true` | semantic memory |

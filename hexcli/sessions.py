@@ -53,7 +53,6 @@ def create_session() -> dict[str, Any]:
         "created_at": now,
         "modified_at": now,
         "messages": [],
-        "last_observation": None,
         "compact_count": 0,
     }
 
@@ -147,7 +146,6 @@ def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
         s.setdefault("title", "New Chat")
         s.setdefault("created_at", s.get("modified_at", iso_now()))
         s.setdefault("messages", [])
-        s.setdefault("last_observation", None)
         s.setdefault("compact_count", 0)
         filtered.append(s)
 
@@ -172,6 +170,3 @@ def sync_session_store(sessions: list[dict[str, Any]], session: dict[str, Any]) 
     save_history_store(sessions)
 
 
-def store_observation(session: dict[str, Any], query: str, output: str) -> None:
-    session["last_observation"] = {"query": query, "output": output, "captured_at": iso_now()}
-    touch_session(session)

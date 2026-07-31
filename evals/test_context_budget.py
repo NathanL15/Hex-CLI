@@ -145,7 +145,56 @@ def test_auto_compact_uses_deterministic_path_by_default() -> None:
     assert s.get("compact_count") == 1, "auto-compact should have fired"
 
 
+# ---------------------------------------------------------------------------
+# Token estimator — calibrated chars-per-token, replacing blanket chars/4
+# ---------------------------------------------------------------------------
+
+def test_estimator_default_matches_chars_over_4() -> None:
+    """Until real observations arrive, behaviour is byte-for-byte the old
+    estimate — no silent budget shift on a fresh session."""
+    est = sa._TokenEstimator()
+    assert est.estimate(8000) == 2000
+
+
+def test_estimator_learns_from_observations() -> None:
+    """Code-heavy output at ~3.3 chars/token must pull the estimate UP —
+    underestimating tokens is what fires compaction past the cliff."""
+    est = sa._TokenEstimator()
+    before = est.estimate(8000)
+    for _ in range(30):
+        est.observe(3300, 1000)
+    after = est.estimate(8000)
+    assert after > before, "estimate must rise as the observed ratio falls"
+    assert abs(est.ratio - 3.3) < 0.1, f"EMA should converge near 3.3, got {est.ratio}"
+
+
+def test_estimator_clamps_and_rejects_garbage() -> None:
+    est = sa._TokenEstimator()
+    est.observe(50_000, 100)      # 500 chars/token: broken usage report
+    assert est.ratio == 4.0, "implausible sample must be rejected outright"
+    est.observe(30, 5)            # too small to be signal
+    assert est.ratio == 4.0
+    for _ in range(200):
+        est.observe(1600, 1000)   # 1.6 — extreme but within the plausible band
+    assert est.ratio == 2.5, "the clamp floor must hold against extreme samples"
+    for _ in range(200):
+        est.observe(8000, 1000)   # 8.0 — the top of the plausible band
+    assert est.ratio == 4.5, "the clamp ceiling must hold against extreme samples"
+
+
+def test_mock_backend_never_feeds_the_estimator() -> None:
+    """Fixture eval_counts are fake; a test run must not poison the ratio."""
+    before = sa._TOKEN_ESTIMATOR.observations
+    sa.set_mock_responses(['{"action":"finish","message":"' + "x" * 400 + '"}'])
+    sa.call_llm({**_CFG, "backend": "mock"}, [], "autopilot_max_output_tokens")
+    assert sa._TOKEN_ESTIMATOR.observations == before
+
+
 TESTS = [
+    test_estimator_default_matches_chars_over_4,
+    test_estimator_learns_from_observations,
+    test_estimator_clamps_and_rejects_garbage,
+    test_mock_backend_never_feeds_the_estimator,
     test_budget_is_derived_not_hardcoded,
     test_budget_never_below_floor,
     test_budget_respects_explicit_override,

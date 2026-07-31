@@ -15,6 +15,7 @@
   "use_streaming": true,
   "live_streaming": true,
   "show_diffs": true,
+  "network_access": "ask",
   "conditional_rules": false,
   "rich_input": true,
   "input_history_file": "",

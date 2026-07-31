@@ -262,6 +262,149 @@ def test_error_loop_requires_identical_outputs() -> None:
     assert "OK." in result, "agent must not stop early when outputs vary"
 
 
+def test_fuzzy_loop_trips_on_varying_errors_same_target() -> None:
+    """The v1.7 audit's 9-edit retry spiral: same tool, same target, three
+    FAILURES whose error text varies each time. The identical-tuple detector
+    never fired; the fuzzy trip must."""
+    counter: list[int] = [0]
+
+    def varying_failure(cmd: str, shell: str, limit: int, **kw: Any) -> str:
+        counter[0] += 1
+        raise RuntimeError(f"failed differently, attempt {counter[0]}")
+
+    stuck = '{"action":"run_command","args":{"command":"pytest tests/"}}'
+    sa.set_mock_responses([stuck, stuck, stuck, '{"action":"finish","message":"Never."}'])
+    with unittest.mock.patch("hexcli.agent.run_command_tool", side_effect=varying_failure):
+        with unittest.mock.patch("builtins.input", return_value="n"):
+            result = sa.run_autopilot(_CFG, [], "run the tests", _SHELL)
+    assert "Never." not in result, "loop must stop before the 4th fixture is consumed"
+    assert counter[0] == 3, f"expected exactly 3 attempts before the trip, got {counter[0]}"
+
+
+def test_varying_errors_on_different_targets_do_not_trip() -> None:
+    """Failing on three DIFFERENT files is exploration, not a loop."""
+    def always_fail(path: str, old: str, new: str) -> str:
+        raise RuntimeError(f"no match in {path}")
+
+    edits = [
+        '{"action":"edit_file","args":{"path":"a.py","old_string":"x","new_string":"y"}}',
+        '{"action":"edit_file","args":{"path":"b.py","old_string":"x","new_string":"y"}}',
+        '{"action":"edit_file","args":{"path":"c.py","old_string":"x","new_string":"y"}}',
+    ]
+    sa.set_mock_responses(edits + ['{"action":"finish","message":"Moved on."}'])
+    with unittest.mock.patch("hexcli.agent.edit_file_tool", side_effect=always_fail):
+        result = sa.run_autopilot(_CFG, [], "fix the tests", _SHELL)
+    assert "Moved on." in result, "distinct targets must not trip the loop detector"
+
+
+# ---------------------------------------------------------------------------
+# Retry-with-feedback on parse failures (V2_PLAN §5.1)
+# ---------------------------------------------------------------------------
+
+def test_typoed_action_name_is_retried_with_feedback() -> None:
+    """A JSON action naming a nonexistent tool used to be silently accepted as
+    a prose finish; it must now earn a retry that names the bad action."""
+    sa.set_mock_responses([
+        '{"action":"edit-file","args":{"path":"x.py"},"message":"tried to edit"}',
+        '{"action":"finish","message":"Recovered."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "fix x.py", _SHELL)
+    assert "Recovered." in result, "typo'd action must trigger a retry, not a finish"
+
+
+def test_truncated_json_is_retried() -> None:
+    sa.set_mock_responses([
+        '{"action":"run_command","args":{"command":"echo hi"',  # truncated
+        '{"action":"finish","message":"Recovered."}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "say hi", _SHELL)
+    assert "Recovered." in result
+
+
+def test_late_step_parse_failure_still_retried() -> None:
+    """The v1 retry was gated on step < 3 — a botch at step 5 was accepted as
+    a finish. The step limit is gone; verify a late failure still retries."""
+    ok = '{"action":"run_command","args":{"command":"echo ok"}}'
+    sa.set_mock_responses([
+        ok, ok, ok, ok,                     # steps 1-4: fine
+        '{"action":"run-command","args":{"command":"echo x"},"message":"typo"}',
+        '{"action":"finish","message":"Recovered late."}',
+    ])
+    counter: list[int] = [0]
+
+    def distinct_ok(cmd: str, shell: str, limit: int, **kw: Any) -> str:
+        # Outputs must differ or the identical-tuple loop detector (correctly)
+        # trips on four repeats of the same successful call.
+        counter[0] += 1
+        return f"ok #{counter[0]}"
+
+    with unittest.mock.patch("hexcli.agent.run_command_tool", side_effect=distinct_ok):
+        result = sa.run_autopilot(_CFG, [], "several steps", _SHELL)
+    assert "Recovered late." in result
+
+
+def test_pure_prose_is_still_an_implicit_finish() -> None:
+    """The direct-answer path is load-bearing: prose with no braces, fences or
+    tool names must be accepted as a finish, not retried."""
+    sa.set_mock_responses([
+        "The capital of France is Paris.",
+        '{"action":"finish","message":"MUST NOT BE CONSUMED"}',
+    ])
+    result = sa.run_autopilot(_CFG, [], "capital of France?", _SHELL)
+    assert "Paris" in result
+    assert sa._MOCK_RESPONSE_QUEUE, "prose finish must not have consumed a retry"
+    sa.set_mock_responses([])  # drain the sentinel
+
+
+# ---------------------------------------------------------------------------
+# Network deny-by-default (V2_PLAN §11)
+# ---------------------------------------------------------------------------
+
+def test_fetch_url_denied_by_policy() -> None:
+    cfg = {**_CFG, "network_access": "deny"}
+    try:
+        sa.execute_tool_call(cfg, {"tool": "fetch_url", "args": {"url": "https://example.com"}}, _SHELL)
+        raise AssertionError("fetch_url must raise under network_access=deny")
+    except RuntimeError as exc:
+        text = str(exc)
+        assert "disabled" in text
+        assert "another route" in text, "refusal must state the hard boundary"
+
+
+def test_fetch_url_ask_denies_without_approval() -> None:
+    """'ask' + user says no (or no terminal at all) = refused. Either denial
+    path is correct — CI has no tty, a dev terminal patches input to 'n'."""
+    cfg = {**_CFG, "network_access": "ask"}
+    with unittest.mock.patch("builtins.input", return_value="n"):
+        try:
+            sa.execute_tool_call(cfg, {"tool": "fetch_url", "args": {"url": "https://example.com"}}, _SHELL)
+            raise AssertionError("unapproved fetch must raise")
+        except RuntimeError as exc:
+            assert "not approved" in str(exc)
+
+
+def test_fetch_url_allow_fetches() -> None:
+    cfg = {**_CFG, "network_access": "allow"}
+    with unittest.mock.patch("hexcli.network.fetch_url", return_value="PAGE CONTENT"):
+        out = sa.execute_tool_call(cfg, {"tool": "fetch_url", "args": {"url": "https://example.com"}}, _SHELL)
+    assert out == "PAGE CONTENT"
+
+
+def test_deny_policy_drops_fetch_schema_from_prompt() -> None:
+    """Advertising a hard-blocked tool wastes tokens and invites a call that
+    can only be refused — the schema must vanish under deny."""
+    query = "look up the latest documentation online"
+    with unittest.mock.patch("hexcli.network.is_online", return_value=True):
+        sa.set_active_config({**sa.DEFAULT_CONFIG, "network_access": "deny"})
+        try:
+            denied = sa.build_autopilot_prompt(".", 15, query=query)
+        finally:
+            sa.set_active_config(None)
+        allowed = sa.build_autopilot_prompt(".", 15, query=query)
+    assert "fetch_url" not in denied
+    assert "fetch_url" in allowed
+
+
 # ---------------------------------------------------------------------------
 # Safety gating
 # ---------------------------------------------------------------------------
@@ -892,6 +1035,16 @@ def _run(fn: Any) -> bool:
 
 
 TESTS = [
+    test_fuzzy_loop_trips_on_varying_errors_same_target,
+    test_varying_errors_on_different_targets_do_not_trip,
+    test_typoed_action_name_is_retried_with_feedback,
+    test_truncated_json_is_retried,
+    test_late_step_parse_failure_still_retried,
+    test_pure_prose_is_still_an_implicit_finish,
+    test_fetch_url_denied_by_policy,
+    test_fetch_url_ask_denies_without_approval,
+    test_fetch_url_allow_fetches,
+    test_deny_policy_drops_fetch_schema_from_prompt,
     test_simple_finish_returns_message,
     test_finish_via_fixture_file,
     test_plain_text_fallback_becomes_finish,
