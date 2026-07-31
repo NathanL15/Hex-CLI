@@ -143,12 +143,11 @@ def _tool_edit(agent: Any, args: dict[str, Any], payload: list[tuple[str, str]] 
     if not payload:
         return "Error: edit requires at least one SEARCH/REPLACE block after </action>."
     path = agent.resolve_path(path_text)
-    # BOTH guards, in the same order as v1's edit_file_tool. This block
-    # reimplements the edit (payload blocks instead of old/new strings), and
-    # the write-scope check was missing here while v1 had it — so protocol v2
-    # could edit files anywhere on disk. Any new mutating path must call both.
-    agent._check_sensitive_path(path, "edit")
-    agent._check_write_scope(path, "edit", agent._ACTIVE_CONFIG)
+    # This block reimplements the edit (payload blocks instead of old/new
+    # strings) rather than delegating, so it must gate itself. The write-scope
+    # half was once missing here while v1 had it, letting protocol v2 edit
+    # anywhere on disk — hence the single guard_mutation entry point.
+    agent.guard_mutation(path, "edit", agent._ACTIVE_CONFIG)
     if not path.exists():
         return f"Error: {path} does not exist. Use write to create new files."
     content = path.read_text(encoding="utf-8", errors="replace")
