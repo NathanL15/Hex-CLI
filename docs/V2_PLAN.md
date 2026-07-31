@@ -554,3 +554,22 @@ enforcement (must hold — now 3/3) and model resistance (`uc3-t8-model`, 0/3,
 the documented 4B ceiling). Conflating them had made a HELD boundary read as
 a failure. Model bait-compliance is unchanged — the defense deliberately does
 not depend on it.
+
+### 14.12 WSL2 enablement status (2026-07-31) — needs a reboot
+
+Toward the Thinking-2507 quantization (the last Phase-2 lever), run elevated:
+- `Microsoft-Windows-Subsystem-Linux` → **enabled successfully**
+- `VirtualMachinePlatform` → **failed 0x80240021** (Windows Update timeout;
+  the feature payload comes from WU)
+
+Servicing is now in a pending-restart state — `Get-WindowsOptionalFeature`
+returns "Class not registered" until the machine reboots.
+
+**Next steps (need the user):**
+1. Reboot.
+2. Elevated: `dism /online /enable-feature /featurename:VirtualMachinePlatform /all`
+   (retry — WU timeouts are usually transient), then `wsl --install -d Ubuntu`.
+3. Then the export path is already written: `npurun/scripts/wsl-export/setup.sh`
+   followed by `run-export.sh qwen3_4b_thinking_2507` — and §14.9's four
+   toolchain fixes apply on the Linux side too, except `fcntl` (Linux-native),
+   so 0.59.0 may work there without the version pin.
