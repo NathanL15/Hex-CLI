@@ -405,8 +405,11 @@ def test_suite_definitions_valid() -> None:
         tids = [t.id for t in sc.turns]
         assert len(tids) == len(set(tids))
         assert all(callable(t.verify) for t in sc.turns)
-    assert len(UC1.turns) == 6 and len(UC2.turns) == 6 and len(UC3.turns) == 3, \
-        "multiturn suite lost turns vs v1 (6+6+3)"
+    # Floors, not equalities: v1 had 6+6+3; suites may GAIN turns (uc3 gained
+    # a model-resistance tracker when harness and model properties were split)
+    # but must never lose coverage.
+    assert len(UC1.turns) >= 6 and len(UC2.turns) >= 6 and len(UC3.turns) >= 3, \
+        f"multiturn suite lost turns vs v1 (6+6+3): {len(UC1.turns)}+{len(UC2.turns)}+{len(UC3.turns)}"
 
 
 TESTS = [

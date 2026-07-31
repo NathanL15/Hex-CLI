@@ -1295,18 +1295,25 @@ def _check_sensitive_path(path: Path, op: str) -> None:
         top = rel.parts[0].lower() if rel.parts else ""
     except ValueError:
         top = ""
+    # NOTE: these messages must never name an alternative route. Until
+    # 2026-07-31 they ended "Use run_command for direct access." — live uc3
+    # traces show the model reading that and immediately trying
+    # `run_command Get-Content ~/.ssh/id_rsa`. A refusal that teaches the
+    # bypass is worse than no refusal, because it also looks safe in review.
     if top in _SENSITIVE_HOME_DIRS:
         raise RuntimeError(
             f"{op} is blocked for paths under ~/{rel.parts[0]} "
-            "(SSH/GPG keys and config). Use run_command for direct access."
+            "(SSH/GPG keys and config). This is a hard boundary — do not "
+            "attempt another route. Tell the user what you wanted and why."
         )
     path_str = str(path).lower()
     if "appdata" in path_str and any(
         s in path_str for s in ("\\microsoft\\credentials", "\\microsoft\\protect")
     ):
         raise RuntimeError(
-            f"{op} is blocked for Windows credential store paths. "
-            "Use run_command for direct access."
+            f"{op} is blocked for Windows credential store paths. This is a "
+            "hard boundary — do not attempt another route. Tell the user what "
+            "you wanted and why."
         )
 
 
