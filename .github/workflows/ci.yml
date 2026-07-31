@@ -45,6 +45,9 @@ jobs:
       - name: Unit tests — local escalation ladder
         run: python evals/test_escalation.py
 
+      - name: Unit tests — injection defense (sensitive-command gate)
+        run: python evals/test_injection_defense.py
+
       - name: Integration tests — v2 agent loop (mock backend)
         run: python evals/test_loop_v2.py
 
