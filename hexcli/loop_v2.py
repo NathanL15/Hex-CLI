@@ -75,15 +75,19 @@ def _close_all_shells() -> None:
     _SESSION_SHELLS.clear()
 
 
-def _get_shell(session: dict[str, Any] | None, cwd: str) -> tuple[ShellSession, bool]:
+def _get_shell(session: dict[str, Any] | None, cwd: str,
+               shell_exe: str = "") -> tuple[ShellSession, bool]:
+    # Honour the user's shell_exe (and v1's pwsh-over-powershell preference);
+    # v2 previously hardcoded powershell.exe and silently ignored the setting.
+    exe = shell_exe or "powershell.exe"
     if session and session.get("id"):
         sid = str(session["id"])
         sh = _SESSION_SHELLS.get(sid)
         if sh is None:
-            sh = ShellSession(cwd=cwd)
+            sh = ShellSession(cwd=cwd, shell_exe=exe)
             _SESSION_SHELLS[sid] = sh
         return sh, False
-    return ShellSession(cwd=cwd), True
+    return ShellSession(cwd=cwd, shell_exe=exe), True
 
 
 def close_session_shell(session_id: str) -> None:
@@ -174,7 +178,7 @@ def _tool_shell(agent: Any, config: dict[str, Any], sh: ShellSession, args: dict
                     "or security files) and was not confirmed. Explain to the user what "
                     "you wanted and why, instead of retrying.")
     ui.command_echo(cmd)
-    result = sh.run(cmd, timeout_s=int(config.get("timeout_seconds", 60)))
+    result = sh.run(cmd, timeout_s=int(config.get("timeout_seconds", 300)))
     safety.append_audit_log(agent._CURRENT_SESSION_ID, classification, cmd, result.get("exit_code"))
     code = result.get("exit_code")
     prefix = f"Exit code: {code}\n" if code is not None else ""
@@ -247,7 +251,7 @@ def run(
     ]
     agent._probe(probe, "on_start", system_prompt, [dict(m) for m in messages])
 
-    sh, ephemeral_shell = _get_shell(session, cwd)
+    sh, ephemeral_shell = _get_shell(session, cwd, shell_exe)
     tools_used: list[str] = []
     touched_paths: list[str] = []
     turn_snapshots: dict[str, str | None] = {}

@@ -20,6 +20,7 @@ first use and reused for the session.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -110,6 +111,10 @@ class LocalEscalator:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env=self._env(), creationflags=DETACHED_PROCESS,
             )
+            # DETACHED_PROCESS means this multi-GB server outlives the CLI
+            # unless someone reaps it — and nothing called stop(). Register
+            # now, at the moment of spawn, so no exit path can miss it.
+            atexit.register(self.stop)
         except Exception:
             self._failed = True
             return False
@@ -122,12 +127,18 @@ class LocalEscalator:
         return False
 
     def stop(self) -> None:
-        if self._proc is not None:
+        """Reap the escalation server. Idempotent; safe from atexit."""
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=10)
+        except Exception:
             try:
-                self._proc.kill()
+                proc.kill()
             except Exception:
                 pass
-            self._proc = None
 
     # -- consultation -------------------------------------------------------
 

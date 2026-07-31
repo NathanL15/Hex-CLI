@@ -343,7 +343,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compact_max_output_tokens": 512,
     "max_agent_steps": 15,
     "tool_output_limit": 12000,
-    "stream_delay_ms": 0,
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
@@ -352,6 +351,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_streaming": True,
     # Print a diff after every successful file mutation.
     "show_diffs": True,
+    # After an unverified file mutation, deflect the first "done" once and ask
+    # the agent to check its work. (Was read from config but declared nowhere,
+    # so `/config require_verification false` reported an unknown key.)
+    "require_verification": True,
     # Confine file MUTATIONS to the working directory (reads stay free).
     "workspace_write_scope": True,
     # Extra roots the agent may write to (absolute paths, ~ expanded).
@@ -428,25 +431,21 @@ def set_active_config(config: dict[str, Any] | None) -> None:
 # ---------------------------------------------------------------------------
 
 _MOCK_RESPONSE_QUEUE: list[str] = []
-_MOCK_EVAL_COUNT = 0  # synthetic token count returned by mock calls
 
 
-def set_mock_responses(responses: list[str], eval_count: int = 0) -> None:
+def set_mock_responses(responses: list[str]) -> None:
     """Load scripted LLM responses. Each call to call_llm pops the next entry.
 
     Fixture entries are raw strings — identical to what a real LLM would return
     (JSON action objects, finish messages, plain text, etc.).
-    Pass eval_count to simulate a non-zero token count if a test needs it.
     """
     _MOCK_RESPONSE_QUEUE[:] = responses
-    global _MOCK_EVAL_COUNT
-    _MOCK_EVAL_COUNT = eval_count
 
 
 def _pop_mock_response() -> tuple[str, int]:
     """Return (response_text, eval_count); falls back to a finish action."""
     if _MOCK_RESPONSE_QUEUE:
-        return (_MOCK_RESPONSE_QUEUE.pop(0), _MOCK_EVAL_COUNT)
+        return (_MOCK_RESPONSE_QUEUE.pop(0), 0)
     return ('{"action":"finish","message":"Mock queue exhausted."}', 0)
 
 # One escalation server per (model, bind) for the process lifetime — spawning
@@ -2351,11 +2350,13 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "compact_max_output_tokens":      "int",
     "max_agent_steps":                "int",
     "tool_output_limit":              "int",
-    "stream_delay_ms":                "int",
     "history_retention_days":         "int",
     "use_streaming":                  "bool",
     "live_streaming":                 "bool",
     "workspace_write_scope":          "bool",
+    "workspace_write_allow":          "list",
+    "require_verification":           "bool",
+    "show_diffs":                     "bool",
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
     "autopilot_confirm_destructive":  "bool",
@@ -2379,6 +2380,11 @@ def _coerce_config_value(value: str, kind: str) -> Any:
         return int(value)
     if kind == "float":
         return float(value)
+    if kind == "list":
+        # Comma- or semicolon-separated; "" clears. Without this, the one
+        # setting the write-scope error message tells users to change
+        # (workspace_write_allow) could not be changed from inside the tool.
+        return [p.strip() for p in re.split(r"[;,]", value) if p.strip()]
     return value
 
 
@@ -3287,6 +3293,25 @@ def _maybe_auto_compact(
 # REPL
 # ---------------------------------------------------------------------------
 
+def _close_session_resources(session: dict[str, Any] | None) -> None:
+    """Release per-session OS resources when a session ends.
+
+    Protocol v2 keeps a persistent PowerShell process per session id. Session
+    switches (/new, /resume) used to abandon them, so a long REPL run
+    accumulated live shells until process exit.
+    """
+    if not session:
+        return
+    sid = str(session.get("id", ""))
+    if not sid:
+        return
+    try:
+        from . import loop_v2
+        loop_v2.close_session_shell(sid)
+    except Exception:
+        pass
+
+
 def _show_stats(config: dict[str, Any], tel: Any, session: dict[str, Any]) -> None:
     """Summarise this session plus recent history from the telemetry logs.
 
@@ -3501,6 +3526,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         # ── new session ───────────────────────────────────────────────────
         if norm == "/new":
             sync_session_store(sessions, current_session)
+            _close_session_resources(current_session)
             current_session = create_session()
             cprint("New session started.", C.DIM)
             continue
@@ -3517,6 +3543,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             if idx < 0 or idx >= len(sessions):
                 cprint("No session with that number.", C.YELLOW)
                 continue
+            _close_session_resources(current_session)
             current_session = sessions[idx]
             cprint(f"Resumed: {current_session['title']}", C.BCYAN)
             continue
