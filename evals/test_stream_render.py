@@ -165,7 +165,48 @@ def test_split_inside_unicode_escape() -> None:
     assert text == "café!", repr(text)
 
 
+# ---------------------------------------------------------------------------
+# Protocol v2 action blocks must not leak either
+# ---------------------------------------------------------------------------
+
+V2_ACTION = (
+    "<action>\n"
+    '{"name": "shell", "arguments": {"command": "Get-ChildItem"}}\n'
+    "</action>"
+)
+V2_WRITE = '<write path="notes.txt">\nhello world\n</write>'
+V2_EDIT = (
+    '<edit path="app.py">\n'
+    "<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n"
+    "</edit>"
+)
+
+
+def test_v2_action_block_not_streamed_to_user() -> None:
+    """Regression: the probe classified anything not starting with '{' as
+    prose, so protocol-v2 responses streamed their raw action JSON to the
+    user — the exact thing this renderer exists to prevent."""
+    text, tools = _render(_char_chunks(V2_ACTION))
+    assert text == "", f"v2 action JSON leaked to the user: {text!r}"
+    assert tools == ["shell"], tools
+
+
+def test_v2_write_block_payload_not_streamed() -> None:
+    text, tools = _render(_char_chunks(V2_WRITE))
+    assert "hello world" not in text, f"file payload leaked: {text!r}"
+    assert tools == ["write"], tools
+
+
+def test_v2_edit_block_announces_edit() -> None:
+    text, tools = _render(_char_chunks(V2_EDIT))
+    assert tools == ["edit"], tools
+    assert "SEARCH" not in text, f"edit payload leaked: {text!r}"
+
+
 TESTS = [
+    test_v2_action_block_not_streamed_to_user,
+    test_v2_write_block_payload_not_streamed,
+    test_v2_edit_block_announces_edit,
     test_finish_message_streams_text_only,
     test_no_json_syntax_ever_leaks,
     test_escapes_are_decoded,

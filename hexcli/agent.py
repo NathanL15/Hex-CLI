@@ -31,6 +31,7 @@ from typing import Any
 from uuid import uuid4
 
 from hexcli import (
+    diffview,
     distribution,
     escalate,
     local_escalation,
@@ -349,6 +350,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Render streamed answers live (text as it arrives, tool intent announced
     # early). Off = the old token-counter behaviour.
     "live_streaming": True,
+    # Print a diff after every successful file mutation.
+    "show_diffs": True,
     # Confine file MUTATIONS to the working directory (reads stay free).
     "workspace_write_scope": True,
     # Extra roots the agent may write to (absolute paths, ~ expanded).
@@ -3012,6 +3015,19 @@ def run_autopilot(
             tool_output, time.monotonic() - tool_start, tool_status,
         )
 
+        # Show what actually changed, immediately. Costs no model tokens: the
+        # undo snapshot already holds the "before" side.
+        if (tool_name in {"edit_file", "write_file", "append_file"}
+                and tool_status == "ok" and tool_path
+                and config.get("show_diffs", True)):
+            try:
+                key = str(resolve_path(str(tool_path)))
+                if key in _turn_snapshots:
+                    after = Path(key).read_text(encoding="utf-8", errors="replace")
+                    print(diffview.render_diff(_turn_snapshots[key], after, key))
+            except Exception:
+                pass
+
         last_tool_output = tool_output
         _turn_events.append(f"{tool_name}: {tool_output[:220]}")
         _is_error = tool_output.lstrip().startswith("Error:")
@@ -3229,6 +3245,59 @@ def _maybe_auto_compact(
 # REPL
 # ---------------------------------------------------------------------------
 
+def _show_stats(config: dict[str, Any], tel: Any, session: dict[str, Any]) -> None:
+    """Summarise this session plus recent history from the telemetry logs.
+
+    telemetry.py has always written rich per-turn records (tool calls, latency
+    split, tokens, completion status) — and nothing ever read them back. On
+    15 tok/s hardware, time-per-task is the cost metric that matters, so this
+    is the number users actually want.
+    """
+    turns = list(getattr(tel, "turns", []) or [])
+    print()
+    cprint("Session stats", C.BOLD)
+    if not turns:
+        cprint("  No completed turns yet.", C.DIM)
+    else:
+        total_time = sum(t.get("total_latency_s", 0) for t in turns)
+        think_time = sum(t.get("thinking_latency_s", 0) for t in turns)
+        tokens = sum(t.get("tokens_generated", 0) for t in turns)
+        agentic = [t for t in turns if t.get("execution_path") == "agentic"]
+        errors = [t for t in turns if t.get("completion_status") != "completed"]
+        tool_counts: dict[str, int] = {}
+        for t in turns:
+            for call in t.get("tool_calls", []):
+                name = str(call.get("tool", "?"))
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+        print(f"  Turns:            {len(turns)}  ({len(agentic)} used tools)")
+        print(f"  Total time:       {total_time:.0f}s  "
+              f"(model {think_time:.0f}s, tools {max(0.0, total_time - think_time):.0f}s)")
+        print(f"  Avg turn:         {total_time / len(turns):.1f}s")
+        print(f"  Tokens generated: ~{tokens:,}")
+        if errors:
+            print(f"  Non-clean turns:  {len(errors)}  "
+                  f"({', '.join(sorted({str(t.get('completion_status')) for t in errors}))})")
+        if tool_counts:
+            top = sorted(tool_counts.items(), key=lambda kv: -kv[1])[:6]
+            print("  Tools used:       " + ", ".join(f"{n}×{c}" for n, c in top))
+    # Lifetime view from the log directory.
+    try:
+        log_dir = Path.cwd() / ".shellai" / "logs"
+        files = sorted(log_dir.glob("session_*.json"))
+        if files:
+            total_turns = 0
+            for f in files[-50:]:
+                try:
+                    total_turns += len(json.loads(f.read_text(encoding="utf-8")).get("turns", []))
+                except Exception:
+                    continue
+            print(f"  This project:     {len(files)} sessions logged, "
+                  f"{total_turns} turns (last 50 sessions)")
+    except Exception:
+        pass
+    print()
+
+
 def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
     """Explain a backend failure and offer to restart it in place.
 
@@ -3352,6 +3421,24 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             sync_session_store(sessions, current_session)
             sessions = load_history_store(config)
             render_history_list(sessions, str(current_session.get("id", "")))
+            continue
+
+        # ── diff: what changed in the last turn ───────────────────────────
+        if norm == "/diff":
+            snaps = _SESSION_UNDO_SNAPSHOTS.get(current_session.get("id", ""), {})
+            if not snaps:
+                cprint("  No file changes in this session's last turn.", C.DIM)
+            else:
+                def _read_now(p: str) -> str | None:
+                    path_obj = Path(p)
+                    return path_obj.read_text(encoding="utf-8", errors="replace") \
+                        if path_obj.exists() else None
+                print(diffview.render_turn_diffs(snaps, _read_now))
+            continue
+
+        # ── stats: read back what telemetry has been writing ──────────────
+        if norm == "/stats" or norm.startswith("/stats "):
+            _show_stats(config, tel, current_session)
             continue
 
         # ── clear screen ──────────────────────────────────────────────────
