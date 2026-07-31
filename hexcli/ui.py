@@ -151,9 +151,9 @@ HELP_TEXT = textwrap.dedent("""
     SLASH COMMANDS:
       /help                         this help
       /history                      list saved sessions
-      /new                          start a new session
+      /new                          start a new session (current one stays in history)
       /resume <n>                   resume session #n from /history
-      /clear                        clear the current session (keep in history)
+      /clear                        clear the screen
       /compact                      summarise + compress history (saves context)
       /undo                         remove last exchange; restores files if the turn wrote any
       /context                      show estimated context usage
@@ -192,9 +192,11 @@ HELP_TEXT = textwrap.dedent("""
 
 TOOLS_HELP = textwrap.dedent("""
     Tools available in autopilot mode:
-      run_command(command)                        Run a PowerShell command (safety-classified).
-      read_file(path)                             Read a file's full contents.
-      edit_file(path, old_string, new_string)     Replace a string in a file (undo snapshot).
+      run_command(command)                        Run a PowerShell command (safety-classified;
+                                                  sensitive/destructive ones ask first).
+      read_file(path, offset, limit)              Read a file; offset/limit page through big ones.
+      edit_file(path, old_string, new_string)     Replace text (fuzzy match if whitespace or
+                                                  indentation differs; undo snapshot).
       write_file(path, content)                   Write or overwrite a file (undo snapshot).
       append_file(path, content)                  Append text to a file.
       list_directory(path)                        List files and folders.
@@ -202,11 +204,13 @@ TOOLS_HELP = textwrap.dedent("""
       find_files(glob, path)                      Find files by glob pattern.
       verify_syntax(path, language)               Non-destructive syntax check (.py .json .ps1 .js).
       run_code(path, args, timeout)               Execute a script in a sandboxed subprocess.
-      lint_code(path)                             Run ruff/pylint/eslint and return findings.
+      lint_code(path)                             Run ruff and return findings (needs ruff on PATH).
       search_memory(query, top_k)                 Recall relevant prior session context.
-      fetch_url(url)                              Fetch a URL (GET, optional headers).
+      fetch_url(url, max_chars)                   Fetch a URL and return readable text.
       batch(actions)                              Run up to 8 read-only tools in parallel.
       delegate(task)                              Spawn a focused sub-agent (max 5 steps).
+
+    File writes are confined to the working directory (see workspace_write_scope).
 """).strip()
 
 
