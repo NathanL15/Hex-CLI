@@ -268,8 +268,25 @@ def test_every_mutating_tool_refuses_sensitive_paths() -> None:
             victim = fake_home / ".ssh" / "id_rsa"
             victim.write_text("original", encoding="utf-8")
             prev_home = sa._HOME
-            sa._HOME = fake_home
+            # MUST be resolved. The tools resolve their path argument, and on
+            # the CI runner TEMP is an 8.3 short path ("RUNNER~1") that expands
+            # to a different string. An unresolved _HOME then fails
+            # relative_to(), the sensitive check silently never fires, and the
+            # test reports the tool as unguarded. Production is unaffected —
+            # _HOME comes from Path.home(), which is already canonical.
+            sa._HOME = fake_home.resolve()
             try:
+                # Precondition: the fixture really does look like a key path to
+                # the guard. Without this, a broken fixture is indistinguishable
+                # from an unguarded tool — which is exactly how the CI run above
+                # read before the .resolve() fix.
+                try:
+                    sa._check_sensitive_path(sa.resolve_path(str(victim)), "probe")
+                    raise AssertionError(
+                        "fixture broken: _check_sensitive_path does not treat "
+                        f"{victim} as sensitive under _HOME={sa._HOME}")
+                except RuntimeError:
+                    pass
                 try:
                     result = str(call(victim))
                 except RuntimeError as exc:
