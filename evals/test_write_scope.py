@@ -218,7 +218,80 @@ def test_v2_edit_inside_workspace_allowed() -> None:
         assert target.read_text(encoding="utf-8") == "updated"
 
 
+# ---------------------------------------------------------------------------
+# Exhaustive: EVERY mutating entry point, both protocols
+# ---------------------------------------------------------------------------
+
+def _mutating_entry_points() -> list[tuple[str, Any]]:
+    """Every way the model can change a file, as (label, call-with-a-path).
+
+    Enumerated here so the guarantee is exhaustive rather than remembered. The
+    v1/v2 split has produced this exact bug once already: a reimplemented tool
+    that carried only half the gate.
+    """
+    import hexcli.agent as agent_mod
+    from hexcli import loop_v2
+
+    return [
+        ("v1 write_file", lambda p: sa.write_file_tool(str(p), "x")),
+        ("v1 append_file", lambda p: sa.append_file_tool(str(p), "x")),
+        ("v1 edit_file", lambda p: sa.edit_file_tool(str(p), "original", "t")),
+        ("v2 write", lambda p: loop_v2._tool_write(
+            agent_mod, {"path": str(p)}, "x")),
+        ("v2 edit", lambda p: loop_v2._tool_edit(
+            agent_mod, {"path": str(p)}, [("original", "tampered")])),
+    ]
+
+
+def test_every_mutating_tool_is_write_scoped() -> None:
+    """The one that would have caught the v2 edit hole on the day it landed."""
+    for label, call in _mutating_entry_points():
+        with _Workspace() as (_, outside):
+            victim = outside / "victim.txt"
+            victim.write_text("original", encoding="utf-8")
+            try:
+                result = str(call(victim))
+            except RuntimeError as exc:
+                result = str(exc)
+            assert "outside the workspace" in result, f"{label} was NOT scoped: {result}"
+            assert victim.read_text(encoding="utf-8") == "original", \
+                f"{label} mutated a file outside the workspace"
+
+
+def test_every_mutating_tool_refuses_sensitive_paths() -> None:
+    """Same enumeration against the other half of the gate. A key path must be
+    refused even when it is inside the workspace."""
+    for label, call in _mutating_entry_points():
+        with _Workspace() as (root, _):
+            fake_home = root / "home"
+            (fake_home / ".ssh").mkdir(parents=True)
+            victim = fake_home / ".ssh" / "id_rsa"
+            victim.write_text("original", encoding="utf-8")
+            prev_home = sa._HOME
+            sa._HOME = fake_home
+            try:
+                try:
+                    result = str(call(victim))
+                except RuntimeError as exc:
+                    result = str(exc)
+            finally:
+                sa._HOME = prev_home
+            assert "blocked" in result.lower(), f"{label} allowed a key path: {result}"
+            assert victim.read_text(encoding="utf-8") == "original", \
+                f"{label} mutated an SSH key"
+
+
+def test_guard_mutation_applies_both_checks() -> None:
+    """guard_mutation exists so the pair cannot come apart again."""
+    import inspect
+    src = inspect.getsource(sa.guard_mutation)
+    assert "_check_sensitive_path" in src and "_check_write_scope" in src
+
+
 TESTS = [
+    test_every_mutating_tool_is_write_scoped,
+    test_every_mutating_tool_refuses_sensitive_paths,
+    test_guard_mutation_applies_both_checks,
     test_v2_edit_outside_workspace_blocked,
     test_v2_edit_inside_workspace_allowed,
     test_write_inside_workspace_allowed,

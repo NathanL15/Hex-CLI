@@ -88,7 +88,7 @@ stochastic 4B variance and real regressions were indistinguishable.
 
 ### Tier 1 — offline suites (the merge gate)
 
-20 suites, 583 tests, no LLM and no NPU required. This is what CI (windows-latest) runs,
+19 suites, 591 tests, no LLM and no NPU required. This is what CI (windows-latest) runs,
 alongside the compile gate and `ruff check hexcli/ evals/`:
 
 ```powershell

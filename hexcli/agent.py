@@ -1482,6 +1482,23 @@ def _check_sensitive_path(path: Path, op: str) -> None:
         )
 
 
+def guard_mutation(path: Path, op: str, config: dict[str, Any] | None) -> None:
+    """The single gate every file-mutating path must pass through.
+
+    Both checks, always, in this order. It exists because the pair kept coming
+    apart: protocol v2's `edit` reimplemented v1's and carried only the
+    sensitive-path half, so it could write anywhere on disk. Two calls that
+    must always appear together are a latent bug; one call is not.
+
+    Mutating tools must either call this directly or delegate to a v1 tool that
+    does. `evals/test_write_scope.py` drives every mutating entry point in both
+    protocols at an out-of-scope path and requires a refusal, so a new tool that
+    skips the gate fails CI rather than shipping.
+    """
+    _check_sensitive_path(path, op)
+    _check_write_scope(path, op, config)
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -1763,8 +1780,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     from .protocol_v2 import apply_search_replace
 
     path = resolve_path(path_text)
-    _check_sensitive_path(path, "edit_file")
-    _check_write_scope(path, "edit_file", _ACTIVE_CONFIG)
+    guard_mutation(path, "edit_file", _ACTIVE_CONFIG)
     if not old_string:
         raise RuntimeError("edit_file requires a non-empty 'old_string'. Use write_file to overwrite the whole file.")
     if not path.exists():
@@ -1786,8 +1802,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
 
 def write_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
-    _check_sensitive_path(path, "write_file")
-    _check_write_scope(path, "write_file", _ACTIVE_CONFIG)
+    guard_mutation(path, "write_file", _ACTIVE_CONFIG)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
@@ -1798,8 +1813,7 @@ def write_file_tool(path_text: str, content: str) -> str:
 
 def append_file_tool(path_text: str, content: str) -> str:
     path = resolve_path(path_text)
-    _check_sensitive_path(path, "append_file")
-    _check_write_scope(path, "append_file", _ACTIVE_CONFIG)
+    guard_mutation(path, "append_file", _ACTIVE_CONFIG)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     tmp = path.parent / (path.name + ".tmp")
