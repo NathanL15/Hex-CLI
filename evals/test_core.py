@@ -37,6 +37,11 @@ import hexcli.distribution as dist
 import hexcli.memory as mem
 import hexcli.safety as safety
 
+# The history store owns HISTORY_PATH. Patching sa.HISTORY_PATH would be a
+# silent no-op and these tests would write to the REAL history.json while
+# still passing — see test_history_path_patch_is_not_vacuous below.
+import hexcli.sessions as session_store
+
 # ============================================================================
 # deep_merge
 # ============================================================================
@@ -243,7 +248,7 @@ def test_load_history_store_prunes_old_sessions() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "history.json"
         hp.write_text(json.dumps(store), encoding="utf-8")
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             cfg = {**sa.DEFAULT_CONFIG, "history_retention_days": 30}
             sessions = sa.load_history_store(cfg)
 
@@ -262,7 +267,7 @@ def test_load_history_store_keeps_all_when_within_retention() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "history.json"
         hp.write_text(json.dumps(store), encoding="utf-8")
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store({**sa.DEFAULT_CONFIG, "history_retention_days": 30})
     assert len(sessions) == 2
 
@@ -270,7 +275,7 @@ def test_load_history_store_keeps_all_when_within_retention() -> None:
 def test_load_history_store_returns_empty_for_missing_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "nonexistent.json"
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     assert sessions == []
 
@@ -282,7 +287,7 @@ def test_load_history_store_skips_invalid_timestamps() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "history.json"
         hp.write_text(json.dumps(store), encoding="utf-8")
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     assert len(sessions) == 0, "sessions with invalid timestamps must be dropped"
 
@@ -297,7 +302,7 @@ def test_load_history_store_accepts_naive_timestamps() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "history.json"
         hp.write_text(json.dumps(store), encoding="utf-8")
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     assert len(sessions) == 1, "session with naive timestamp must be loaded (not dropped)"
 
@@ -311,7 +316,7 @@ def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         hp = Path(tmp) / "history.json"
         hp.write_text(json.dumps(store), encoding="utf-8")
-        with unittest.mock.patch.object(sa, "HISTORY_PATH", hp):
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     s = sessions[0]
     assert s.get("title") == "New Chat"
@@ -1044,7 +1049,30 @@ def test_first_run_check_does_not_crash(capsys: Any = None) -> None:
         dist.first_run_check(Path(tmp))
 
 
+def test_history_path_patch_is_not_vacuous() -> None:
+    """The history store moved to hexcli.sessions, so the tests above had to
+    start patching sessions.HISTORY_PATH. If that patch ever stops taking
+    effect they would keep passing while writing to the developer's real
+    history.json — a silent, destructive green. Prove it redirects."""
+    with tempfile.TemporaryDirectory() as tmp:
+        hp = Path(tmp) / "history.json"
+        with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
+            s = sa.create_session()
+            sa.append_session_message(s, "user", "redirect check")
+            sa.save_history_store([s])
+        assert hp.exists(), "patching sessions.HISTORY_PATH did NOT redirect the write"
+        assert "redirect check" in hp.read_text(encoding="utf-8")
+
+
+def test_agent_and_sessions_agree_on_the_project_root() -> None:
+    """sessions.py derives APP_DIR independently; catch the two drifting."""
+    assert sa.APP_DIR == session_store.APP_DIR
+    assert sa.HISTORY_PATH == session_store.HISTORY_PATH
+
+
 TESTS = [
+    test_history_path_patch_is_not_vacuous,
+    test_agent_and_sessions_agree_on_the_project_root,
     test_distribution_module_imports,
     test_first_run_check_does_not_crash,
     test_git_pull_timeout_returns_false,

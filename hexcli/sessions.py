@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""hexcli.sessions — session objects and the on-disk history store.
+
+Lifted out of agent.py unchanged. Owns HISTORY_PATH, because the only readers
+of it are the two functions here; keeping the path next to them is what makes
+the store redirectable in tests.
+
+`evals/test_core.py` patches `sessions.HISTORY_PATH` to a temp file. That patch
+MUST target this module: these functions resolve the name in their own
+namespace, so patching a re-exported copy on hexcli.agent would silently do
+nothing and the suite would write to the real history.json while still passing.
+
+Checkpoints (/save, /load) deliberately stay in agent.py — they capture a
+workspace_snapshot, which belongs with the tools.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from hexcli.ui import C, cprint
+
+# Project root, derived the same way agent.APP_DIR is. Asserted equal in
+# evals/test_core.py so the two definitions cannot drift apart.
+APP_DIR = Path(__file__).resolve().parent.parent
+HISTORY_PATH = APP_DIR / "history.json"
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def iso_now() -> str:
+    return utc_now().isoformat()
+
+
+def parse_timestamp(value: str) -> datetime:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def create_session() -> dict[str, Any]:
+    now = iso_now()
+    return {
+        "id": str(uuid4()),
+        "title": "New Chat",
+        "created_at": now,
+        "modified_at": now,
+        "messages": [],
+        "last_observation": None,
+        "compact_count": 0,
+    }
+
+
+def session_has_messages(session: dict[str, Any]) -> bool:
+    msgs = session.get("messages")
+    return isinstance(msgs, list) and len(msgs) > 0
+
+
+def generate_session_title(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9\s-]", "", text).strip()
+    words = [w for w in cleaned.split() if w]
+    if not words:
+        return "New Chat"
+    return " ".join(w.upper() if w.isupper() else w.capitalize() for w in words[:6])
+
+
+def touch_session(session: dict[str, Any]) -> None:
+    session["modified_at"] = iso_now()
+
+
+def append_session_message(session: dict[str, Any], role: str, content: str) -> None:
+    msgs = session.setdefault("messages", [])
+    if not isinstance(msgs, list):
+        session["messages"] = []
+        msgs = session["messages"]
+    if not session_has_messages(session) and role == "user":
+        session["title"] = generate_session_title(content)
+    msgs.append({"role": role, "content": content})
+    touch_session(session)
+
+
+def sort_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    _epoch = datetime.min.replace(tzinfo=UTC)
+
+    def _key(s: dict[str, Any]) -> datetime:
+        raw = s.get("modified_at", "")
+        try:
+            return parse_timestamp(str(raw))
+        except (ValueError, TypeError):
+            return _epoch
+
+    return sorted(sessions, key=_key, reverse=True)
+
+
+def save_history_store(sessions: list[dict[str, Any]]) -> None:
+    payload = json.dumps({"sessions": sort_sessions(sessions)}, indent=2) + "\n"
+    tmp = HISTORY_PATH.with_suffix(".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(HISTORY_PATH)
+
+
+def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    if HISTORY_PATH.exists():
+        # A truncated or corrupted history file used to raise here and take
+        # the whole app down on EVERY launch — unrecoverable without knowing
+        # to delete a file you were never told about. Past history is never
+        # worth more than a working CLI: quarantine it and carry on.
+        try:
+            with HISTORY_PATH.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            raw = data.get("sessions", []) if isinstance(data, dict) else []
+            sessions = [s for s in raw if isinstance(s, dict)]
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            quarantine = HISTORY_PATH.with_suffix(".corrupt")
+            try:
+                HISTORY_PATH.replace(quarantine)
+                cprint(
+                    f"\n  History file was unreadable ({exc.__class__.__name__}). "
+                    f"Moved it to {quarantine.name} and started a fresh history.",
+                    C.YELLOW,
+                )
+            except OSError:
+                cprint("\n  History file is unreadable and could not be moved; "
+                       "continuing with an empty history.", C.YELLOW)
+            sessions = []
+
+    cutoff = utc_now() - timedelta(days=int(config.get("history_retention_days", 30)))
+    filtered: list[dict[str, Any]] = []
+    changed = False
+    for s in sessions:
+        try:
+            modified_at = parse_timestamp(str(s.get("modified_at", "")))
+        except ValueError:
+            changed = True
+            continue
+        if modified_at < cutoff:
+            changed = True
+            continue
+        s.setdefault("title", "New Chat")
+        s.setdefault("created_at", s.get("modified_at", iso_now()))
+        s.setdefault("messages", [])
+        s.setdefault("last_observation", None)
+        s.setdefault("compact_count", 0)
+        filtered.append(s)
+
+    filtered = sort_sessions(filtered)
+    if changed:
+        save_history_store(filtered)
+    return filtered
+
+
+def upsert_session(sessions: list[dict[str, Any]], session: dict[str, Any]) -> None:
+    if not session_has_messages(session):
+        return
+    for i, existing in enumerate(sessions):
+        if existing.get("id") == session.get("id"):
+            sessions[i] = session
+            return
+    sessions.append(session)
+
+
+def sync_session_store(sessions: list[dict[str, Any]], session: dict[str, Any]) -> None:
+    upsert_session(sessions, session)
+    save_history_store(sessions)
+
+
+def store_observation(session: dict[str, Any], query: str, output: str) -> None:
+    session["last_observation"] = {"query": query, "output": output, "captured_at": iso_now()}
+    touch_session(session)
