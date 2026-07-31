@@ -485,3 +485,29 @@ inputs (big file dumps), where TTFT-dominant workloads suit it. This result
 re-confirms the §4 conclusion from the other direction: every remaining
 quality lever now runs through a better MODEL (Thinking-2507), not more
 context, and the compile pipeline for it is now proven.
+
+### 14.10 Self-consultation experiment: the ladder mechanism works; the residual is model quality (2026-07-30)
+
+Before committing to the WSL2 + Thinking-2507 quantization effort, the ladder
+was tested with the escalation model set to the SAME 4B-Instruct (fresh-context
+consultation, no capability change). uc1 ×3:
+
+| | no consult | self-consult |
+|---|---|---|
+| uc1-t5 | 0/3 | **1/3** — first pass ever |
+| uc1-t6 | 0/3 | **1/3** — first pass ever |
+| uc1-t4 | 1/3 | 0/3 (single-run noise) |
+| uc1 total | 10/18 | 11/18 |
+
+More telling than the score: the failure MODE changed. Pre-ladder, t5/t6
+finished with zero tool calls (prose). With consultation, every run ATTEMPTS
+edits — the failures are now wrong edit content at depth, not refusal to act.
+The mechanism converts "doesn't act" into "acts"; what remains is edit
+quality, which is exactly what a stronger reasoner targets. Thinking-2507's
+expected contribution is therefore narrower but cleaner than before this
+experiment: t5/t6 from 2/6 toward 4–6/6, plus t4 stabilization.
+
+Self-consultation stays off by default (each consult costs ~30–60s and the
+net score gain at n=3 is +1); it is a config flag away for anyone who wants
+it today (`escalation_local_model` + `escalation_local_bind` pointed at the
+main server).
