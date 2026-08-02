@@ -23,7 +23,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hexcli.agent as sa  # noqa: E402
-from hexcli import diffview, doctor  # noqa: E402
+from hexcli import diffview, doctor, ui  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Diff preview
@@ -202,7 +202,123 @@ def test_example_config_has_no_unknown_keys() -> None:
     assert not unknown, f"example config documents keys that do not exist: {unknown}"
 
 
+# ---------------------------------------------------------------------------
+# Consent prompts must never stall an unattended run
+#
+# A detached/hidden console reports isatty() True while no human can ever type
+# into it. That shape hung an eval for 7.5 hours on one destructive-command
+# prompt. Note the fix cannot use a worker thread: the Windows console read holds
+# the GIL, so Thread.join(timeout) does not fire (measured 3s join -> 60s).
+# ---------------------------------------------------------------------------
+
+class _FakeStdin:
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def _with_console(monkey: dict[str, Any], fn: Any) -> Any:
+    """Run fn with sys.stdin / msvcrt.kbhit / msvcrt.getwch swapped out."""
+    import msvcrt
+
+    saved = (sys.stdin, msvcrt.kbhit, msvcrt.getwch)
+    try:
+        sys.stdin = monkey["stdin"]
+        msvcrt.kbhit = monkey["kbhit"]
+        msvcrt.getwch = monkey["getwch"]
+        return fn()
+    finally:
+        sys.stdin, msvcrt.kbhit, msvcrt.getwch = saved
+
+
+def test_confirm_denies_when_stdin_not_a_tty() -> None:
+    out = _with_console(
+        {"stdin": _FakeStdin(False), "kbhit": lambda: False, "getwch": lambda: ""},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=5.0),
+    )
+    assert out is False, "piped/redirected stdin must deny immediately"
+
+
+def test_confirm_times_out_and_denies_on_dead_console() -> None:
+    import time as _t
+
+    started = _t.monotonic()
+    out = _with_console(
+        {"stdin": _FakeStdin(True), "kbhit": lambda: False, "getwch": lambda: ""},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=0.5),
+    )
+    elapsed = _t.monotonic() - started
+    assert out is False, "an unanswered prompt must fail closed"
+    assert elapsed < 5.0, f"must give up near the timeout, took {elapsed:.1f}s"
+
+
+def test_confirm_accepts_an_explicit_yes() -> None:
+    keys = iter(["y", "\r"])
+    out = _with_console(
+        {"stdin": _FakeStdin(True), "kbhit": lambda: True, "getwch": lambda: next(keys)},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=5.0),
+    )
+    assert out is True, "a typed 'y' must still consent"
+
+
+def test_confirm_treats_bare_enter_as_no() -> None:
+    keys = iter(["\r"])
+    out = _with_console(
+        {"stdin": _FakeStdin(True), "kbhit": lambda: True, "getwch": lambda: next(keys)},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=5.0),
+    )
+    assert out is False, "[y/N] default must be no"
+
+
+def test_destructive_confirm_routes_through_the_guard() -> None:
+    """Non-vacuity: the real entry point must inherit the timeout, not re-implement."""
+    out = _with_console(
+        {"stdin": _FakeStdin(False), "kbhit": lambda: False, "getwch": lambda: ""},
+        lambda: ui.confirm_destructive_command("Remove-Item -Recurse C:\\"),
+    )
+    assert out is False
+
+
+# ---------------------------------------------------------------------------
+# Clarification grading accepts imperative requests, not just questions
+# ---------------------------------------------------------------------------
+
+def test_clarification_accepts_imperative_requests() -> None:
+    from types import SimpleNamespace
+
+    from evals import checks
+
+    verify = checks.asks_clarification()
+    for msg in (
+        "Please describe the code you want fixed.",
+        "Please clarify the specifics of what needs fixing.",
+        "I would need details such as the file and the specific error.",
+    ):
+        ok, why = verify(None, SimpleNamespace(final_message=msg, tool_calls=0, tools_used=[]))
+        assert ok, f"should count as asking: {msg!r} ({why})"
+
+
+def test_clarification_still_rejects_a_non_answer() -> None:
+    from types import SimpleNamespace
+
+    from evals import checks
+
+    verify = checks.asks_clarification()
+    msg = "The request was ambiguous and no file was provided. No action could be taken."
+    ok, _ = verify(None, SimpleNamespace(final_message=msg, tool_calls=0, tools_used=[]))
+    assert not ok, "a statement that asks for nothing must not pass"
+
+
 TESTS = [
+    test_confirm_denies_when_stdin_not_a_tty,
+    test_confirm_times_out_and_denies_on_dead_console,
+    test_confirm_accepts_an_explicit_yes,
+    test_confirm_treats_bare_enter_as_no,
+    test_destructive_confirm_routes_through_the_guard,
+    test_clarification_accepts_imperative_requests,
+    test_clarification_still_rejects_a_non_answer,
     test_example_config_matches_defaults,
     test_example_config_excludes_prompt_overrides,
     test_example_config_has_no_unknown_keys,

@@ -7,10 +7,12 @@ lists) rather than calling back into the data/backend layer.
 """
 from __future__ import annotations
 
+import msvcrt
 import subprocess
 import sys
 import textwrap
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -379,8 +381,61 @@ def repl_prompt(config: dict[str, Any], mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Result rendering
+# Consent prompts
 # ---------------------------------------------------------------------------
+
+CONFIRM_TIMEOUT_S: float = 30.0
+
+
+def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
+    """Ask for y/N consent without ever blocking forever; anything but an explicit
+    yes is a deny.
+
+    Three ways there is no human to answer, all of which must fail closed:
+      * stdin is a pipe / redirected file -> isatty() is False, deny at once;
+      * stdin is at EOF -> the read yields nothing, deny;
+      * stdin is a **hidden or detached console** -> isatty() is True and a normal
+        read never returns. Not hypothetical: this shape hung an unattended eval
+        for 7.5 hours on one prompt.
+
+    That third case rules out both obvious implementations. ``input()`` blocks
+    forever, and running it on a daemon thread does NOT help, because the Windows
+    console read holds the GIL - the main thread never runs, so ``join(timeout)``
+    is itself blocked (measured: a 3 s join took 60 s). So poll ``msvcrt`` for a
+    keypress instead, the same way ``lineedit`` reads keys, and give up on time.
+    """
+    if timeout_s is None:  # resolved per call so the constant stays patchable
+        timeout_s = CONFIRM_TIMEOUT_S
+    if not sys.stdin.isatty():
+        return False
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    deadline = time.monotonic() + timeout_s
+    buf = ""
+    while time.monotonic() < deadline:
+        if not msvcrt.kbhit():
+            time.sleep(0.05)
+            continue
+        ch = msvcrt.getwch()
+        if ch in ("\r", "\n"):
+            print()
+            return buf.strip().lower() in {"y", "yes"}
+        if ch == "\x03":  # Ctrl-C
+            print()
+            raise KeyboardInterrupt
+        if ch in ("\b", "\x7f"):
+            buf = buf[:-1]
+            continue
+        if ch == "\x00" or ch == "\xe0":  # function/arrow key: consume the scan code
+            msvcrt.getwch()
+            continue
+        buf += ch
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+    print()
+    cprint(f"   No response after {timeout_s:.0f}s — denying.", C.DIM)
+    return False
+
 
 def confirm_network_fetch(url: str) -> bool:
     """Outbound network access is the exception in an offline-first product;
@@ -389,13 +444,7 @@ def confirm_network_fetch(url: str) -> bool:
     cprint("⚠  Agent wants to fetch a URL (the only network access it has):", C.BYELLOW, bold=True)
     cprint(f"   {url}", C.CYAN)
     print()
-    if not sys.stdin.isatty():
-        return False
-    try:
-        answer = input("Allow this fetch? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer in {"y", "yes"}
+    return confirm_or_deny("Allow this fetch? [y/N] ")
 
 
 def confirm_sensitive_command(cmd: str) -> bool:
@@ -406,24 +455,17 @@ def confirm_sensitive_command(cmd: str) -> bool:
     cprint(f"   {cmd}", C.RED)
     cprint("   (credentials / keys / security files — deny unless YOU asked for exactly this)", C.DIM)
     print()
-    try:
-        answer = input("Allow? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer in {"y", "yes"}
+    return confirm_or_deny("Allow? [y/N] ")
 
 
 def confirm_destructive_command(cmd: str) -> bool:
-    """Print a destructive-command warning and return True only if the user types y/yes."""
+    """Print a destructive-command warning and return True only if the user types
+    y/yes; denied when non-interactive or unanswered."""
     print()
     cprint("⚠  Agent wants to run a destructive command:", C.BYELLOW, bold=True)
     cprint(f"   {cmd}", C.RED)
     print()
-    try:
-        answer = input("Allow? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer in {"y", "yes"}
+    return confirm_or_deny("Allow? [y/N] ")
 
 
 def render_result(title: str, body: str) -> None:

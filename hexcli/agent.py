@@ -3061,13 +3061,12 @@ def run_autopilot(
                 continue
             cprint("  Stopping.", C.BYELLOW)
             if escalate.get_api_key(config):
-                try:
-                    answer = input(
-                        "\n  The agent is stuck. Escalate to Claude cloud? [y/N] "
-                    ).strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    answer = "n"
-                if answer in ("y", "yes"):
+                # Same non-interactive hazard as the safety confirms: this sits in
+                # the autopilot path, so an unattended run must not stall here.
+                escalated = ui.confirm_or_deny(
+                    "\n  The agent is stuck. Escalate to Claude cloud? [y/N] "
+                )
+                if escalated:
                     tool_seq = [entry[0] for entry in _loop_tracker]
                     suggestion = escalate.escalate(config, messages, tool_seq)
                     cprint("\n── Cloud suggestion ──────────────────────────────────────────────", C.BCYAN)
