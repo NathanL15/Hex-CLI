@@ -18,8 +18,8 @@ import os
 import subprocess
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Windows consoles often default to cp1252, which can't encode the arrows/
@@ -37,9 +37,50 @@ MODELS_DIR     = APP_DIR / "models"
 ENV_NAME       = "shellai-npu"
 SHELLAI_SCRIPT = APP_DIR / "shellai.py"
 
-# npurun — Qwen3-4B on Hexagon NPU via Qualcomm Genie SDK
-NPURUN_EXE       = Path.home() / ".cargo" / "bin" / "npurun.exe"
-QNN_SDK_ROOT     = Path(os.environ.get("QNN_SDK_ROOT", "C:/Qualcomm/AIStack/QAIRT_2.47.0"))
+# npurun — Qwen3-4B on Hexagon NPU via Qualcomm Genie SDK.
+# Discovery mirrors install.ps1: a source build wins, then the prebuilt
+# binary the installer downloads next to this script, then PATH.
+
+def find_npurun_exe(home: Path | None = None, app_dir: Path | None = None) -> Path | None:
+    home = home or Path.home()
+    app_dir = app_dir or APP_DIR
+    for candidate in (
+        home / ".cargo" / "bin" / "npurun.exe",
+        app_dir / "npurun-arm64.exe",
+    ):
+        if candidate.exists():
+            return candidate
+    import shutil
+    found = shutil.which("npurun")
+    return Path(found) if found else None
+
+
+def _qairt_valid(root: Path) -> bool:
+    return (
+        (root / "lib" / "aarch64-windows-msvc").exists()
+        and (root / "bin" / "aarch64-windows-msvc").exists()
+        and (root / "lib" / "hexagon-v73" / "unsigned").exists()
+    )
+
+
+def find_qairt_root(env_value: str | None = None, stack_dir: Path | None = None) -> Path | None:
+    """QNN_SDK_ROOT env wins if valid; otherwise the newest valid
+    C:\\Qualcomm\\AIStack\\QAIRT_* install."""
+    env_value = env_value if env_value is not None else os.environ.get("QNN_SDK_ROOT", "")
+    if env_value:
+        root = Path(env_value)
+        if _qairt_valid(root):
+            return root
+    stack = stack_dir or Path("C:/Qualcomm/AIStack")
+    if stack.exists():
+        for candidate in sorted(stack.glob("QAIRT_*"), reverse=True):
+            if _qairt_valid(candidate):
+                return candidate
+    return None
+
+
+NPURUN_EXE       = find_npurun_exe() or (Path.home() / ".cargo" / "bin" / "npurun.exe")
+QNN_SDK_ROOT     = find_qairt_root() or Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
 NPURUN_MODEL     = "qwen3-4b-instruct-2507"
 NPURUN_MODEL_DIR = Path.home() / "AppData" / "Local" / "npurun" / "models" / NPURUN_MODEL
 NPURUN_PORT      = 11435

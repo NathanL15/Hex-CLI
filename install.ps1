@@ -4,69 +4,81 @@
     One-shot installer for Hex CLI on Snapdragon X Elite ARM64 Windows.
 
 .DESCRIPTION
-    Checks ARM64 + Python 3.11+, creates .shellai/ scaffold, copies the
-    default config, downloads the pre-built npurun ARM64 binary from the
-    latest GitHub release, and creates a Start Menu shortcut.
+    Walks the full setup: ARM64 + Python 3.11+ checks, pip dependencies,
+    QAIRT SDK discovery (with guided download instructions if absent — the
+    SDK cannot be redistributed), the prebuilt npurun ARM64 binary from
+    GitHub Releases, the Qwen3-4B model bundle pull (~2.5 GB), config
+    scaffold, Start Menu shortcut, and a final `hexcli --doctor` check.
+
+    Every step that finds its work already done skips it, so re-running
+    after fixing one prerequisite is cheap and safe.
 
 .PARAMETER InstallDir
-    Where Hex CLI lives. Default: current directory (assumes you already
-    cloned the repo here).  When called by Scoop, pass $dir.
-
-.PARAMETER ScoopInstall
-    Skip the git clone step (Scoop already extracted the zip).
+    Where Hex CLI lives. Default: the directory containing this script
+    (assumes you already cloned the repo here).
 
 .PARAMETER NoStartMenu
     Skip creating the Start Menu shortcut.
 
+.PARAMETER PullModel
+    Pull the model bundle without asking (useful for unattended installs).
+
+.PARAMETER SkipModel
+    Never pull the model bundle, even interactively.
+
 .PARAMETER NpurunVersion
-    Override the npurun release tag to download (e.g. "v1.7.0").
+    Override the release tag to download npurun from (e.g. "v2.0.0").
     Default: "latest".
 
 .EXAMPLE
-    # Run directly after cloning:
     Set-Location Hex-CLI
     .\install.ps1
-
-.EXAMPLE
-    # Remote one-liner:
-    irm https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/install.ps1 | iex
 #>
 [CmdletBinding()]
 param(
     [string]  $InstallDir    = $PSScriptRoot,
-    [switch]  $ScoopInstall,
     [switch]  $NoStartMenu,
+    [switch]  $PullModel,
+    [switch]  $SkipModel,
     [string]  $NpurunVersion = "latest"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Write-Step  { param([string]$Msg) Write-Host "  ► $Msg" -ForegroundColor Cyan   }
-function Write-Ok    { param([string]$Msg) Write-Host "  ✓ $Msg" -ForegroundColor Green  }
-function Write-Warn  { param([string]$Msg) Write-Host "  ⚠ $Msg" -ForegroundColor Yellow }
-function Write-Fail  { param([string]$Msg) Write-Host "  ✗ $Msg" -ForegroundColor Red    }
+# $PSScriptRoot is not reliably available in param() defaults on 5.1.
+if (-not $InstallDir) {
+    $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+
+function Write-Step  { param([string]$Msg) Write-Host "  > $Msg" -ForegroundColor Cyan   }
+function Write-Ok    { param([string]$Msg) Write-Host "  + $Msg" -ForegroundColor Green  }
+function Write-Warn  { param([string]$Msg) Write-Host "  ! $Msg" -ForegroundColor Yellow }
+function Write-Fail  { param([string]$Msg) Write-Host "  x $Msg" -ForegroundColor Red    }
+
+$script:CanPrompt = -not [Console]::IsInputRedirected
 
 Write-Host ""
-Write-Host "  Hex CLI — installer" -ForegroundColor White
+Write-Host "  Hex CLI - installer" -ForegroundColor White
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# 1. Architecture check
+# 1. Architecture
 # ---------------------------------------------------------------------------
-Write-Step "Checking CPU architecture …"
+Write-Step "Checking CPU architecture ..."
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
-if ($arch -ne [System.Runtime.InteropServices.Architecture]::Arm64) {
-    Write-Warn "This machine reports architecture '$arch'."
-    Write-Warn "Hex CLI is optimised for Snapdragon X Elite ARM64; it may still work but the NPU path will be disabled."
-} else {
+$isArm64 = ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64)
+if ($isArm64) {
     Write-Ok "ARM64 confirmed."
+} else {
+    Write-Warn "This machine reports architecture '$arch'."
+    Write-Warn "Hex CLI targets Snapdragon X Elite ARM64; the NPU path will not work here."
 }
 
 # ---------------------------------------------------------------------------
-# 2. Python check (3.11+)
+# 2. Python 3.11+
 # ---------------------------------------------------------------------------
-Write-Step "Checking Python …"
+Write-Step "Checking Python ..."
 $pythonExe = $null
 foreach ($candidate in @("py", "python3", "python")) {
     $found = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -74,7 +86,7 @@ foreach ($candidate in @("py", "python3", "python")) {
         $verStr = & $candidate --version 2>&1
         if ($verStr -match "Python (\d+)\.(\d+)") {
             $major = [int]$Matches[1]; $minor = [int]$Matches[2]
-            if ($major -ge 3 -and $minor -ge 11) {
+            if ($major -eq 3 -and $minor -ge 11) {
                 $pythonExe = $candidate
                 Write-Ok "Found: $verStr"
                 break
@@ -83,26 +95,149 @@ foreach ($candidate in @("py", "python3", "python")) {
     }
 }
 if (-not $pythonExe) {
-    Write-Fail "Python 3.11+ not found. Install from https://python.org and re-run this script."
+    Write-Fail "Python 3.11+ not found. Install from https://python.org (ARM64 build) and re-run."
     exit 1
 }
 
 # ---------------------------------------------------------------------------
-# 3. pip dependencies
+# 3. pip dependencies (optional extras — the core agent is stdlib-only)
 # ---------------------------------------------------------------------------
-Write-Step "Installing Python dependencies (numpy, onnxruntime) …"
+Write-Step "Installing optional Python dependencies (numpy, onnxruntime) ..."
 try {
     & $pythonExe -m pip install --quiet numpy onnxruntime
     Write-Ok "Dependencies installed."
 } catch {
     Write-Warn "pip install failed: $_"
-    Write-Warn "Run manually: $pythonExe -m pip install numpy onnxruntime"
+    Write-Warn "The agent still runs without them (memory search is disabled)."
 }
 
 # ---------------------------------------------------------------------------
-# 4. .shellai/ scaffold
+# 4. QAIRT SDK (cannot be redistributed — discover or guide)
 # ---------------------------------------------------------------------------
-Write-Step "Creating .shellai/ scaffold …"
+Write-Step "Looking for the Qualcomm QAIRT SDK ..."
+
+function Test-QairtRoot {
+    param([string]$Root)
+    if (-not $Root) { return $false }
+    return (Test-Path (Join-Path $Root "lib\aarch64-windows-msvc")) -and
+           (Test-Path (Join-Path $Root "bin\aarch64-windows-msvc")) -and
+           (Test-Path (Join-Path $Root "lib\hexagon-v73\unsigned"))
+}
+
+$qairtRoot = $null
+if ($env:QNN_SDK_ROOT -and (Test-QairtRoot $env:QNN_SDK_ROOT)) {
+    $qairtRoot = $env:QNN_SDK_ROOT
+} else {
+    $stack = "C:\Qualcomm\AIStack"
+    if (Test-Path $stack) {
+        $cands = Get-ChildItem $stack -Directory -Filter "QAIRT_*" -ErrorAction SilentlyContinue |
+                 Sort-Object Name -Descending
+        foreach ($c in $cands) {
+            if (Test-QairtRoot $c.FullName) { $qairtRoot = $c.FullName; break }
+        }
+    }
+}
+
+if ($qairtRoot) {
+    Write-Ok "QAIRT SDK: $qairtRoot"
+} else {
+    Write-Warn "QAIRT SDK not found. Qualcomm does not allow redistributing it, so this is"
+    Write-Warn "the one manual step. It is a single download + extract:"
+    Write-Host ""
+    Write-Host "      1. Sign in at https://qpm.qualcomm.com (free Qualcomm account)."
+    Write-Host "      2. Download 'Qualcomm AI Runtime (QAIRT) SDK' for Windows ARM64"
+    Write-Host "         (tested version: 2.47.x)."
+    Write-Host "      3. Extract so that a folder like C:\Qualcomm\AIStack\QAIRT_2.47.0"
+    Write-Host "         contains lib\aarch64-windows-msvc, bin\aarch64-windows-msvc,"
+    Write-Host "         and lib\hexagon-v73\unsigned."
+    Write-Host "      4. Re-run this installer - it will pick the SDK up automatically."
+    Write-Host ""
+}
+
+# ---------------------------------------------------------------------------
+# 5. npurun binary (prebuilt, from GitHub Releases)
+# ---------------------------------------------------------------------------
+Write-Step "Looking for npurun ..."
+$npurunExe = $null
+$userProfile = [Environment]::GetFolderPath("UserProfile")
+$npurunCandidates = @(
+    (Join-Path $userProfile ".cargo\bin\npurun.exe"),
+    (Join-Path $InstallDir "npurun-arm64.exe")
+)
+foreach ($c in $npurunCandidates) {
+    if (Test-Path $c) { $npurunExe = $c; break }
+}
+if (-not $npurunExe) {
+    $onPath = Get-Command npurun -ErrorAction SilentlyContinue
+    if ($onPath) { $npurunExe = $onPath.Source }
+}
+
+if ($npurunExe) {
+    Write-Ok "npurun: $npurunExe"
+} else {
+    Write-Step "Downloading prebuilt npurun (ARM64, MIT/Apache-2.0) ..."
+    $npurunDest = Join-Path $InstallDir "npurun-arm64.exe"
+    $apiUrl = if ($NpurunVersion -eq "latest") {
+        "https://api.github.com/repos/NathanL15/Hex-CLI/releases/latest"
+    } else {
+        "https://api.github.com/repos/NathanL15/Hex-CLI/releases/tags/$NpurunVersion"
+    }
+    try {
+        $headers = @{ "User-Agent" = "hexcli-installer"; "Accept" = "application/vnd.github+json" }
+        $release  = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
+        $asset    = $release.assets | Where-Object { $_.name -eq "npurun-arm64.exe" } | Select-Object -First 1
+        if ($asset) {
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $npurunDest -Headers $headers
+            $npurunExe = $npurunDest
+            Write-Ok "Downloaded npurun-arm64.exe from release $($release.tag_name)."
+        } else {
+            Write-Warn "No 'npurun-arm64.exe' asset in release $($release.tag_name)."
+        }
+    } catch {
+        Write-Warn "Could not download npurun: $_"
+        Write-Warn "Build from source instead: github.com/bpbonker/npurun (cargo install, MSVC ARM64)."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 6. Model bundle (~2.5 GB, needs npurun + QAIRT)
+# ---------------------------------------------------------------------------
+$modelName = "qwen3-4b-instruct-2507"
+$modelDir  = Join-Path $env:LOCALAPPDATA "npurun\models\$modelName"
+
+if (Test-Path $modelDir) {
+    Write-Ok "Model bundle already present: $modelName"
+} elseif (-not ($npurunExe -and $qairtRoot)) {
+    Write-Warn "Model pull skipped - it needs both npurun and the QAIRT SDK (see above)."
+} elseif ($SkipModel) {
+    Write-Warn "Model pull skipped (-SkipModel)."
+} else {
+    $doPull = $PullModel
+    if (-not $doPull -and $script:CanPrompt) {
+        $answer = Read-Host "  Pull the $modelName bundle now? (~2.5 GB) [Y/n]"
+        $doPull = ($answer -eq "" -or $answer -match "^[Yy]")
+    }
+    if ($doPull) {
+        Write-Step "Pulling $modelName (this downloads ~2.5 GB) ..."
+        $env:QNN_SDK_ROOT      = $qairtRoot
+        $env:ADSP_LIBRARY_PATH = Join-Path $qairtRoot "lib\hexagon-v73\unsigned"
+        $env:PATH = (Join-Path $qairtRoot "bin\aarch64-windows-msvc") + ";" +
+                    (Join-Path $qairtRoot "lib\aarch64-windows-msvc") + ";" + $env:PATH
+        & $npurunExe pull $modelName
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Model bundle ready."
+        } else {
+            Write-Warn "npurun pull failed (exit $LASTEXITCODE). Re-run the installer to retry."
+        }
+    } else {
+        Write-Warn "Model pull deferred. The launcher will offer it on first run."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 7. Config scaffold
+# ---------------------------------------------------------------------------
+Write-Step "Creating .shellai/ scaffold ..."
 $shellaiDir = Join-Path $InstallDir ".shellai"
 foreach ($sub in @("", "logs", "checkpoints")) {
     $p = Join-Path $shellaiDir $sub
@@ -110,91 +245,70 @@ foreach ($sub in @("", "logs", "checkpoints")) {
 }
 Write-Ok ".shellai/ ready."
 
-# ---------------------------------------------------------------------------
-# 5. Default config
-# ---------------------------------------------------------------------------
 $configSrc  = Join-Path $InstallDir "shellai.example.json"
 $configDest = Join-Path $InstallDir "shellai.json"
-if (Test-Path $configSrc) {
-    if (-not (Test-Path $configDest)) {
-        Copy-Item $configSrc $configDest
-        Write-Ok "Created shellai.json from template."
-    } else {
-        Write-Ok "shellai.json already exists — not overwritten."
-    }
+if ((Test-Path $configSrc) -and -not (Test-Path $configDest)) {
+    Copy-Item $configSrc $configDest
+    Write-Ok "Created shellai.json from the generated template."
 }
 
 # ---------------------------------------------------------------------------
-# 6. Download npurun ARM64 binary from GitHub Releases
-# ---------------------------------------------------------------------------
-Write-Step "Fetching latest npurun binary …"
-$npurunDest = Join-Path $InstallDir "npurun-arm64.exe"
-
-$apiUrl = if ($NpurunVersion -eq "latest") {
-    "https://api.github.com/repos/NathanL15/Hex-CLI/releases/latest"
-} else {
-    "https://api.github.com/repos/NathanL15/Hex-CLI/releases/tags/$NpurunVersion"
-}
-
-$downloadOk = $false
-try {
-    $headers = @{ "User-Agent" = "hexcli-installer"; "Accept" = "application/vnd.github+json" }
-    $release  = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
-    $asset    = $release.assets | Where-Object { $_.name -eq "npurun-arm64.exe" } | Select-Object -First 1
-    if ($asset) {
-        Write-Step "Downloading $($asset.name) from $($release.tag_name) …"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $npurunDest -Headers $headers
-        Write-Ok "npurun-arm64.exe downloaded."
-        $downloadOk = $true
-    } else {
-        Write-Warn "No 'npurun-arm64.exe' asset in release $($release.tag_name)."
-        Write-Warn "Build it manually: see README.md (Snapdragon X Elite NPU path)."
-    }
-} catch {
-    Write-Warn "Could not download npurun: $_"
-    Write-Warn "Run 'hexcli --update' once you have network access."
-}
-
-# ---------------------------------------------------------------------------
-# 7. Start Menu shortcut
+# 8. Start Menu shortcut
 # ---------------------------------------------------------------------------
 if (-not $NoStartMenu) {
-    Write-Step "Creating Start Menu shortcut …"
+    Write-Step "Creating Start Menu shortcut ..."
     $startMenu  = [System.Environment]::GetFolderPath("Programs")
     $lnkPath    = Join-Path $startMenu "Hex CLI.lnk"
     $targetCmd  = Join-Path $InstallDir "Hex CLI.cmd"
-
     if (Test-Path $targetCmd) {
         try {
             $shell    = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($lnkPath)
-            $shortcut.TargetPath      = "cmd.exe"
-            $shortcut.Arguments       = "/c `"$targetCmd`""
+            $shortcut.TargetPath       = "cmd.exe"
+            $shortcut.Arguments        = "/c `"$targetCmd`""
             $shortcut.WorkingDirectory = $InstallDir
-            $shortcut.Description     = "Hex CLI — local NPU terminal agent"
-            $shortcut.IconLocation    = "powershell.exe,0"
+            $shortcut.Description      = "Hex CLI - local NPU terminal agent"
+            $icon = Join-Path $InstallDir "hex-cli.ico"
+            $shortcut.IconLocation = if (Test-Path $icon) { $icon } else { "powershell.exe,0" }
             $shortcut.Save()
             Write-Ok "Shortcut created: $lnkPath"
         } catch {
             Write-Warn "Could not create shortcut: $_"
         }
     } else {
-        Write-Warn "'Hex CLI.cmd' not found at $InstallDir — shortcut skipped."
+        Write-Warn "'Hex CLI.cmd' not found at $InstallDir - shortcut skipped."
     }
 }
 
 # ---------------------------------------------------------------------------
-# Done
+# 9. Doctor
+# ---------------------------------------------------------------------------
+Write-Step "Running hexcli --doctor ..."
+Push-Location $InstallDir
+try {
+    & $pythonExe -m hexcli.agent --doctor
+} catch {
+    Write-Warn "Doctor run failed: $_"
+} finally {
+    Pop-Location
+}
+
+# ---------------------------------------------------------------------------
+# Summary
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "  Installation complete." -ForegroundColor Green
+Write-Host "  Installation finished." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Next steps:" -ForegroundColor White
-if (-not $downloadOk) {
-Write-Host "    1. Set up QAIRT SDK + npurun (see README.md)"
-Write-Host "    2. Run: hexcli --update     (to download the npurun binary once available)"
+$remaining = @()
+if (-not $qairtRoot)           { $remaining += "Install the QAIRT SDK (step 4 above), then re-run .\install.ps1" }
+if (-not $npurunExe)           { $remaining += "Get npurun (re-run installer with network, or build from source)" }
+if (-not (Test-Path $modelDir)) { $remaining += "Pull the model: re-run .\install.ps1 -PullModel" }
+if ($remaining.Count -gt 0) {
+    Write-Host "  Remaining steps:" -ForegroundColor White
+    $i = 1
+    foreach ($r in $remaining) { Write-Host "    $i. $r"; $i++ }
 } else {
-Write-Host "    1. Set QNN_SDK_ROOT and ADSP_LIBRARY_PATH (see README.md)"
+    Write-Host "  Everything is in place. Start Hex CLI from the Start Menu, or run:" -ForegroundColor White
+    Write-Host "    python launcher.py"
 }
-Write-Host "    Open 'Hex CLI' from Start Menu, or run: python `"$InstallDir\shellai.py`""
 Write-Host ""

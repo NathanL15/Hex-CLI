@@ -14,6 +14,7 @@ onnx/
 
 # Third-party clone with its own git history; see README for setup
 npurun/
+npurun-arm64.exe
 
 # Dev / diagnostic scripts — local use only, not part of the product
 debug_eos_probe.py
