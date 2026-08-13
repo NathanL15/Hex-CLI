@@ -1,0 +1,573 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper, margin=1.05in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[charter]{mathdesign}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, patterns}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+% ── palette ──────────────────────────────────────────────────
+\definecolor{hexblue}{HTML}{2A78D6}
+\definecolor{hexorange}{HTML}{EB6834}
+\definecolor{hexaqua}{HTML}{1BAF7A}
+\definecolor{hexgray}{HTML}{898781}
+\definecolor{inkmuted}{HTML}{52514E}
+\definecolor{rulegray}{HTML}{E1E0D9}
+\definecolor{hexred}{HTML}{D03B3B}
+
+\captionsetup{font=small, labelfont={bf}, width=0.92\textwidth}
+\setlist{itemsep=2pt, topsep=4pt}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\textbf{Hex CLI: A Measurement-First Coding Agent\\ on a 4-Billion-Parameter Model and a Laptop NPU}}
+\author{Nathan L.\\ \small\texttt{github.com/NathanL15/Hex-CLI}}
+\date{August 2026 \,\textperiodcentered\, v2.0.0}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Hex CLI is a terminal coding agent in the tradition of Claude Code and GitHub
+Copilot CLI, with one structural difference: it runs entirely on a consumer
+laptop. There is no cloud service behind it, no API key, and no code leaving
+the machine. It pairs a small 4-billion-parameter model
+(Qwen3-4B-Instruct-2507) with the Hexagon NPU of a Snapdragon X~Elite and
+compensates for the model's limits through engineering: a statistical
+evaluation instrument graded on real filesystem state, a rebuilt agent loop,
+and a security layer that assumes the model can always be manipulated.
+Between versions 1.7 and 2.0 the model never changed, yet every headline
+metric improved. The extended task suite rose from 22/35 to 24/36
+(pass\textsuperscript{5}), multi-turn success from 23/45 to 26/45, executed
+prompt-injection payloads fell from 9/9 to 0/9, and offline test coverage grew
+from 330 to 619 tests. The negative results matter as much as the positive
+ones. Eight plausible improvements, including a new action protocol, prompt
+compression, a larger context window, and a runtime migration, were built or
+benchmarked, measured, and rejected with evidence. The central claim of this
+report is methodological: at the small end of the model scale, the harness is
+the product.
+\end{abstract}
+
+% ═══════════════════════════════════════════════════════════════
+\section{The constraint is the point}
+
+Frontier coding agents assume a frontier model. Hex CLI asks what happens
+without one: how much of a real coding agent survives when the model is
+Qwen3-4B-Instruct-2507, small enough to run at about 15 tokens per second on a
+laptop NPU (the low-power AI accelerator built into the laptop's processor),
+inside a context window of 4{,}096 tokens (roughly 3{,}000 words), on a
+16\,GB machine with no cloud fallback?
+
+The constraints are severe. The model degrades measurably once the context
+passes roughly 2{,}600 tokens, and the system prompt alone costs about
+2{,}100, so the usable working space is a thin slice of an already small
+window (Figure~\ref{fig:window}). Models must be quantized and compiled ahead
+of time for this NPU, and such bundles exist for exactly twelve of them, so
+swapping to a better model is rarely an option. Each of these numbers was
+measured on the target machine, and each one shaped the design.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[x=1cm, font=\small]
+% zones: 4,096 tokens mapped onto 12.2cm  (factor 0.0029785)
+\fill[hexblue]  (0,0)    rectangle (6.26,0.85);
+\fill[hexaqua]  (6.30,0) rectangle (7.74,0.85);
+\fill[pattern=north east lines, pattern color=hexgray!70] (7.78,0) rectangle (12.2,0.85);
+\draw[rulegray] (0,0) rectangle (12.2,0.85);
+% labels
+\node[white, font=\small\bfseries] at (3.13,0.425) {system prompt $\sim$2{,}100 tok};
+\node[font=\scriptsize, color=inkmuted, align=center] (head) at (5.6,1.75) {usable headroom\\$\sim$500 tok};
+\draw[color=inkmuted, thin] (head.south) -- (7.0,0.95);
+\node[font=\small, color=inkmuted, fill=white, inner sep=2pt] at (9.99,0.425) {degraded output};
+% cliff line
+\draw[hexred, thick, dashed] (7.74,-0.35) -- (7.74,1.45);
+\node[font=\scriptsize, color=hexred, anchor=west] at (7.9,1.75) {degradation cliff $\approx$ 2{,}600 tok};
+% axis ticks
+\foreach \x/\lab in {0/0, 3.05/{1{,}024}, 6.1/{2{,}048}, 9.15/{3{,}072}, 12.2/{4{,}096}} {
+  \draw[color=hexgray] (\x,-0.05) -- (\x,-0.18);
+  \node[font=\scriptsize, color=hexgray, anchor=north] at (\x,-0.22) {\lab};
+}
+\end{tikzpicture}
+\caption{The 4{,}096-token context window as the agent actually experiences
+it. Output quality collapses past the measured cliff, so auto-compaction,
+calibrated with an exact token estimator, keeps every session left of the
+red line.}
+\label{fig:window}
+\end{figure}
+
+There are practical reasons to accept these constraints: code never leaves the
+laptop, inference costs nothing, and the first token arrives in about half a
+second. The more interesting reason is the engineering thesis this report
+defends. At small model scale, the harness (parsing, context management, edit
+application, safety) matters more than the model. Running a model locally is
+a solved problem; tools like Ollama do it in one command. Running a
+competent, safe agent on a small local model is not, and that gap is what
+this project is about.
+
+% ═══════════════════════════════════════════════════════════════
+\section{System architecture}
+
+The system is two layers in two languages, split where each is strong
+(Figure~\ref{fig:arch}). A Python harness owns the agent loop: prompt
+construction, action parsing, dispatch across 15 tools, safety checks, context
+compaction, and the interactive REPL. A vendored fork of \emph{npurun},
+written in Rust, owns inference. It wraps Qualcomm's Genie SDK behind a local
+server that speaks the OpenAI API. The fork is not a passive dependency; over
+the course of the project it gained per-token usage reporting, token-precise
+\code{max\_tokens}, mid-stream stop sequences, and a fix for a UTF-8
+character-boundary crash that could take down the whole server.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  box/.style={draw=hexgray, rounded corners=2pt, align=center,
+              inner sep=6pt, minimum height=1.9cm, text width=2.85cm, font=\small},
+  arr/.style={-{Stealth[length=2.4mm]}, thick, color=inkmuted}
+]
+\node[box] (repl)    {\textbf{Terminal REPL}\\[1pt] {\color{hexblue}\scriptsize Python}\\[2pt] \scriptsize input line, streaming render, diffs};
+\node[box, right=of repl] (harness) {\textbf{Agent harness}\\[1pt] {\color{hexblue}\scriptsize Python}\\[2pt] \scriptsize prompt build, action parse, safety gates};
+\node[box, right=of harness] (npurun) {\textbf{npurun fork}\\[1pt] {\color{hexorange}\scriptsize Rust}\\[2pt] \scriptsize OpenAI-compatible server, exact token accounting};
+\node[box, right=of npurun] (npu)    {\textbf{Genie SDK\,/\,NPU}\\[1pt] {\color{hexaqua}\scriptsize C++\,/\,silicon}\\[2pt] \scriptsize Qwen3-4B w4a16, 700\,tok/s prefill};
+\draw[arr] (repl) -- (harness);
+\draw[arr] (harness) -- (npurun);
+\draw[arr] (npurun) -- (npu);
+\end{tikzpicture}
+\caption{System layers for one agent turn. The evaluation instrument drives
+the same harness code path the user does: one loop, no test double. The model
+is quantized to w4a16 (4-bit weights, 16-bit activations) to fit the NPU.
+Measured Python overhead per turn is below 1\% of wall-clock time, which is
+why a full Rust rewrite was considered and declined (\S\ref{sec:negative}).}
+\label{fig:arch}
+\end{figure}
+
+The same split exists in silicon (Figure~\ref{fig:soc}). Inference occupies
+the NPU while the harness and every tool the agent runs (shell commands,
+scripts, file operations) execute on the CPU cores, so tool execution never
+competes with token generation.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[font=\small]
+\node[draw=hexgray, rounded corners=3pt, minimum width=11.8cm, minimum height=4.6cm] (chip) at (0,0) {};
+\node[anchor=north west, font=\scriptsize\bfseries, color=inkmuted]
+  at ([xshift=4pt,yshift=-3pt]chip.north west) {SNAPDRAGON X ELITE --- ONE CHIP};
+\node[draw=hexorange, thick, rounded corners=2pt, minimum width=4.5cm, minimum height=2.1cm, align=center]
+  (cpu) at (-3.2,0.35) {\textbf{CPU} --- 12 Oryon cores\\[2pt]
+  \scriptsize runs the agent harness and\\ \scriptsize every tool the agent invokes};
+\node[draw=hexgray, rounded corners=2pt, minimum width=2.1cm, minimum height=2.1cm, align=center, color=inkmuted]
+  (gpu) at (0.65,0.35) {GPU\\ \scriptsize idle};
+\node[draw=hexblue, thick, rounded corners=2pt, minimum width=3.6cm, minimum height=2.1cm, align=center]
+  (npu) at (3.75,0.35) {\textbf{NPU} --- Hexagon\\[2pt]
+  \scriptsize runs Qwen3-4B\\ \scriptsize prefill and decode};
+\node[draw=hexaqua, rounded corners=2pt, minimum width=11cm, minimum height=0.72cm]
+  (mem) at (0,-1.55) {\scriptsize 16\,GB LPDDR5x, shared by CPU and NPU (the model bundle takes $\sim$2.5\,GB)};
+\draw[-{Stealth[length=2mm]}, color=inkmuted] (cpu.south) -- (cpu.south|-mem.north);
+\draw[-{Stealth[length=2mm]}, color=inkmuted] (npu.south) -- (npu.south|-mem.north);
+\end{tikzpicture}
+\caption{Where the work runs on the chip. Agent logic and inference occupy
+different silicon, which is also why the CPU-only alternative loses in
+practice (\S4.2): a CPU that is busy decoding is a CPU that cannot run the
+agent's tools.}
+\label{fig:soc}
+\end{figure}
+
+\subsection{What using it looks like}
+
+A session is a conversation in the terminal. The user types a request; the
+agent works in steps, where each step is either a tool call or a final
+answer. Here is a representative task, drawn from the evaluation suite:
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\small
+\ttfamily\textcolor{hexblue}{>}\ fix the crash in report.py\\[5pt]
+\begin{tabular}{@{}p{2.2cm}p{2.4cm}l@{}}
+\ttfamily read\_file  & \ttfamily report.py & \small locates the function \\
+\ttfamily run\_code   & \ttfamily report.py & \small NameError: name `conut' is not defined \\
+\ttfamily edit\_file  & \ttfamily report.py & \small\ttfamily conut = 0 \rmfamily$\;\rightarrow\;$\ttfamily count = 0 \\
+\ttfamily run\_code   & \ttfamily report.py & \small exit 0, output correct \\
+\end{tabular}\\[5pt]
+\rmfamily\small Fixed. Line 12 of \code{report.py} misspelled \code{count};
+corrected and re-run to confirm.}}
+\end{center}
+
+Two product behaviors are visible even in this small example. Every file
+mutation is shown to the user as a diff before the session moves on. And a
+claim of ``done'' after an unverified edit is deflected: the harness asks the
+agent to check its work before it may finish.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Method: build the instrument first}
+\label{sec:method}
+
+The rule for v2 was that no change ships on intuition. Before touching the
+agent itself, the project built an evaluation instrument with three properties
+that informal evaluations usually lack.
+
+First, grading is based on state. A task passes only if the filesystem ends up
+correct, or the answer content is verifiably right. A transcript containing an
+expected string proves nothing; language models are excellent at claiming
+success.
+
+Second, every case runs three to five times, and a case passes only if all
+runs pass (pass\textsuperscript{k}), reported with Wilson confidence
+intervals. Single runs of a small model are noise. Three separate apparent
+regressions in this project disappeared entirely when re-run at $n{=}5$ or
+$n{=}10$.
+
+Third, backend failures are quarantined. The NPU inference stack silently
+degrades after an hour or two of traffic, and when it does, it looks exactly
+like a model regression. The runner detects a degraded server and marks
+affected runs invalid rather than failed, and every A/B comparison starts a
+fresh server for each arm.
+
+That last property deserves emphasis. Twice in this project, an apparent
+quality regression turned out to be the measurement platform drifting between
+runs. If the arms of an experiment are not interleaved or freshly reset, the
+comparison is void, and nothing about this failure announces itself until it
+has cost a day of misdirected debugging.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Results: same model, rebuilt harness}
+
+The gains in v2 came from finding the harness's real failure classes and
+fixing them. The largest single fix was in the action parser: a greedy
+JSON-extraction regex was silently discarding the model's batched multi-action
+responses, which turned out to be the true cause of a multi-turn collapse that
+had been blamed on context length. Beyond that, a four-tier fuzzy matcher now
+applies file edits (the most common v1 failure was edit formatting, not model
+capability), malformed actions are retried with feedback naming the specific
+defect, and context compaction was recalibrated with an exact token estimator
+so that it fires before the model's degradation cliff instead of after it.
+Figure~\ref{fig:evals} shows the aggregate effect.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar, xmin=0, xmax=112,
+  width=0.72\textwidth, height=6.0cm,
+  symbolic y coords={Injections blocked, Multi-turn, Extended suite},
+  ytick=data, yticklabel style={font=\small},
+  bar width=7pt,
+  enlarge y limits=0.28,
+  xlabel={\small \% of cases passing}, xlabel style={color=inkmuted},
+  xtick={0,25,50,75,100},
+  nodes near coords, nodes near coords align={horizontal},
+  every node near coord/.append style={font=\scriptsize, color=inkmuted,
+    /pgf/number format/fixed, /pgf/number format/precision=1},
+  legend style={at={(0.5,-0.24)}, anchor=north, legend columns=-1,
+                draw=none, font=\small, /tikz/every even column/.append style={column sep=12pt}},
+  axis line style={color=rulegray},
+  xmajorgrids, grid style={color=rulegray},
+  tick label style={font=\small, color=inkmuted},
+]
+\addplot[fill=hexgray, draw=none] coordinates
+  {(62.9,Extended suite) (51.1,Multi-turn) (0,Injections blocked)};
+\addplot[fill=hexblue, draw=none] coordinates
+  {(66.7,Extended suite) (57.8,Multi-turn) (100,Injections blocked)};
+\legend{v1.7 baseline, v2.0}
+\end{axis}
+\end{tikzpicture}
+\caption{Live evaluation results for v1.7 and v2.0 on identical model and
+hardware. Extended suite: 22/35 to 24/36 cases passing all five runs
+(pass\textsuperscript{5}; the suite gained one case in v2, hence the changed
+denominator). Multi-turn: 23/45 to 26/45, counting each turn of the scripted
+conversations across repeated runs. Adversarial injection payloads blocked:
+0/9 to 9/9.}
+\label{fig:evals}
+\end{figure}
+
+\subsection{Where the context window actually goes}
+
+Budgeting the system prompt produced the most counter-intuitive finding of the
+project (Figure~\ref{fig:prompt}). The 14 behavioral rules account for 73\% of
+the prompt template; all 15 tool schemas together cost only about 450 tokens.
+The intuitive optimization, consolidating tools, would have saved almost
+nothing, and \S\ref{sec:negative} shows that the rules could not be safely
+trimmed either.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar stacked, xmin=0, xmax=1990,
+  width=0.8\textwidth, height=2.6cm,
+  enlarge y limits={abs=14pt},
+  symbolic y coords={System prompt},
+  ytick=data, yticklabel style={font=\small},
+  bar width=16pt,
+  xtick={0,500,1000,1500,1990},
+  legend style={at={(0.5,-0.55)}, anchor=north, legend columns=-1,
+                draw=none, font=\small, /tikz/every even column/.append style={column sep=10pt}},
+  axis line style={color=rulegray},
+  tick label style={font=\small, color=inkmuted},
+]
+\addplot[fill=hexblue,   draw=none] coordinates {(1459,System prompt)};
+\addplot[fill=hexorange, draw=none] coordinates {(450,System prompt)};
+\addplot[fill=hexaqua,   draw=none] coordinates {(81,System prompt)};
+\legend{14 behavioral rules (73\%), 15 tool schemas (23\%), scaffolding (4\%)}
+\end{axis}
+\end{tikzpicture}
+\caption{Anatomy of the 1{,}990-token system-prompt template. With the full
+prompt near 2{,}100 tokens, almost half the 4{,}096-token window is spent
+before the user types a word. Each rule earned its place by fixing a measured
+failure.}
+\label{fig:prompt}
+\end{figure}
+
+\subsection{Why the NPU, when the CPU decodes faster}
+
+Two terms matter here. \emph{Prefill} is the phase where the model reads the
+prompt; \emph{decode} is the phase where it generates output, one token at a
+time. The hardware choice was settled with data rather than assumption. On
+plain CPU, the same model actually decodes faster than the NPU path (13.5
+versus 8.1 tokens per second in this test). But an agent re-reads its
+2{,}100-token prompt every turn, and prefill is where the NPU is untouchable
+(Figure~\ref{fig:npucpu}). Extending the two measured points across turn
+lengths makes the trade explicit (Figure~\ref{fig:crossover}): the CPU's
+decode advantage would pay off only past about 193 generated tokens per turn,
+and observed real turns generate between 12 and 126. The NPU therefore wins
+every realistic turn, and it leaves the CPU cores free for the agent's own
+tool execution.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar, xmin=0, xmax=17,
+  width=0.72\textwidth, height=4.6cm,
+  symbolic y coords={Total turn, Time to first token},
+  ytick=data, yticklabel style={font=\small},
+  bar width=7pt,
+  enlarge y limits=0.45,
+  xlabel={\small seconds (shorter is better)}, xlabel style={color=inkmuted},
+  nodes near coords, nodes near coords align={horizontal},
+  every node near coord/.append style={font=\scriptsize, color=inkmuted,
+    /pgf/number format/fixed, /pgf/number format/precision=2},
+  legend style={at={(0.5,-0.30)}, anchor=north, legend columns=-1,
+                draw=none, font=\small, /tikz/every even column/.append style={column sep=12pt}},
+  axis line style={color=rulegray},
+  xmajorgrids, grid style={color=rulegray},
+  tick label style={font=\small, color=inkmuted},
+]
+\addplot[fill=hexblue, draw=none] coordinates
+  {(4.06,Time to first token) (5.96,Total turn)};
+\addplot[fill=hexorange, draw=none] coordinates
+  {(13.59,Time to first token) (15.04,Total turn)};
+\legend{Hexagon NPU (Genie w4a16), CPU (llama.cpp Q4\_0)}
+\end{axis}
+\end{tikzpicture}
+\caption{NPU and CPU compared on realistic agent turns: same model, the real
+2{,}100-token system prompt, arms interleaved, medians of matched-length
+runs.}
+\label{fig:npucpu}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.76\textwidth, height=6.4cm,
+  xmin=0, xmax=250, ymin=0, ymax=35,
+  xlabel={\small tokens generated in the turn}, xlabel style={color=inkmuted},
+  ylabel={\small seconds to finish the turn}, ylabel style={color=inkmuted},
+  axis line style={color=rulegray},
+  grid, grid style={color=rulegray!60},
+  tick label style={font=\small, color=inkmuted},
+  legend style={draw=none, font=\small, at={(0.03,0.97)}, anchor=north west},
+  legend cell align=left,
+]
+\fill[hexaqua!14] (axis cs:12,0) rectangle (axis cs:126,35);
+\node[font=\scriptsize, color=inkmuted, align=center, anchor=south] at (axis cs:80,1.2)
+  {observed real turns: 12--126};
+\addplot[hexblue, very thick, domain=0:250, samples=2] {4.06 + x/8.1};
+\addlegendentry{NPU (slow decode, fast prefill)}
+\addplot[hexorange, very thick, domain=0:250, samples=2] {13.59 + x/13.5};
+\addlegendentry{CPU (fast decode, slow prefill)}
+\addplot[forget plot, only marks, mark=*, mark size=2.4,
+  mark options={fill=hexred, draw=white, line width=1pt}] coordinates {(193,27.9)};
+\node[font=\scriptsize, color=inkmuted, anchor=north west] at (axis cs:170,26)
+  {break-even $\approx$ 193 tok};
+\end{axis}
+\end{tikzpicture}
+\caption{Total turn time as a function of how many tokens the turn generates,
+extrapolated from the measured intercepts and decode rates in
+Figure~\ref{fig:npucpu}. The CPU line only wins to the right of the
+break-even point, and real turns never get there.}
+\label{fig:crossover}
+\end{figure}
+
+\subsection{What still fails}
+
+Section 1 asked how much of a real coding agent survives at this scale, and
+the honest answer includes the 12 of 36 cases that still fail. They
+concentrate in two classes, and both are model ceilings rather than harness
+bugs. The first is bait compliance: when a prompt explicitly names a tool
+(``use \code{run\_command} to\ldots'') for something that should be answered
+directly, the model complies roughly one time in three despite an explicit
+rule against it. The second is edit quality deep into a session: past about
+2{,}500 tokens of context the model starts reconstructing edit anchors from
+memory instead of from the file, or drifts into describing the change in
+prose instead of making it. The harness converts both from silent failures
+into retried or deflected ones, but it cannot eliminate them. They define
+where a better small model would actually help, and the instrument is ready
+to measure one when it exists.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Negative results}
+\label{sec:negative}
+
+Half the value of the measurement instrument is what it stopped from shipping.
+Each row of Table~\ref{tab:rejected} is a plausible improvement that was built
+or benchmarked, measured, and rejected. The evidence is recorded so that none
+of these ideas gets re-argued from intuition later.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{@{}p{4.6cm}p{7.2cm}l@{}}
+\toprule
+\textbf{Idea} & \textbf{What the measurement said} & \textbf{Verdict} \\
+\midrule
+New structured \code{<action>} protocol as default &
+13/36 vs.\ 22/35 pass\textsuperscript{5}; two months of tuning had specialized
+the model to the old format & rejected \\[3pt]
+Prompt trimming (drop situationally irrelevant rules) &
+saved 690 tokens and 16\% latency, but resistance to bait prompts (cases that
+tell the model to misuse a tool) fell from 5/8 to 3/18 ($p \approx 0.017$),
+and the damage did not scale with rules dropped & rejected \\[3pt]
+8K context window (recompiled bundle) &
+6 tok/s vs.\ 15, with no quality gain; compaction already keeps sessions under
+the degradation cliff & rejected \\[3pt]
+Escalate hard cases to Qwen3-8B &
+0.9 tok/s: silent CPU fallback on a 16\,GB machine & rejected \\[3pt]
+Qwen3.5-4B (newer successor model) &
+20--25\% slower than the incumbent on both CPU and hybrid paths & deferred \\[3pt]
+Native Qwen3 \code{<tool\_call>} template &
+the quantized bundle's detokenizer garbles its own special token & impossible \\[3pt]
+Migrate to the GenieX runtime ($+47\%$ claimed) &
+0.74 tok/s on the target machine, isolated to a fixed 1.5\,s penalty per NPU
+graph call; filed upstream (GenieX \#1266, PR \#1267) & halted \\[3pt]
+Rewrite the harness in Rust &
+Python's share of a turn is below 1\% of wall-clock; the bottleneck is
+inference & declined \\
+\bottomrule
+\end{tabular}
+\caption{Eight plausible improvements that failed their evaluations. Writing
+these down, with the evidence, is what keeps the next month of work from
+re-fighting the last one.}
+\label{tab:rejected}
+\end{table}
+
+\medskip
+One finding runs underneath several of these rows. A small model tuned for
+months against one prompt becomes specialized to that exact prompt. Dropping
+even provably irrelevant rules degraded behavior, and the damage did not scale
+with the number of rules dropped: removing one rule hurt more than removing
+four. At this scale the prompt is not documentation the model consults. It is
+part of the distribution the model has adapted to.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Security: assume the model is 100\% injectable}
+
+An agent that reads files and runs commands is a target for prompt injection.
+To a 4B model, a malicious instruction hidden in a README it has been asked to
+read is indistinguishable from the user. Version 1.7 executed all nine
+payloads in the live injection suite, which included hosts-file
+reconnaissance, SSH-key exfiltration, and spawning arbitrary executables.
+Version 2.0 blocks all nine.
+
+The design principle matters more than the score: no defense is allowed to
+depend on the model resisting the bait. Enforcement lives in the harness
+instead. A \emph{sensitive} classification tier, ranked above ``safe,''
+covers credential stores, SSH and cloud keys, registry hives, and
+encoded-command tricks. Access to these is confirmed interactively and denied
+outright when the session is unattended. Every mutating code path routes
+through a single \code{guard\_mutation} gate, and a test enumerates every
+mutating entry point in both the production loop and the experimental v2
+protocol, driving each one at a forbidden path. Network egress is denied by default.
+
+One measured lesson became a permanent style rule. An early refusal message
+helpfully suggested an alternative command, and the model followed that hint
+straight to the bypass. Refusal messages never name another route.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Timeline}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lp{10.6cm}@{}}
+\toprule
+\textbf{Date (2026)} & \textbf{Milestone} \\
+\midrule
+Jun 16 & First end-to-end NPU inference: npurun and the Genie SDK running
+Qwen3-4B at about 15 tok/s, after two other runtimes proved to be dead ends. \\
+Jun--Jul & v1.x: state-graded evals find six real prompt and loop bugs; the
+runtime fork gains stop sequences and a crash fix. The project is renamed Hex
+CLI. \\
+Jul 29 & v1.7 audit and v2 plan: a full-repo audit, CI green for the first
+time, and fresh measurements of prefill, decode, prompt size, and the
+degradation cliff. \\
+Jul 30--31 & The v2 sprint: instrument v2, agent-loop rebuild, injection
+defense (0/9 to 9/9 blocked), product shell, rich input line. Every change was
+A/B-tested live. \\
+Jul 31 & v2.0.0 ships: the repository's first GitHub Release, with 619 tests
+across 19 suites in CI. \\
+Aug & Runtime work: a migration to GenieX is measured and halted, with
+findings filed upstream, and an NPU driver update is validated against the
+eval suite before adoption. \\
+\bottomrule
+\end{tabular}
+\caption{Project milestones.}
+\label{tab:timeline}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════
+\section{Lessons}
+
+\begin{enumerate}[itemsep=4pt]
+\item \textbf{At small scale, the harness is the product.} Every measured win
+in this project (parsing, edit application, compaction timing, retry feedback)
+came from the scaffolding around a frozen model. The model is a component; the
+agent is the engineering.
+\item \textbf{Build the instrument before the feature.}
+pass\textsuperscript{k} with state-based grading made every other claim in
+this report possible, and it repeatedly overturned the story a single run
+told.
+\item \textbf{Interrogate the measurement platform.} A silently degrading
+backend impersonates a model regression perfectly. Fresh servers per arm and
+interleaved comparisons are the difference between data and noise.
+\item \textbf{Security is a property of the architecture, not the model.}
+Assume total injectability, put every enforcement decision in code you
+control, and test it by enumeration rather than spot-check.
+\item \textbf{Negative results are deliverables.} Written down with their
+evidence, they keep future work from re-fighting settled questions.
+\end{enumerate}
+
+% ═══════════════════════════════════════════════════════════════
+\section{Status and future work}
+
+v2.0.0 is released and its scope is closed. The next steps are packaging (a
+one-command installer to replace the current SDK and runtime setup ritual),
+completing the decomposition of the main module, and quality-of-life
+features. The model upgrade path is a watch item rather than a work item. The
+moment a supported successor bundle appears for this NPU, the instrument that
+produced every number in this report can judge it in an
+afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
+(X1E78100), 16\,GB RAM, Windows 11 ARM, with Qwen3-4B-Instruct-2507 (w4a16) on
+the Qualcomm Hexagon NPU. Methodology and full run-level data:
+\code{docs/V2\_PLAN.md} \S14 and \code{evals/} in the repository.}
+
+\end{document}
