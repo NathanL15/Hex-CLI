@@ -66,6 +66,12 @@ VERSION = "2.0.0"
 # safe default full-reset behaviour.
 _CURRENT_SESSION_ID: str | None = None
 
+# An autopilot_system_prompt config override silently discards the tuned
+# prompt — the exact failure the generated example config exists to prevent.
+# The override stays supported (file-only, never via /config), but the first
+# turn that uses it warns loudly. Once per process is enough.
+_PROMPT_OVERRIDE_WARNED = False
+
 # ---------------------------------------------------------------------------
 # Presentation layer — re-exported from hexcli.ui for existing call sites.
 # ---------------------------------------------------------------------------
@@ -2800,6 +2806,14 @@ def run_autopilot(
     config_system = config.get("autopilot_system_prompt", "").strip()
     if config_system:
         system_prompt = config_system
+        global _PROMPT_OVERRIDE_WARNED
+        if not _PROMPT_OVERRIDE_WARNED:
+            _PROMPT_OVERRIDE_WARNED = True
+            cprint(
+                "  [warn] autopilot_system_prompt is set: the tuned system prompt "
+                "is replaced entirely. Remove the key to restore it.",
+                C.YELLOW,
+            )
 
     ws = workspace_snapshot(cwd)
     user_content = f"{ws}\nWorking directory: {cwd}\n\nRequest: {query.strip()}"
