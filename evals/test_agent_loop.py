@@ -1018,6 +1018,60 @@ def test_verify_syntax_skips_large_file() -> None:
 
 
 # ---------------------------------------------------------------------------
+# autopilot_system_prompt override — applied, and loudly warned about
+# ---------------------------------------------------------------------------
+
+def test_prompt_override_applies_and_warns_once() -> None:
+    """The file-only autopilot_system_prompt override must replace the prompt
+    AND print its warning exactly once per process — a silent replacement is
+    the historic example-config footgun."""
+    import contextlib
+    import io
+
+    cfg = {**_CFG, "autopilot_system_prompt": "You are a minimal test agent."}
+    seen_prompts: list[str] = []
+    real_call = sa.call_llm
+
+    def spying_call(config, messages, *args, **kwargs):
+        seen_prompts.append(messages[0]["content"])
+        return real_call(config, messages, *args, **kwargs)
+
+    sa._PROMPT_OVERRIDE_WARNED = False
+    try:
+        with unittest.mock.patch.object(sa, "call_llm", side_effect=spying_call):
+            out1 = io.StringIO()
+            with contextlib.redirect_stdout(out1):
+                sa.set_mock_responses(['{"action":"finish","message":"ok"}'])
+                sa.run_autopilot(cfg, [], "task one", _SHELL)
+            out2 = io.StringIO()
+            with contextlib.redirect_stdout(out2):
+                sa.set_mock_responses(['{"action":"finish","message":"ok"}'])
+                sa.run_autopilot(cfg, [], "task two", _SHELL)
+        assert seen_prompts, "call_llm was never reached"
+        assert all(p == "You are a minimal test agent." for p in seen_prompts), \
+            f"override did not replace the system prompt: {seen_prompts[0][:80]!r}"
+        assert "autopilot_system_prompt" in out1.getvalue(), \
+            "first overridden run must warn"
+        assert "autopilot_system_prompt" not in out2.getvalue(), \
+            "warning must fire once per process, not every run"
+    finally:
+        sa._PROMPT_OVERRIDE_WARNED = False
+
+
+def test_no_override_means_no_warning_and_tuned_prompt() -> None:
+    """Without the override key the tuned prompt is used and nothing warns."""
+    import contextlib
+    import io
+
+    sa._PROMPT_OVERRIDE_WARNED = False
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        sa.set_mock_responses(['{"action":"finish","message":"ok"}'])
+        sa.run_autopilot(_CFG, [], "plain task", _SHELL)
+    assert "autopilot_system_prompt" not in out.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1100,6 +1154,8 @@ TESTS = [
     test_verify_syntax_skips_large_file,
     test_append_file_leaves_no_tmp_file,
     test_run_command_tool_large_output_does_not_oom,
+    test_prompt_override_applies_and_warns_once,
+    test_no_override_means_no_warning_and_tuned_prompt,
 ]
 
 
