@@ -54,7 +54,12 @@ python -m hexcli.agent --doctor      # re-check the install any time
 python -m hexcli.agent               # autopilot REPL
 python -m hexcli.agent "what changed in this repo today?"
 python -m hexcli.agent --command-only "list the ten largest files here"
+git diff | python -m hexcli.agent "review this diff"      # piped input becomes context
+echo "summarize README.md" | python -m hexcli.agent       # ...or the task itself
 ```
+
+Piped stdin is capped with head+tail sampling (the window is 4K tokens) and
+is labelled as data, not instructions.
 
 **Config is optional.** The built-in defaults are complete; a `shellai.json`
 only needs the keys you want to override. `shellai.example.json` shows every

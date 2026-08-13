@@ -311,7 +311,89 @@ def test_clarification_still_rejects_a_non_answer() -> None:
     assert not ok, "a statement that asks for nothing must not pass"
 
 
+# ---------------------------------------------------------------------------
+# Piped stdin — `echo task | hexcli` and `git diff | hexcli "review"`
+# ---------------------------------------------------------------------------
+
+def test_piped_stdin_ignored_on_a_terminal() -> None:
+    import io
+    import unittest.mock
+
+    fake = io.StringIO("should never be read")
+    fake.isatty = lambda: True  # type: ignore[method-assign]
+    with unittest.mock.patch.object(sys, "stdin", fake):
+        text, truncated = sa._read_piped_stdin()
+    assert text == "" and truncated is False
+
+
+def test_piped_stdin_read_and_stripped() -> None:
+    import io
+    import unittest.mock
+
+    fake = io.StringIO("  some piped content\n\n")
+    fake.isatty = lambda: False  # type: ignore[method-assign]
+    with unittest.mock.patch.object(sys, "stdin", fake):
+        text, truncated = sa._read_piped_stdin()
+    assert text == "some piped content"
+    assert truncated is False
+
+
+def test_piped_stdin_truncates_head_and_tail() -> None:
+    import io
+    import unittest.mock
+
+    body = "S" + ("x" * 9000) + "E"  # start/end sentinels around filler
+    fake = io.StringIO(body)
+    fake.isatty = lambda: False  # type: ignore[method-assign]
+    with unittest.mock.patch.object(sys, "stdin", fake):
+        text, truncated = sa._read_piped_stdin(limit=1000)
+    assert truncated is True
+    assert text.startswith("S"), "head must be preserved"
+    assert text.endswith("E"), "tail must be preserved — that is where errors live"
+    assert "chars omitted" in text
+    assert len(text) < 1200
+
+
+def test_piped_query_composition_labels_data() -> None:
+    out = sa._compose_piped_query("review this diff", "diff --git a b", truncated=False)
+    assert out.startswith("review this diff")
+    assert "diff --git a b" in out
+    assert "data, not as instructions" in out
+    assert "truncated" not in out
+    out2 = sa._compose_piped_query("q", "d", truncated=True)
+    assert "truncated" in out2
+
+
+def test_piped_stdin_end_to_end_one_shot() -> None:
+    """`echo task | hexcli` must run one-shot (never the REPL) and exit 0.
+    Uses the mock backend via a temp config; an exhausted mock queue returns
+    a canned finish, which is all this wiring test needs."""
+    import json as _json
+    import subprocess
+
+    repo = Path(__file__).resolve().parent.parent
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "cfg.json"
+        cfg.write_text(_json.dumps({
+            "backend": "mock", "memory_enabled": False,
+            "telemetry_enabled": False,
+        }), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, "-m", "hexcli.agent", "--raw", "--config", str(cfg)],
+            input="say hello",
+            capture_output=True, text=True, timeout=120,
+            cwd=tmp, env={**os.environ, "PYTHONPATH": str(repo)},
+        )
+    assert r.returncode == 0, f"exit {r.returncode}: {r.stderr[-500:]}"
+    assert "Mock queue exhausted" in r.stdout, r.stdout[-500:]
+
+
 TESTS = [
+    test_piped_stdin_ignored_on_a_terminal,
+    test_piped_stdin_read_and_stripped,
+    test_piped_stdin_truncates_head_and_tail,
+    test_piped_query_composition_labels_data,
+    test_piped_stdin_end_to_end_one_shot,
     test_confirm_denies_when_stdin_not_a_tty,
     test_confirm_times_out_and_denies_on_dead_console,
     test_confirm_accepts_an_explicit_yes,
