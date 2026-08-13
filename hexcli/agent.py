@@ -30,6 +30,9 @@ from typing import Any
 from uuid import uuid4
 
 from hexcli import (
+    commands as custom_commands,
+)
+from hexcli import (
     diffview,
     distribution,
     escalate,
@@ -3449,10 +3452,11 @@ REPL_COMMANDS = (
 )
 
 
-def _closest_command(word: str) -> str | None:
+def _closest_command(word: str, extra: tuple[str, ...] = ()) -> str | None:
     """Nearest known slash command, for typo hints."""
     import difflib
-    matches = difflib.get_close_matches(word.lower(), REPL_COMMANDS, n=1, cutoff=0.6)
+    known = list(REPL_COMMANDS) + list(extra)
+    matches = difflib.get_close_matches(word.lower(), known, n=1, cutoff=0.6)
     return matches[0] if matches else None
 
 
@@ -3468,8 +3472,11 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
 
     # Rich line editing where the terminal supports it; bare input() otherwise
     # (piped stdin, CI, --raw) so nothing depends on it being available.
+    # Custom commands are discovered once here for Tab completion; dispatch
+    # below re-reads the file each use, so edits apply without a restart.
+    custom_names = tuple(sorted(custom_commands.discover()))
     read_line = lineedit.make_reader(
-        config, REPL_COMMANDS, lambda: sorted(_CONFIG_SETTABLE)
+        config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(_CONFIG_SETTABLE)
     ) or (lambda p: input(p))
 
     while True:
@@ -3747,12 +3754,25 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             cprint(f"  Loaded checkpoint '{cp_name}' ({n} messages).", C.BCYAN)
             continue
 
+        # Custom commands — user-authored prompt templates. Consulted only
+        # after every built-in above has declined, so a custom file can
+        # never shadow a real command. The expanded template falls through
+        # to mode dispatch as an ordinary query.
+        ran_custom = False
+        if query.startswith("/"):
+            cmd_word = query.split()[0]
+            template = custom_commands.load(cmd_word)
+            if template is not None:
+                args_text = query[len(cmd_word):].strip()
+                query = custom_commands.expand(template, args_text)
+                ran_custom = True
+
         # Unknown slash command: catch typos HERE. Falling through sends
         # "/hlep" to the model as a task — a 10+ second turn on a 4B that
         # may then start running tools to satisfy a typo.
-        if query.startswith("/"):
+        if query.startswith("/") and not ran_custom:
             cmd_word = query.split()[0]
-            suggestion = _closest_command(cmd_word)
+            suggestion = _closest_command(cmd_word, extra=custom_names)
             hint = f" Did you mean {suggestion}?" if suggestion else ""
             cprint(f"  Unknown command {cmd_word}.{hint} Type /help for the list.", C.YELLOW)
             continue

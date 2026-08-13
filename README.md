@@ -137,6 +137,19 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | `/doctor` | diagnose the installation |
 | `Esc` | cancel the running step (kills the whole process tree) |
 
+**Custom commands** — drop a `.md` file in `.shellai/commands/` (project) or
+`~/.shellai/commands/` (global) and `/<filename>` runs its content as a
+prompt. `$ARGUMENTS` in the file is replaced with whatever follows the
+command; without the placeholder, arguments are appended. Project files win
+name collisions with global ones; built-ins always win over both. Files are
+re-read on every use, so edits apply immediately (Tab completion picks up
+new files on the next launch).
+
+```powershell
+# .shellai/commands/review.md:  "Review $ARGUMENTS for bugs and style issues."
+/review src/parser.py
+```
+
 ### The input line
 
 Persistent history, completion, and real editing — no dependency, just

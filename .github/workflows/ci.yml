@@ -86,3 +86,6 @@ jobs:
 
       - name: Unit tests — installer + launcher discovery
         run: python evals/test_installer.py
+
+      - name: Unit tests — custom slash commands
+        run: python evals/test_commands.py
