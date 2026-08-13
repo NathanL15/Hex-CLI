@@ -83,3 +83,6 @@ jobs:
 
       - name: Unit tests — v1.6 suite
         run: python evals/test_v16.py
+
+      - name: Unit tests — installer + launcher discovery
+        run: python evals/test_installer.py

@@ -37,15 +37,24 @@ test file prints 3.5 for [1, 2, 5, 6].
 ## Quick start
 
 ```powershell
-python -m hexcli.agent --doctor      # check your install first
+git clone https://github.com/NathanL15/Hex-CLI
+cd Hex-CLI
+.\install.ps1        # checks the machine, fetches npurun + the model, runs --doctor
+```
+
+The installer walks every setup step and skips whatever is already done, so
+re-run it after fixing anything it flags. The one step it cannot do for you
+is the QAIRT SDK download (Qualcomm does not allow redistribution) — it
+prints exact instructions and picks the SDK up on the next run.
+
+Once installed:
+
+```powershell
+python -m hexcli.agent --doctor      # re-check the install any time
 python -m hexcli.agent               # autopilot REPL
 python -m hexcli.agent "what changed in this repo today?"
 python -m hexcli.agent --command-only "list the ten largest files here"
 ```
-
-`--doctor` tells you exactly what is missing and the command that fixes it.
-Start there — several dependencies (the QAIRT SDK, model bundles, the
-embedding model) cannot be bundled and must be fetched once.
 
 **Config is optional.** The built-in defaults are complete; a `shellai.json`
 only needs the keys you want to override. `shellai.example.json` shows every
@@ -61,7 +70,9 @@ function hex { python -m hexcli.agent @Args }
 
 ## Setup
 
-Four things, once. `--doctor` verifies each one.
+`install.ps1` automates all of this. The manual steps below are the
+reference for what it does (and for setting up without it). Four things,
+once; `--doctor` verifies each one.
 
 **1. Python deps** — `pip install numpy onnxruntime` (`ruff` is optional and
 enables the `lint_code` tool).
@@ -76,9 +87,12 @@ setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.47.0\lib\hexagon-v73\unsigne
 
 Without `ADSP_LIBRARY_PATH`, npurun dies with `STATUS_STACK_BUFFER_OVERRUN`.
 
-**3. npurun + a model** — this repo vendors a **fork** of npurun carrying fixes
-the tooling depends on (usage reporting, token-precise `max_tokens`, mid-stream
-stop sequences, a UTF-8 crash fix). Build from `npurun/` here, not upstream:
+**3. npurun + a model** — a prebuilt ARM64 binary of our npurun fork ships as
+`npurun-arm64.exe` on the [GitHub Releases](https://github.com/NathanL15/Hex-CLI/releases)
+page (MIT/Apache-2.0), and `install.ps1` downloads it automatically. To build
+from source instead: the fork carries fixes the tooling depends on (usage
+reporting, token-precise `max_tokens`, mid-stream stop sequences, a UTF-8
+crash fix), so build from `npurun/` here, not upstream:
 
 ```powershell
 cd npurun
