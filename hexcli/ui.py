@@ -175,6 +175,12 @@ HELP_TEXT = textwrap.dedent("""
       /tools                        list agent tools
       /exit  /quit                  exit
 
+    CUSTOM COMMANDS:
+      Drop a .md file in .shellai/commands/ (project) or ~/.shellai/commands/
+      (global) — /<filename> runs its content as a prompt. $ARGUMENTS in the
+      file is replaced with whatever you type after the command; without the
+      placeholder, arguments are appended. Built-ins always win name clashes.
+
     KEYS:
       Up / Down                     history (prefix-searched once you type)
       Tab                           complete commands, config keys, file paths
