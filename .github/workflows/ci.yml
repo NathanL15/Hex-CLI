@@ -89,3 +89,6 @@ jobs:
 
       - name: Unit tests — custom slash commands
         run: python evals/test_commands.py
+
+      - name: Unit tests — /setup wizard
+        run: python evals/test_setup_wizard.py

@@ -133,7 +133,8 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | `/context` · `/compact` | context budget · compress history now |
 | `/save <name>` · `/load <name>` | session checkpoints |
 | `/memory [status\|list\|search\|clear\|prune]` | inspect the memory store |
-| `/config [key [value]]` | view or set config at runtime |
+| `/config [key [value]]` | view or set config at runtime (session only) |
+| `/setup` | interactive config wizard — saves choices to the config file |
 | `/tools` · `/model <name>` · `/mode <mode>` · `/cwd [path]` | |
 | `/doctor` | diagnose the installation |
 | `Esc` | cancel the running step (kills the whole process tree) |
