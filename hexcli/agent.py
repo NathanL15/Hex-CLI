@@ -610,6 +610,8 @@ save_history_store = sessions.save_history_store
 load_history_store = sessions.load_history_store
 upsert_session = sessions.upsert_session
 sync_session_store = sessions.sync_session_store
+# Aliased because run_repl's local `sessions` list shadows the module name.
+sessions_search = sessions.search_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -3448,7 +3450,7 @@ REPL_COMMANDS = (
     "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/open",
     "/new", "/compact", "/context", "/config", "/memory", "/mode", "/model",
     "/models", "/profile", "/checkpoints", "/tools", "/undo", "/save",
-    "/load", "/stats", "/diff", "/doctor", "/cwd",
+    "/load", "/stats", "/diff", "/doctor", "/cwd", "/search",
 )
 
 
@@ -3516,6 +3518,20 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             sync_session_store(sessions, current_session)
             sessions = load_history_store(config)
             render_history_list(sessions, str(current_session.get("id", "")))
+            continue
+
+        # ── search saved sessions ─────────────────────────────────────────
+        if norm == "/search" or norm.startswith("/search "):
+            parts = query.split(None, 1)
+            term = parts[1].strip() if len(parts) > 1 else ""
+            if not term:
+                cprint("  Usage: /search <text> — searches titles and messages "
+                       "of saved sessions.", C.DIM)
+                continue
+            sync_session_store(sessions, current_session)
+            sessions = load_history_store(config)
+            hits = sessions_search(sessions, term)
+            ui.render_search_results(term, hits)
             continue
 
         # ── diff: what changed in the last turn ───────────────────────────

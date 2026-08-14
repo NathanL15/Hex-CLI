@@ -155,6 +155,53 @@ def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
     return filtered
 
 
+def search_sessions(
+    sessions: list[dict[str, Any]],
+    term: str,
+    max_snippets: int = 2,
+    context: int = 44,
+) -> list[dict[str, Any]]:
+    """Case-insensitive substring search over titles and message content.
+
+    Returns hits in the same order as `sessions`, each carrying the 1-based
+    index into that list — the SAME number /history shows and /resume takes,
+    so a search result is directly resumable. Snippets come pre-split as
+    (role, prefix, match, suffix) so the renderer can highlight the match
+    without re-finding it.
+    """
+    term_l = term.lower()
+    if not term_l:
+        return []
+    hits: list[dict[str, Any]] = []
+    for idx, session in enumerate(sessions, start=1):
+        raw_matches: list[tuple[str, str, int]] = []
+        title = str(session.get("title", ""))
+        pos = title.lower().find(term_l)
+        if pos >= 0:
+            raw_matches.append(("title", title, pos))
+        for msg in session.get("messages", []):
+            if len(raw_matches) >= max_snippets:
+                break
+            if not isinstance(msg, dict):
+                continue
+            content = str(msg.get("content", ""))
+            pos = content.lower().find(term_l)
+            if pos >= 0:
+                raw_matches.append((str(msg.get("role", "?")), content, pos))
+        if not raw_matches:
+            continue
+        snippets: list[tuple[str, str, str, str]] = []
+        for role, text, pos in raw_matches[:max_snippets]:
+            start = max(0, pos - context)
+            end = min(len(text), pos + len(term) + context)
+            prefix = ("…" if start > 0 else "") + text[start:pos].replace("\n", " ")
+            match = text[pos:pos + len(term)].replace("\n", " ")
+            suffix = text[pos + len(term):end].replace("\n", " ") + ("…" if end < len(text) else "")
+            snippets.append((role, prefix, match, suffix))
+        hits.append({"index": idx, "session": session, "snippets": snippets})
+    return hits
+
+
 def upsert_session(sessions: list[dict[str, Any]], session: dict[str, Any]) -> None:
     if not session_has_messages(session):
         return

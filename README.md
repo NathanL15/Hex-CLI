@@ -126,6 +126,7 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | `/help` | full command list |
 | `/new` · `/clear` | new session · clear the screen |
 | `/history` · `/resume <n>` | list · reopen a past session |
+| `/search <text>` | find past sessions by content — results carry `/resume` numbers |
 | `/diff` | what the agent changed this turn |
 | `/undo` | revert the last exchange, restoring any files it wrote |
 | `/stats` | turns, time, tokens, tool usage |

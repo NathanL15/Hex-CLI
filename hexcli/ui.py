@@ -171,6 +171,7 @@ HELP_TEXT = textwrap.dedent("""
       /checkpoints                  list all saved checkpoints
       /diff                         show what the agent changed this turn
       /stats                        turns, elapsed time, tokens, tool usage
+      /search <text>                find past sessions by content, then /resume
       /doctor                       diagnose the installation
       /tools                        list agent tools
       /exit  /quit                  exit
@@ -278,6 +279,27 @@ def render_history_list(sessions: list[dict[str, Any]], current_id: str) -> None
         compact_str = f" [c×{compact}]" if compact else ""
         color = C.BCYAN if s.get("id") == current_id else ""
         cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}{compact_str}", color)
+    print()
+
+
+def render_search_results(term: str, hits: list[dict[str, Any]]) -> None:
+    """Render /search hits: same numbering as /history, matches highlighted."""
+    if not hits:
+        print(f"\nNo sessions match {term!r}.\n")
+        return
+    print()
+    cprint(f"{len(hits)} session(s) match {term!r}:", C.BOLD)
+    for h in hits:
+        s = h["session"]
+        summary = truncate_summary(str(s.get("title", "New Chat")), 48)
+        modified = format_relative_time(str(s.get("modified_at", "")))
+        print()
+        cprint(f"  {h['index']:>2}. {summary}  ({modified})", C.BCYAN)
+        for role, prefix, match, suffix in h["snippets"]:
+            print(f"      {C.DIM}[{role}]{C.RESET} {prefix}"
+                  f"{C.BOLD}{C.BYELLOW}{match}{C.RESET}{suffix}")
+    print()
+    cprint("  Reopen one with /resume <n>.", C.DIM)
     print()
 
 

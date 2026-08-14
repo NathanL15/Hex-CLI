@@ -312,6 +312,100 @@ def test_clarification_still_rejects_a_non_answer() -> None:
 
 
 # ---------------------------------------------------------------------------
+# /search — full-text search over saved sessions
+# ---------------------------------------------------------------------------
+
+def _session(title: str, messages: list[tuple[str, str]], sid: str = "") -> dict[str, Any]:
+    return {
+        "id": sid or title,
+        "title": title,
+        "modified_at": "2026-08-14T00:00:00+00:00",
+        "messages": [{"role": r, "content": c} for r, c in messages],
+    }
+
+
+def test_search_finds_content_case_insensitively() -> None:
+    from hexcli import sessions as sess
+
+    store = [
+        _session("Fix parser", [("user", "the JSON parser drops batched actions")]),
+        _session("Other", [("user", "nothing relevant here")]),
+    ]
+    hits = sess.search_sessions(store, "json PARSER")
+    assert len(hits) == 1
+    assert hits[0]["index"] == 1, "index must match /history numbering"
+    role, prefix, match, suffix = hits[0]["snippets"][0]
+    assert match.lower() == "json parser"
+    assert role == "user"
+
+
+def test_search_indexes_survive_non_matching_sessions() -> None:
+    """The hit index is the /resume number, so it must count ALL sessions,
+    not just matching ones."""
+    from hexcli import sessions as sess
+
+    store = [
+        _session("A", [("user", "alpha")]),
+        _session("B", [("user", "beta")]),
+        _session("C", [("user", "beta again")]),
+    ]
+    hits = sess.search_sessions(store, "beta")
+    assert [h["index"] for h in hits] == [2, 3]
+
+
+def test_search_matches_titles_and_caps_snippets() -> None:
+    from hexcli import sessions as sess
+
+    msgs = [("user", f"needle number {i}") for i in range(10)]
+    store = [_session("Needle Hunt", msgs)]
+    hits = sess.search_sessions(store, "needle", max_snippets=2)
+    assert len(hits) == 1
+    assert len(hits[0]["snippets"]) == 2
+    assert hits[0]["snippets"][0][0] == "title"
+
+
+def test_search_snippet_windows_long_content() -> None:
+    from hexcli import sessions as sess
+
+    text = ("x" * 500) + "the target phrase" + ("y" * 500)
+    store = [_session("T", [("assistant", text)])]
+    hits = sess.search_sessions(store, "target")
+    role, prefix, match, suffix = hits[0]["snippets"][0]
+    assert match == "target"
+    assert prefix.startswith("…") and suffix.endswith("…")
+    assert len(prefix) + len(suffix) < 120, "snippet must stay one line, not dump the message"
+
+
+def test_search_empty_term_matches_nothing() -> None:
+    from hexcli import sessions as sess
+
+    assert sess.search_sessions([_session("A", [("user", "x")])], "") == []
+
+
+def test_search_render_smoke_and_repl_wiring() -> None:
+    """Renderer must not crash on hits or on none; /search must be handled by
+    run_repl before the custom-command lookup (covered generically by
+    test_commands.py once it is in REPL_COMMANDS — assert that here)."""
+    import contextlib
+    import inspect
+    import io
+
+    from hexcli import sessions as sess
+
+    store = [_session("Fix parser", [("user", "the JSON parser drops actions")])]
+    hits = sess.search_sessions(store, "parser")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        ui.render_search_results("parser", hits)
+        ui.render_search_results("zzz", [])
+    text = out.getvalue()
+    assert "Fix parser" in text and "/resume" in text
+    assert "No sessions match" in text
+    assert "/search" in sa.REPL_COMMANDS
+    assert '"/search' in inspect.getsource(sa.run_repl)
+
+
+# ---------------------------------------------------------------------------
 # Piped stdin — `echo task | hexcli` and `git diff | hexcli "review"`
 # ---------------------------------------------------------------------------
 
@@ -389,6 +483,12 @@ def test_piped_stdin_end_to_end_one_shot() -> None:
 
 
 TESTS = [
+    test_search_finds_content_case_insensitively,
+    test_search_indexes_survive_non_matching_sessions,
+    test_search_matches_titles_and_caps_snippets,
+    test_search_snippet_windows_long_content,
+    test_search_empty_term_matches_nothing,
+    test_search_render_smoke_and_repl_wiring,
     test_piped_stdin_ignored_on_a_terminal,
     test_piped_stdin_read_and_stripped,
     test_piped_stdin_truncates_head_and_tail,
