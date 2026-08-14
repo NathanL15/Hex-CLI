@@ -4,6 +4,73 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.1.0 — 2026-08-14
+
+v2.0 was a loop that worked and a product almost nobody could install. v2.1
+is the packaging-and-shell release: getting Hex CLI onto a second machine,
+and making it scriptable once there. The agent loop and the tuned prompt are
+untouched — the live smoke gate ran 10/10 before and after.
+
+| | v2.0 | v2.1 |
+|---|---|---|
+| Install | clone, build Rust, hand-set env vars, read the README | `.\install.ps1` |
+| Offline tests (CI) | 619 / 19 suites | **685 / 22 suites** |
+
+### Getting it installed
+
+- **`install.ps1` covers the whole ritual**: ARM64 and Python checks, pip
+  deps, QAIRT SDK discovery, npurun, the model pull, config scaffold, Start
+  Menu shortcut, and a closing `--doctor`. Every step skips work already
+  done, so the intended flow is: run it, fix the one thing it flags, run it
+  again. The SDK download stays manual — Qualcomm's licence forbids
+  redistribution — so the installer prints exact instructions and picks the
+  SDK up on the next run.
+- **A prebuilt `npurun-arm64.exe` ships as a release asset** (the vendored
+  fork; MIT/Apache-2.0), so a new machine no longer needs Rust, LLVM, and the
+  MSVC ARM64 toolchain just to get a working agent.
+- SDK discovery is shared logic in two languages, and **compares versions
+  numerically** — `QAIRT_2.9.0` sorts above `QAIRT_2.47.0` as text, which
+  would silently bind a stale SDK.
+
+### Product shell
+
+- **Piped stdin**: `git diff | hexcli "review this"` attaches the pipe as
+  data beneath the task; `echo "task" | hexcli` makes the pipe the task.
+  Bounded with head+tail sampling and a chunked read, so a huge pipe costs
+  O(cap) memory rather than buffering the file.
+- **Custom slash commands**: any `.md` in `.shellai/commands/` (project) or
+  `~/.shellai/commands/` (global) becomes `/<name>`, with `$ARGUMENTS`
+  substitution. Project files beat global ones; built-ins beat both, enforced
+  structurally rather than by convention.
+- **`/search <text>`** across saved sessions, with match highlighting. Hits
+  carry the same numbers `/history` shows and `/resume` takes.
+- **`/setup`**, an interactive wizard for the safety, network, and UI
+  settings. It persists (`/config` is session-only) and writes *only* the
+  keys it asked about, so a config file never fills with pinned defaults.
+
+### Fixes
+
+- **Consent prompts can no longer stall an unattended run.** A detached eval
+  once hung 7.5 hours on one confirmation: `isatty()` reports True for a
+  hidden console, and a daemon-thread timeout cannot fire because the Windows
+  console read holds the GIL. All consent prompts now poll for keys against a
+  deadline. Unanswered means denied.
+- Ctrl-C at a consent prompt **denies** rather than aborting the turn — the
+  deny path is what writes the audit log's `blocked` entry and preserves the
+  turn's undo snapshots.
+- That deadline is an **idle** timeout, so an attended user reading a
+  proposed command is never cut off mid-answer.
+- Bare `/save`, `/load`, and `/model` matched only their `<cmd> <arg>` forms
+  and fell through to the custom-command lookup.
+- `autopilot_system_prompt` replaced the tuned prompt silently; it now warns.
+- The installer reported failed `pip` installs as success (a `try/catch`
+  around a native command never fires), and died outright on Windows
+  PowerShell 5.1 when probing the default WindowsApps `python3` stub.
+- `/setup` answers were reverted by the launcher's config regeneration.
+- Two eval-grader loopholes: hallucinated completions ("I fixed it. You would
+  need to restart.") and bare give-ups were scoring as clarification
+  requests.
+
 ## 2.0.0 — 2026-07-31
 
 v2 was a harness rebuild around a fixed model, driven by a measurement

@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hexcli.agent as sa  # noqa: E402
 
+# Offline suites must never wait on a human at a consent prompt.
+sa.ui.CONFIRM_TIMEOUT_S = 0.05
 # ---------------------------------------------------------------------------
 # trim_tool_output — the tail is where the errors live
 # ---------------------------------------------------------------------------

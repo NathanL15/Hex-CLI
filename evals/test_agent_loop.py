@@ -24,6 +24,12 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
 
+# Consent prompts wait for a human; the offline suites are not one. Several
+# cases here deliberately leave a destructive-command prompt unanswered, and
+# without this they pay the full interactive budget each (which is generous
+# on purpose — see ui.confirm_or_deny) and the suite crawls.
+sa.ui.CONFIRM_TIMEOUT_S = 0.05
+
 # ---------------------------------------------------------------------------
 # Shared mock config — uses mock backend, no memory I/O, no destructive confirm
 # ---------------------------------------------------------------------------
