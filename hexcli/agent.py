@@ -3169,26 +3169,61 @@ def act_on_command(
 _PIPED_STDIN_CHAR_LIMIT = 6000
 
 
-def _read_piped_stdin(limit: int = _PIPED_STDIN_CHAR_LIMIT) -> tuple[str, bool]:
+def _read_piped_stdin(
+    limit: int = _PIPED_STDIN_CHAR_LIMIT,
+    max_total: int = 8_000_000,
+) -> tuple[str, bool]:
     """Return (piped_text, truncated). Empty text when stdin is a terminal.
 
     isatty() is trustworthy in this direction: a real pipe or redirected file
     always reports False. (The reverse — True proving a human is present —
     is the lie ui.confirm_or_deny exists to handle.)
+
+    Reads in chunks, keeping only the head and a rolling tail, so memory stays
+    O(limit) no matter what is upstream. A plain ``.read()`` buffered the whole
+    pipe just to throw all but 6 KB away: ``type huge.log | hexcli`` could
+    exhaust RAM on a 16 GB machine to build a prompt that never varies past the
+    cap. ``max_total`` additionally bounds a producer that streams forever.
     """
     try:
         if sys.stdin is None or sys.stdin.isatty():
             return "", False
-        data = sys.stdin.read()
     except (OSError, ValueError):
         return "", False
-    data = data.strip()
-    if len(data) <= limit:
-        return data, False
-    head = data[: limit // 2].rstrip()
-    tail = data[len(data) - limit // 2:].lstrip()
-    omitted = len(data) - len(head) - len(tail)
-    return f"{head}\n... [{omitted} chars omitted] ...\n{tail}", True
+
+    head_cap = limit // 2
+    tail_cap = limit - head_cap
+    head = ""
+    tail = ""
+    total = 0
+    try:
+        while True:
+            chunk = sys.stdin.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if len(head) < head_cap:
+                head += chunk[: head_cap - len(head)]
+            # Rolling tail: only ever the last tail_cap characters are retained.
+            tail = (tail + chunk)[-tail_cap:] if tail_cap else ""
+            if total > max_total:
+                # max_total always exceeds limit, so the truncated return
+                # below covers this; stop draining an endless producer.
+                break
+    except (OSError, ValueError):
+        return "", False
+
+    if total <= limit:
+        # Everything fit under the cap, but it is spread across two overlapping
+        # buffers. tail_cap >= head_cap, so a short input lives entirely in the
+        # rolling tail; otherwise splice on the part of the tail that head has
+        # not already covered.
+        data = tail if total <= tail_cap else head + tail[-(total - head_cap):]
+        return data.strip(), False
+
+    omitted = total - len(head) - len(tail)
+    body = f"{head.rstrip()}\n... [{omitted} chars omitted] ...\n{tail.lstrip()}"
+    return body.strip(), True
 
 
 def _compose_piped_query(query: str, piped: str, truncated: bool) -> str:
@@ -3684,8 +3719,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             continue
 
         # ── model ─────────────────────────────────────────────────────────
-        if norm.startswith("/model "):
-            new_model = query.strip()[len("/model "):].strip()
+        if norm == "/model" or norm.startswith("/model "):
+            new_model = query.strip()[len("/model "):].strip() if " " in norm else ""
             if new_model:
                 config["model"] = new_model
                 cprint(f"Model: {new_model}", C.BCYAN)
@@ -3738,8 +3773,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 print()
             continue
 
-        if norm.startswith("/save "):
-            cp_name = query.strip()[len("/save "):].strip()
+        if norm == "/save" or norm.startswith("/save "):
+            cp_name = query.strip()[len("/save "):].strip() if " " in norm else ""
             if not cp_name:
                 print("  Usage: /save <name>")
             else:
@@ -3750,8 +3785,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                     cprint(f"  Could not save checkpoint: {exc}", C.YELLOW)
             continue
 
-        if norm.startswith("/load "):
-            cp_name = query.strip()[len("/load "):].strip()
+        if norm == "/load" or norm.startswith("/load "):
+            cp_name = query.strip()[len("/load "):].strip() if " " in norm else ""
             if not cp_name:
                 print("  Usage: /load <name>")
                 continue
@@ -3784,7 +3819,12 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         ran_custom = False
         if query.startswith("/"):
             cmd_word = query.split()[0]
-            template = custom_commands.load(cmd_word)
+            # Belt-and-braces on top of dispatch order: a built-in NAME is
+            # never eligible for the custom lookup. Several built-ins only
+            # matched their "<cmd> <arg>" form, so a bare /save or /load fell
+            # through here and ran a user template as an agent task.
+            is_builtin = cmd_word.lower() in REPL_COMMANDS
+            template = None if is_builtin else custom_commands.load(cmd_word)
             if template is not None:
                 args_text = query[len(cmd_word):].strip()
                 query = custom_commands.expand(template, args_text)

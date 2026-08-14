@@ -128,6 +128,37 @@ def test_builtins_dispatch_before_custom_lookup() -> None:
             f"{builtin} is dispatched after the custom lookup — a custom file could shadow it"
 
 
+def test_every_builtin_name_claims_its_bare_form() -> None:
+    """Behavioural version of the ordering test above, which only checked
+    source position. /save, /load and /model matched ONLY their "<cmd> <arg>"
+    form, so typing the bare word fell through to the custom lookup and ran a
+    user template as an agent task. Every advertised built-in must handle its
+    bare word."""
+    import inspect
+    import re as _re
+
+    source = "\n".join(
+        line for line in inspect.getsource(sa.run_repl).splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    # Forms that constitute claiming the bare word:
+    #   norm == "/x"      |  norm in {"/x", ...}  |  guarded by REPL_COMMANDS
+    bare_claimed = set(_re.findall(r'norm == "(/[a-z]+)"', source))
+    bare_claimed |= set(_re.findall(r'"(/[a-z]+)"[,}]', source))
+    missing = [c for c in sa.REPL_COMMANDS if c not in bare_claimed]
+    assert not missing, f"built-ins that never match their bare form: {missing}"
+
+
+def test_builtin_names_are_never_looked_up_as_custom() -> None:
+    """The structural guard: even if a dispatch branch someday stops claiming
+    its bare form, a built-in NAME must not reach the custom lookup."""
+    import inspect
+
+    source = inspect.getsource(sa.run_repl)
+    assert "cmd_word.lower() in REPL_COMMANDS" in source, \
+        "the custom-command lookup must exclude built-in names"
+
+
 def test_closest_command_includes_custom_names() -> None:
     got = sa._closest_command("/reviwe", extra=("/review",))
     assert got == "/review"
@@ -166,6 +197,8 @@ TESTS = [
     test_expand_appends_when_no_placeholder,
     test_expand_empty_args,
     test_builtins_dispatch_before_custom_lookup,
+    test_every_builtin_name_claims_its_bare_form,
+    test_builtin_names_are_never_looked_up_as_custom,
     test_closest_command_includes_custom_names,
     test_closest_command_still_finds_builtins,
 ]
