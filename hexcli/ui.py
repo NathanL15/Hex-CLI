@@ -413,7 +413,7 @@ def repl_prompt(config: dict[str, Any], mode: str) -> str:
 # Consent prompts
 # ---------------------------------------------------------------------------
 
-CONFIRM_TIMEOUT_S: float = 30.0
+CONFIRM_TIMEOUT_S: float = 120.0
 
 
 def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
@@ -432,6 +432,16 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
     console read holds the GIL - the main thread never runs, so ``join(timeout)``
     is itself blocked (measured: a 3 s join took 60 s). So poll ``msvcrt`` for a
     keypress instead, the same way ``lineedit`` reads keys, and give up on time.
+
+    The timeout is an **idle** timeout, reset by every keypress. A fixed deadline
+    would also fire on an attended human who is mid-answer or reading the command
+    carefully, throwing away characters they had already typed; only *silence*
+    indicates the dead-console case this exists for.
+
+    **Ctrl-C denies, it does not raise.** These prompts guard destructive and
+    sensitive commands, where Ctrl-C is the most natural way to say "no". Raising
+    would abort the whole turn, skipping the audit-log entry that records the
+    refusal and discarding the turn's undo snapshots.
     """
     if timeout_s is None:  # resolved per call so the constant stays patchable
         timeout_s = CONFIRM_TIMEOUT_S
@@ -446,14 +456,21 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
             time.sleep(0.05)
             continue
         ch = msvcrt.getwch()
+        deadline = time.monotonic() + timeout_s  # a human is here; start the clock over
         if ch in ("\r", "\n"):
             print()
             return buf.strip().lower() in {"y", "yes"}
-        if ch == "\x03":  # Ctrl-C
+        if ch == "\x03":  # Ctrl-C — an emphatic no, not a crash
             print()
-            raise KeyboardInterrupt
+            cprint("   Cancelled — treating as no.", C.DIM)
+            return False
         if ch in ("\b", "\x7f"):
-            buf = buf[:-1]
+            if buf:
+                buf = buf[:-1]
+                # Erase the echo too, or the screen shows an answer that is not
+                # the one being evaluated.
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
             continue
         if ch == "\x00" or ch == "\xe0":  # function/arrow key: consume the scan code
             msvcrt.getwch()
@@ -462,7 +479,7 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
         sys.stdout.write(ch)
         sys.stdout.flush()
     print()
-    cprint(f"   No response after {timeout_s:.0f}s — denying.", C.DIM)
+    cprint(f"   No response for {timeout_s:.0f}s — denying.", C.DIM)
     return False
 
 

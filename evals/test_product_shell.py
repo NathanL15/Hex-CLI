@@ -254,6 +254,54 @@ def test_confirm_times_out_and_denies_on_dead_console() -> None:
     assert elapsed < 5.0, f"must give up near the timeout, took {elapsed:.1f}s"
 
 
+def test_confirm_ctrl_c_denies_without_raising() -> None:
+    """Ctrl-C at a destructive/sensitive prompt is the most natural way to say
+    no. Raising would abort the turn, skipping the audit-log 'blocked' entry
+    and discarding the turn's undo snapshots."""
+    keys = iter(["\x03"])
+    out = _with_console(
+        {"stdin": _FakeStdin(True), "kbhit": lambda: True, "getwch": lambda: next(keys)},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=5.0),
+    )
+    assert out is False, "Ctrl-C must deny, not raise"
+
+
+def test_confirm_timeout_is_idle_not_absolute() -> None:
+    """A user still typing must never be cut off mid-answer: every keypress
+    restarts the clock. With a 0.3s idle timeout, five keys 0.1s apart plus
+    Enter takes longer than the timeout in total and must still consent."""
+    import time as _t
+
+    keys = iter(["y", "e", "\b", "\b", "y", "\r"])
+
+    def slow_getwch() -> str:
+        _t.sleep(0.1)
+        return next(keys)
+
+    out = _with_console(
+        {"stdin": _FakeStdin(True), "kbhit": lambda: True, "getwch": slow_getwch},
+        lambda: ui.confirm_or_deny("Allow? ", timeout_s=0.3),
+    )
+    assert out is True, "typing must keep the prompt alive and 'y' must consent"
+
+
+def test_confirm_backspace_erases_its_echo() -> None:
+    """Buffer and screen must agree: typing 'n', backspace, 'y' consents, and
+    the terminal must not still be showing the 'n'."""
+    import contextlib
+    import io
+
+    keys = iter(["n", "\b", "y", "\r"])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = _with_console(
+            {"stdin": _FakeStdin(True), "kbhit": lambda: True, "getwch": lambda: next(keys)},
+            lambda: ui.confirm_or_deny("Allow? ", timeout_s=5.0),
+        )
+    assert out is True
+    assert "\b \b" in buf.getvalue(), "backspace must erase the echoed character"
+
+
 def test_confirm_accepts_an_explicit_yes() -> None:
     keys = iter(["y", "\r"])
     out = _with_console(
@@ -298,6 +346,38 @@ def test_clarification_accepts_imperative_requests() -> None:
     ):
         ok, why = verify(None, SimpleNamespace(final_message=msg, tool_calls=0, tools_used=[]))
         assert ok, f"should count as asking: {msg!r} ({why})"
+
+
+def test_clarification_rejects_hallucinated_completions() -> None:
+    """A zero-tool reply that CLAIMS the work is done must never grade as
+    asking for clarification, however it phrases the leftover request. The
+    widened markers made 'I fixed it. You would need to restart.' pass, which
+    would silently inflate the clarification rates the methodology leans on."""
+    from types import SimpleNamespace
+
+    from evals import checks
+
+    verify = checks.asks_clarification()
+    for msg in (
+        "I fixed the bug in the parser. You would need to restart the app to see it.",
+        "I've updated the config. Let me know if you need anything else.",
+        "The issue has been fixed — please provide feedback if it recurs.",
+    ):
+        ok, why = verify(None, SimpleNamespace(final_message=msg, tool_calls=0, tools_used=[]))
+        assert not ok, f"claimed completion must not pass as clarification: {msg!r}"
+
+
+def test_clarification_rejects_a_give_up_that_asks_nothing() -> None:
+    """'I would need admin rights, so nothing was done' is a give-up, not a
+    question — bare 'would need' used to pass it."""
+    from types import SimpleNamespace
+
+    from evals import checks
+
+    verify = checks.asks_clarification()
+    msg = "I would need administrator rights to do that, so nothing was done."
+    ok, _ = verify(None, SimpleNamespace(final_message=msg, tool_calls=0, tools_used=[]))
+    assert not ok, "a give-up that requests nothing from the user must not pass"
 
 
 def test_clarification_still_rejects_a_non_answer() -> None:
@@ -448,6 +528,61 @@ def test_piped_stdin_truncates_head_and_tail() -> None:
     assert len(text) < 1200
 
 
+def test_piped_stdin_is_bounded_for_huge_input() -> None:
+    """A multi-GB pipe must not be buffered whole just to keep 6 KB. Feed a
+    reader that would yield far more than memory allows if fully accumulated,
+    and assert only a bounded number of chunks is ever requested."""
+    import io
+    import unittest.mock
+
+    chunks_served = 0
+    total_available = 400  # chunks; a full read would be 400 * 64 KB
+
+    class _HugePipe(io.StringIO):
+        def isatty(self) -> bool:
+            return False
+
+        def read(self, size: int = -1) -> str:
+            nonlocal chunks_served
+            if chunks_served >= total_available:
+                return ""
+            chunks_served += 1
+            # Sentinels so head/tail preservation is checkable.
+            if chunks_served == 1:
+                return "HEAD" + "x" * (65536 - 4)
+            if chunks_served == total_available:
+                return "y" * (65536 - 4) + "TAIL"
+            return "z" * 65536
+
+    with unittest.mock.patch.object(sys, "stdin", _HugePipe()):
+        text, truncated = sa._read_piped_stdin(limit=6000, max_total=1_000_000)
+
+    assert truncated is True
+    assert len(text) < 6400, f"output must stay near the cap, got {len(text)}"
+    assert text.startswith("HEAD"), "head sentinel must survive"
+    assert chunks_served < total_available, \
+        "max_total must stop the read early, not drain the whole pipe"
+
+
+def test_piped_stdin_exact_roundtrip_under_cap() -> None:
+    """Inputs at and around the cap boundary must come back byte-exact — the
+    head/tail splice must not drop or duplicate characters."""
+    import io
+    import unittest.mock
+
+    for size in (1, 10, 2999, 3000, 3001, 5999, 6000):
+        body = "".join(chr(ord("a") + (i % 26)) for i in range(size))
+
+        class _Pipe(io.StringIO):
+            def isatty(self) -> bool:
+                return False
+
+        with unittest.mock.patch.object(sys, "stdin", _Pipe(body)):
+            text, truncated = sa._read_piped_stdin(limit=6000)
+        assert truncated is False, f"size {size} is under the cap"
+        assert text == body.strip(), f"round-trip corrupted at size {size}"
+
+
 def test_piped_query_composition_labels_data() -> None:
     out = sa._compose_piped_query("review this diff", "diff --git a b", truncated=False)
     assert out.startswith("review this diff")
@@ -483,6 +618,11 @@ def test_piped_stdin_end_to_end_one_shot() -> None:
 
 
 TESTS = [
+    test_confirm_ctrl_c_denies_without_raising,
+    test_confirm_timeout_is_idle_not_absolute,
+    test_confirm_backspace_erases_its_echo,
+    test_piped_stdin_is_bounded_for_huge_input,
+    test_piped_stdin_exact_roundtrip_under_cap,
     test_search_finds_content_case_insensitively,
     test_search_indexes_survive_non_matching_sessions,
     test_search_matches_titles_and_caps_snippets,
@@ -501,6 +641,8 @@ TESTS = [
     test_destructive_confirm_routes_through_the_guard,
     test_clarification_accepts_imperative_requests,
     test_clarification_still_rejects_a_non_answer,
+    test_clarification_rejects_hallucinated_completions,
+    test_clarification_rejects_a_give_up_that_asks_nothing,
     test_example_config_matches_defaults,
     test_example_config_excludes_prompt_overrides,
     test_example_config_has_no_unknown_keys,
