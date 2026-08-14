@@ -26,6 +26,9 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hexcli.agent as sa  # noqa: E402
+
+# Offline suites must never wait on a human at a consent prompt.
+sa.ui.CONFIRM_TIMEOUT_S = 0.05
 from evals import checks as ck  # noqa: E402
 from evals.runner import ToolCall, Trace  # noqa: E402
 from hexcli import safety, ui  # noqa: E402

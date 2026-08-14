@@ -33,7 +33,7 @@
 
 \title{\textbf{Hex CLI: A Measurement-First Coding Agent\\ on a 4-Billion-Parameter Model and a Laptop NPU}}
 \author{Nathan L.\\ \small\texttt{github.com/NathanL15/Hex-CLI}}
-\date{August 2026 \,\textperiodcentered\, v2.0.0}
+\date{August 2026 \,\textperiodcentered\, v2.1.0}
 
 \begin{document}
 \maketitle
@@ -525,9 +525,13 @@ defense (0/9 to 9/9 blocked), product shell, rich input line. Every change was
 A/B-tested live. \\
 Jul 31 & v2.0.0 ships: the repository's first GitHub Release, with 619 tests
 across 19 suites in CI. \\
-Aug & Runtime work: a migration to GenieX is measured and halted, with
+Aug 1--2 & Runtime work: a migration to GenieX is measured and halted, with
 findings filed upstream, and an NPU driver update is validated against the
 eval suite before adoption. \\
+Aug 14 & v2.1.0: a one-command installer (the setup ritual was the last
+barrier to anyone else running it), piped stdin, custom commands, session
+search, and a config wizard. An independent review of the release found ten
+defects in it, all fixed before shipping; 685 tests across 22 suites. \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}
@@ -559,12 +563,25 @@ evidence, they keep future work from re-fighting settled questions.
 % ═══════════════════════════════════════════════════════════════
 \section{Status and future work}
 
-v2.0.0 is released and its scope is closed. The next steps are packaging (a
-one-command installer to replace the current SDK and runtime setup ritual),
-completing the decomposition of the main module, and quality-of-life
-features. The model upgrade path is a watch item rather than a work item. The
-moment a supported successor bundle appears for this NPU, the instrument that
-produced every number in this report can judge it in an
+Every measurement in this report is from v2.0.0, whose scope is closed.
+v2.1.0 followed with the packaging work: a one-command installer replacing
+the SDK-and-runtime setup ritual, plus the shell features that make the agent
+scriptable. It deliberately did not touch the prompt or the loop, and the
+live gate confirmed as much before and after.
+
+Two things are worth recording about that release, because they are the same
+lesson this report argues for, applied to the harness's own code. An
+independent review of it surfaced ten defects the feature tests had missed —
+including a version comparison that sorted SDK directories as strings, which
+its own test certified because the chosen version numbers happened to sort
+identically either way. Tests pin the invariant you thought of, not the one
+that matters; the fix was to re-derive the invariants and mutation-test them.
+
+The next steps are completing the decomposition of the main module and
+attacking the per-turn prefill cost, which is now the largest remaining
+latency lever. The model upgrade path stays a watch item rather than a work
+item: the moment a supported successor bundle appears for this NPU, the
+instrument that produced every number here can judge it in an
 afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
 (X1E78100), 16\,GB RAM, Windows 11 ARM, with Qwen3-4B-Instruct-2507 (w4a16) on
 the Qualcomm Hexagon NPU. Methodology and full run-level data:

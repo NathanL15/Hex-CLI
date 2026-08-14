@@ -60,7 +60,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = sessions.HISTORY_PATH  # canonical definition: hexcli/sessions.py
 DEFAULT_TIMEOUT_SECONDS = 300
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop
