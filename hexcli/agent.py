@@ -44,6 +44,7 @@ from hexcli import (
     prompts,
     safety,
     sessions,
+    setup_wizard,
     telemetry,
     ui,
 )
@@ -3450,7 +3451,7 @@ REPL_COMMANDS = (
     "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/open",
     "/new", "/compact", "/context", "/config", "/memory", "/mode", "/model",
     "/models", "/profile", "/checkpoints", "/tools", "/undo", "/save",
-    "/load", "/stats", "/diff", "/doctor", "/cwd", "/search",
+    "/load", "/stats", "/diff", "/doctor", "/cwd", "/search", "/setup",
 )
 
 
@@ -3556,6 +3557,12 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         if norm == "/doctor":
             from . import doctor
             doctor.run_doctor(config, APP_DIR)
+            continue
+
+        # ── setup: interactive config wizard ──────────────────────────────
+        if norm == "/setup":
+            wizard_path = Path(str(config.get("_config_path", "")) or DEFAULT_CONFIG_PATH)
+            setup_wizard.run_wizard(config, wizard_path)
             continue
 
         # ── clear screen ──────────────────────────────────────────────────
@@ -3918,6 +3925,8 @@ def main() -> int:
     config_path = Path(args.config).expanduser().resolve()
     config = load_config(config_path)
     config = deep_merge(config, config_overrides)
+    # /setup needs to know which file the user-level config came from.
+    config["_config_path"] = str(config_path)
 
     # Advisory process lock — warns if another shellai instance is already running.
     lock_warning = lockfile.acquire(Path.cwd() / ".shellai")

@@ -172,6 +172,7 @@ HELP_TEXT = textwrap.dedent("""
       /diff                         show what the agent changed this turn
       /stats                        turns, elapsed time, tokens, tool usage
       /search <text>                find past sessions by content, then /resume
+      /setup                        interactive config wizard (saves to file)
       /doctor                       diagnose the installation
       /tools                        list agent tools
       /exit  /quit                  exit
