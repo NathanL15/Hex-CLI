@@ -113,6 +113,59 @@ def test_invalid_choice_reprompts() -> None:
         assert cfg["network_access"] == "allow"
 
 
+def test_project_config_shadowing_is_reported() -> None:
+    """A repo's .shellai/config.json deep-merges over the user config on every
+    load, so it silently wins against whatever /setup just saved. The wizard
+    must say so rather than promise settings that will not survive."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "shellai.json"
+        project = Path(tmp) / "proj" / ".shellai" / "config.json"
+        project.parent.mkdir(parents=True)
+        project.write_text(json.dumps({"network_access": "allow"}), encoding="utf-8")
+        cfg = _base_config()
+        cfg["network_access"] = "ask"
+        # answer 'deny' to the network question, Enter elsewhere
+        answers = ["", "", "", "deny", "", "", ""]
+        assert wiz.run_wizard(cfg, path, ask=_scripted(answers), project_cfg=project)
+        shadowed = wiz.overridden_by_project({"network_access": "deny"}, project)
+        assert shadowed == ["network_access"]
+
+
+def test_no_shadow_report_when_project_agrees_or_absent() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "nope.json"
+        assert wiz.overridden_by_project({"show_diffs": True}, missing) == []
+        agreeing = Path(tmp) / "agree.json"
+        agreeing.write_text(json.dumps({"show_diffs": True}), encoding="utf-8")
+        assert wiz.overridden_by_project({"show_diffs": True}, agreeing) == []
+
+
+def test_launcher_config_rewrite_preserves_user_keys() -> None:
+    """launcher._write_npurun_config regenerates the very file /setup writes
+    to (after any model re-pull). It must merge, not clobber, or the wizard's
+    answers vanish silently."""
+    import launcher
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "shellai_npurun.json"
+        cfg_path.write_text(json.dumps({
+            "network_access": "deny",          # a /setup answer
+            "autopilot_confirm_destructive": False,
+            "model": "qwen3-4b",
+        }), encoding="utf-8")
+        saved = launcher.NPURUN_CONFIG
+        try:
+            launcher.NPURUN_CONFIG = cfg_path
+            launcher._write_npurun_config()
+        finally:
+            launcher.NPURUN_CONFIG = saved
+        after = json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert after["network_access"] == "deny", "wizard answer was clobbered"
+        assert after["autopilot_confirm_destructive"] is False
+        assert after["openai_compatible"]["base_url"].startswith("http://127.0.0.1:"), \
+            "connection keys must still be refreshed"
+
+
 def test_every_question_key_is_a_real_config_key() -> None:
     """The wizard must never write a key the config system doesn't know —
     an unknown key here would be invisible to /config and the example."""
@@ -152,6 +205,9 @@ TESTS = [
     test_declining_the_save_writes_nothing,
     test_ctrl_c_mid_wizard_writes_nothing,
     test_invalid_choice_reprompts,
+    test_project_config_shadowing_is_reported,
+    test_no_shadow_report_when_project_agrees_or_absent,
+    test_launcher_config_rewrite_preserves_user_keys,
     test_every_question_key_is_a_real_config_key,
     test_setup_is_a_repl_builtin,
 ]

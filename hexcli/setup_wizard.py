@@ -76,10 +76,29 @@ def write_config_keys(path: Path, chosen: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def overridden_by_project(chosen: dict[str, Any], project_cfg: Path) -> list[str]:
+    """Keys the wizard just saved that a project .shellai/config.json will
+    still override on every load (it deep-merges on top of the user config).
+
+    Without this, the wizard's closing "applies on every launch" line is a
+    lie in any repo that ships its own config.
+    """
+    if not project_cfg.exists():
+        return []
+    try:
+        data = json.loads(project_cfg.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [k for k in chosen if k in data and data[k] != chosen[k]]
+
+
 def run_wizard(
     config: dict[str, Any],
     config_path: Path,
     ask: Callable[[str], str] = input,
+    project_cfg: Path | None = None,
 ) -> bool:
     """Run the wizard. Returns True if the config file was written.
 
@@ -114,5 +133,11 @@ def run_wizard(
         return False
     write_config_keys(config_path, chosen)
     config.update(chosen)
-    cprint(f"  Saved. These settings apply now and on every launch. ({config_path})", C.BCYAN)
+    cprint(f"  Saved to {config_path}. Applied to this session.", C.BCYAN)
+    shadowed = overridden_by_project(
+        chosen, project_cfg if project_cfg is not None else Path.cwd() / ".shellai" / "config.json"
+    )
+    if shadowed:
+        cprint(f"  Note: this project's .shellai/config.json overrides "
+               f"{', '.join(sorted(shadowed))} on every load — edit it there too.", C.YELLOW)
     return True
