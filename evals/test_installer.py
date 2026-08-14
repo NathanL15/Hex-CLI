@@ -157,6 +157,35 @@ def test_find_qairt_picks_newest_valid_install() -> None:
         assert found == stack / "QAIRT_2.47.0", f"got {found}"
 
 
+def test_find_qairt_compares_versions_numerically() -> None:
+    """Version numbers that DIFFER under string vs numeric ordering. The
+    original test used 2.40/2.47/2.50, which happen to sort correctly as
+    strings, so it certified a lexicographic comparator: '2.9.0' > '2.47.0'
+    as text, which would export a stale SDK and cause exactly the DLL /
+    stack-overrun failures this discovery exists to prevent."""
+    with tempfile.TemporaryDirectory() as tmp:
+        stack = Path(tmp) / "stack"
+        _make_qairt(stack / "QAIRT_2.9.0")
+        _make_qairt(stack / "QAIRT_2.47.0")
+        found = launcher.find_qairt_root(env_value="", stack_dir=stack)
+        assert found == stack / "QAIRT_2.47.0", \
+            f"2.47.0 must beat 2.9.0 (string sort picks 2.9.0); got {found}"
+
+        # And a future three-digit minor must beat both.
+        _make_qairt(stack / "QAIRT_2.100.0")
+        found = launcher.find_qairt_root(env_value="", stack_dir=stack)
+        assert found == stack / "QAIRT_2.100.0", f"got {found}"
+
+
+def test_installer_also_sorts_qairt_numerically() -> None:
+    """install.ps1 does the same discovery in PowerShell; both sides had the
+    identical Sort-Object Name bug, so pin the fix in both languages."""
+    ps_text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "Sort-Object Name -Descending" not in ps_text, \
+        "install.ps1 is back to lexicographic SDK ordering"
+    assert "Get-QairtVersionKey" in ps_text
+
+
 def test_find_qairt_none_when_nothing_valid() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         stack = Path(tmp) / "stack"
@@ -192,6 +221,8 @@ TESTS = [
     test_find_qairt_env_override_wins_when_valid,
     test_find_qairt_invalid_env_falls_through_to_stack,
     test_find_qairt_picks_newest_valid_install,
+    test_find_qairt_compares_versions_numerically,
+    test_installer_also_sorts_qairt_numerically,
     test_find_qairt_none_when_nothing_valid,
 ]
 

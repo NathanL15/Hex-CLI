@@ -83,7 +83,12 @@ $pythonExe = $null
 foreach ($candidate in @("py", "python3", "python")) {
     $found = Get-Command $candidate -ErrorAction SilentlyContinue
     if ($found) {
-        $verStr = & $candidate --version 2>&1
+        # Windows PowerShell 5.1 turns native stderr under `2>&1` into a
+        # TERMINATING RemoteException while $ErrorActionPreference is Stop.
+        # The default WindowsApps python3.exe stub writes "Python was not
+        # found..." to stderr, so probing it killed the whole installer
+        # instead of falling through to the next candidate.
+        $verStr = try { & $candidate --version 2>&1 | Out-String } catch { "" }
         if ($verStr -match "Python (\d+)\.(\d+)") {
             $major = [int]$Matches[1]; $minor = [int]$Matches[2]
             if ($major -eq 3 -and $minor -ge 11) {
@@ -103,12 +108,15 @@ if (-not $pythonExe) {
 # 3. pip dependencies (optional extras — the core agent is stdlib-only)
 # ---------------------------------------------------------------------------
 Write-Step "Installing optional Python dependencies (numpy, onnxruntime) ..."
-try {
-    & $pythonExe -m pip install --quiet numpy onnxruntime
+# A native command's nonzero exit does NOT throw, even under
+# $ErrorActionPreference = "Stop", so a try/catch here is dead code that
+# reports a failed pip install as success. Check $LASTEXITCODE.
+& $pythonExe -m pip install --quiet numpy onnxruntime
+if ($LASTEXITCODE -eq 0) {
     Write-Ok "Dependencies installed."
-} catch {
-    Write-Warn "pip install failed: $_"
-    Write-Warn "The agent still runs without them (memory search is disabled)."
+} else {
+    Write-Warn "pip install failed (exit $LASTEXITCODE)."
+    Write-Warn "The agent still runs without them (semantic memory stays disabled)."
 }
 
 # ---------------------------------------------------------------------------
@@ -124,14 +132,31 @@ function Test-QairtRoot {
            (Test-Path (Join-Path $Root "lib\hexagon-v73\unsigned"))
 }
 
+function Get-QairtVersionKey {
+    # Name sort is wrong and quietly so: "QAIRT_2.9.0" sorts ABOVE
+    # "QAIRT_2.47.0", which would hand the launcher a stale SDK and cause the
+    # very DLL/stack-overrun failures this discovery exists to prevent.
+    param([string]$Name)
+    $digits = ($Name -replace "^QAIRT_", "") -split "\." | ForEach-Object {
+        $num = ($_ -replace "\D", "")
+        if ($num) { [int]$num } else { 0 }
+    }
+    while ($digits.Count -lt 4) { $digits += 0 }
+    return [version]::new($digits[0], $digits[1], $digits[2], $digits[3])
+}
+
 $qairtRoot = $null
 if ($env:QNN_SDK_ROOT -and (Test-QairtRoot $env:QNN_SDK_ROOT)) {
     $qairtRoot = $env:QNN_SDK_ROOT
 } else {
+    if ($env:QNN_SDK_ROOT) {
+        Write-Warn "QNN_SDK_ROOT is set to '$env:QNN_SDK_ROOT' but lacks the expected"
+        Write-Warn "lib/bin aarch64-windows-msvc and lib/hexagon-v73/unsigned layout - ignoring it."
+    }
     $stack = "C:\Qualcomm\AIStack"
     if (Test-Path $stack) {
         $cands = Get-ChildItem $stack -Directory -Filter "QAIRT_*" -ErrorAction SilentlyContinue |
-                 Sort-Object Name -Descending
+                 Sort-Object { Get-QairtVersionKey $_.Name } -Descending
         foreach ($c in $cands) {
             if (Test-QairtRoot $c.FullName) { $qairtRoot = $c.FullName; break }
         }
@@ -287,6 +312,11 @@ Write-Step "Running hexcli --doctor ..."
 Push-Location $InstallDir
 try {
     & $pythonExe -m hexcli.agent --doctor
+    # Same dead-catch trap as the pip step: a nonzero native exit does not
+    # throw. --doctor exits 1 when a required check fails.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Doctor reported unmet requirements (exit $LASTEXITCODE) - see above."
+    }
 } catch {
     Write-Warn "Doctor run failed: $_"
 } finally {

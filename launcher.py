@@ -63,24 +63,43 @@ def _qairt_valid(root: Path) -> bool:
     )
 
 
+def _qairt_version_key(path: Path) -> tuple[int, ...]:
+    """Numeric sort key for QAIRT_<a>.<b>.<c> directory names.
+
+    String sort is wrong and quietly so: 'QAIRT_2.9.0' > 'QAIRT_2.47.0'
+    lexicographically, which would export a stale SDK and produce exactly the
+    DLL/stack-overrun failures this discovery code exists to prevent.
+    """
+    parts = path.name[len("QAIRT_"):].split(".")
+    key: list[int] = []
+    for part in parts:
+        digits = "".join(c for c in part if c.isdigit())
+        key.append(int(digits) if digits else 0)
+    return tuple(key)
+
+
 def find_qairt_root(env_value: str | None = None, stack_dir: Path | None = None) -> Path | None:
     """QNN_SDK_ROOT env wins if valid; otherwise the newest valid
-    C:\\Qualcomm\\AIStack\\QAIRT_* install."""
+    C:\\Qualcomm\\AIStack\\QAIRT_* install (compared numerically)."""
     env_value = env_value if env_value is not None else os.environ.get("QNN_SDK_ROOT", "")
     if env_value:
         root = Path(env_value)
         if _qairt_valid(root):
             return root
+        # An explicitly-set root that fails validation is a user intention we
+        # are about to ignore; say so, or the resulting failure gets blamed on
+        # the SDK we silently substituted.
+        warn(f"QNN_SDK_ROOT={env_value} is missing the expected "
+             f"lib/bin/aarch64-windows-msvc and lib/hexagon-v73/unsigned "
+             f"layout — ignoring it and searching for another install.")
     stack = stack_dir or Path("C:/Qualcomm/AIStack")
     if stack.exists():
-        for candidate in sorted(stack.glob("QAIRT_*"), reverse=True):
+        for candidate in sorted(stack.glob("QAIRT_*"), key=_qairt_version_key, reverse=True):
             if _qairt_valid(candidate):
                 return candidate
     return None
 
 
-NPURUN_EXE       = find_npurun_exe() or (Path.home() / ".cargo" / "bin" / "npurun.exe")
-QNN_SDK_ROOT     = find_qairt_root() or Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
 NPURUN_MODEL     = "qwen3-4b-instruct-2507"
 NPURUN_MODEL_DIR = Path.home() / "AppData" / "Local" / "npurun" / "models" / NPURUN_MODEL
 NPURUN_PORT      = 11435
@@ -121,6 +140,13 @@ def ok(msg: str = "done") -> None:
 
 def warn(msg: str) -> None:
     print(f"        {yellow('!')} {msg}", flush=True)
+
+
+# Resolved after the printing helpers exist: find_qairt_root() warns when it
+# rejects an explicitly-set QNN_SDK_ROOT, and a NameError there would crash
+# the launcher at import for exactly the users that warning is meant for.
+NPURUN_EXE   = find_npurun_exe() or (Path.home() / ".cargo" / "bin" / "npurun.exe")
+QNN_SDK_ROOT = find_qairt_root() or Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
 
 def err(msg: str) -> None:
     print(f"        {red('✗')} {msg}", flush=True)
@@ -234,6 +260,13 @@ def _pull_npurun_model() -> None:
 
 
 def _write_npurun_config() -> None:
+    """Write the backend wiring, preserving anything the user set themselves.
+
+    This file is what `hexcli --config` loads, so /setup writes its answers
+    here too. Regenerating it wholesale (which happens after any model
+    re-pull) silently reverted those answers, making /setup's "applies on
+    every launch" promise false. Only the connection keys are ours to own.
+    """
     cfg = {
         "backend": "openai",
         "model": "qwen3-4b",
@@ -251,7 +284,19 @@ def _write_npurun_config() -> None:
         },
         "_npurun_model": NPURUN_MODEL,
     }
-    NPURUN_CONFIG.write_text(json.dumps(cfg, indent=2))
+    if NPURUN_CONFIG.exists():
+        try:
+            existing = json.loads(NPURUN_CONFIG.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                # User keys win over our defaults; our connection block is
+                # rewritten because the port/model may legitimately change.
+                connection = {"openai_compatible", "_npurun_model", "backend"}
+                for key, value in existing.items():
+                    if key not in connection:
+                        cfg[key] = value
+        except (json.JSONDecodeError, OSError):
+            pass  # unreadable: fall back to a clean write
+    NPURUN_CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     ok(str(NPURUN_CONFIG))
 
 
