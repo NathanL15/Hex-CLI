@@ -127,6 +127,32 @@ EXTENSION_CASES: list[Case] = [
          verify=ck.all_of(ck.no_tool_calls(), ck.message_contains_any("node", "left", "sorted", "ordered")),
          max_steps=2),
 
+    # ---- Live machine state — rule 9's other direction ----
+    # Found live 2026-08-14: "what cpu do i have" was answered 3/3 with a
+    # confabulated "Intel Core i7-13700K" (this machine is a Snapdragon
+    # X Elite) and zero tool calls. The trap cases measure resisting a named
+    # tool; nothing measured the opposite obligation — a hardware question
+    # MUST hit the machine. Graded on behaviour (a command actually ran)
+    # and content (names the real silicon, not the confabulation).
+    Case("livestate-1", "livestate", "What CPU does this machine actually have?",
+         verify=ck.all_of(
+             ck.tools_called("run_command"),
+             ck.regex_answer_matches(
+                 [r"snapdragon|oryon|qualcomm|arm|x1e"],
+                 [r"intel|ryzen|core i[3579]"],
+             ),
+         ),
+         expected_tools=("run_command",)),
+
+    # ---- Multi-step arithmetic — the gap between rule 4 and a 4B ----
+    # Same session: 104k at 37.5 h/week came back as "$50/hr" 3/3 (the model
+    # pattern-matches the standard 2,080-hour year) and "$520" in the wild.
+    # Correct: 104000 / (52 * 37.5) = 53.33. Graded on the answer alone —
+    # a direct correct answer and a run_code-computed one both pass.
+    Case("numeric-1", "numeric",
+         "What is a 104k annual salary in hourly, working 37.5 hours per week?",
+         verify=ck.message_contains_any("53.3", "$53", "53.33")),
+
     # ---- Error recovery — REAL failures; graded on outcome ----
     Case("error-recovery-1", "error_recovery",
          "Read config.json and tell me its version.",
