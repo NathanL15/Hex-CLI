@@ -149,6 +149,10 @@ EXTENSION_CASES: list[Case] = [
     # pattern-matches the standard 2,080-hour year) and "$520" in the wild.
     # Correct: 104000 / (52 * 37.5) = 53.33. Graded on the answer alone —
     # a direct correct answer and a run_code-computed one both pass.
+    # CORRECTION (2026-08-16): the original 0/5 baseline was measured against
+    # a 27-hour-old server — the degrading-backend trap biting the diagnosis
+    # itself. Fresh-server baseline is ~2/3; this case is FLAKY, not dead.
+    # Full study: evals/cases_everyday.py and docs/V2X_ROADMAP notes.
     Case("numeric-1", "numeric",
          "What is a 104k annual salary in hourly, working 37.5 hours per week?",
          verify=ck.message_contains_any("53.3", "$53", "53.33")),

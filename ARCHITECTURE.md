@@ -107,8 +107,9 @@ scripted key source) is what makes that possible.
 
 ```powershell
 python evals/cases_smoke.py                    # fast gate
-python evals/cases_extended.py --runs 5        # pass^5 over 36 cases
+python evals/cases_extended.py --runs 5        # pass^5 over 38 cases
 python evals/cases_multiturn.py --runs 3       # deep-context scenarios
+python evals/cases_everyday.py                 # common-prompt sweep vs computed machine truth
 python evals/compare.py <before.json> <after.json>
 ```
 

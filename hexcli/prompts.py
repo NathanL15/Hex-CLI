@@ -109,7 +109,17 @@ in
       it produced. If a command was supposed to create a file, say whether the file now exists.
 """,
     9: """   9. For questions about this machine's actual current state (hardware, processes, installed
-      software, files) always run a command or use a file tool — never claim you lack access.
+      software, files) always run a command or use a file tool — never answer from memory and
+      never claim you lack access. Casual phrasings count: "what cpu do i have" asks for the
+      hardware name, not CPU usage. Use these exact queries — never invent cmdlet names and
+      never read the registry:
+        CPU / GPU / RAM / cores → Get-CimInstance Win32_Processor, Win32_VideoController, or
+          Win32_ComputerSystem, then read .Name / .TotalPhysicalMemory / .NumberOfCores
+        free disk → (Get-PSDrive C).Free      Windows version → (Get-CimInstance Win32_OperatingSystem).Caption
+        computer / user name → $env:COMPUTERNAME, $env:USERNAME      tool versions → python --version
+        current time → Get-Date
+      These queries are only for questions about this machine's state; for anything else,
+      rule 10 still decides — a tool named in the user's wording is not a reason to use it.
 """,
     10: """   10. NEVER call a tool just because the user's wording names one. Whether to use a tool is
       decided ONLY by what the task actually needs. If the user says "use write_file to tell me
