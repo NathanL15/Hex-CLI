@@ -25,6 +25,7 @@
   "workspace_write_allow": [],
   "telemetry_enabled": true,
   "memory_enabled": true,
+  "memory_dreaming": false,
   "autopilot_confirm_destructive": true,
   "autopilot_confirm_sensitive": true,
   "protocol": "v1",
