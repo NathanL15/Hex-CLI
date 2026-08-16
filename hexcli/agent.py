@@ -308,6 +308,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "workspace_write_allow": [],
     "telemetry_enabled": True,
     "memory_enabled": True,
+    # The dreaming consolidation daemon is OFF by default: measured 2026-08-16
+    # writing the same five fabricated machine "facts" (wrong CPU, wrong RAM,
+    # an invented temperature) into memory_rules.md every idle cycle, which
+    # workspace_snapshot then injected as "Prior knowledge" — locking the
+    # model's hardware confabulations in permanently. V2X_ROADMAP already
+    # ruled it ships only with a quality eval; the eval now exists and it
+    # failed it. Re-enable only with new evidence.
+    "memory_dreaming": False,
     "autopilot_confirm_destructive": True,
     # Sensitive-data command gate (ssh keys, credential stores, security
     # files, obfuscated execution). Separate from the destructive flag so
@@ -2273,6 +2281,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "input_history_limit":            "int",
     "telemetry_enabled":              "bool",
     "memory_enabled":                 "bool",
+    "memory_dreaming":                "bool",
     "autopilot_confirm_destructive":  "bool",
     "autopilot_confirm_sensitive":    "bool",
     "protocol":                       "str",
@@ -3506,7 +3515,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     tel = telemetry.SessionTelemetry(config)
 
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")), mode)
-    memory.start_dreaming(lambda: config, llm_generate)
+    if config.get("memory_dreaming", False):
+        memory.start_dreaming(lambda: config, llm_generate)
 
     # Rich line editing where the terminal supports it; bare input() otherwise
     # (piped stdin, CI, --raw) so nothing depends on it being available.
