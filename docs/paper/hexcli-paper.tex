@@ -33,7 +33,7 @@
 
 \title{\textbf{Hex CLI: A Measurement-First Coding Agent\\ on a 4-Billion-Parameter Model and a Laptop NPU}}
 \author{Nathan L.\\ \small\texttt{github.com/NathanL15/Hex-CLI}}
-\date{August 2026 \,\textperiodcentered\, v2.1.0}
+\date{August 2026 \,\textperiodcentered\, v2.2.0}
 
 \begin{document}
 \maketitle
@@ -532,6 +532,12 @@ Aug 14 & v2.1.0: a one-command installer (the setup ritual was the last
 barrier to anyone else running it), piped stdin, custom commands, session
 search, and a config wizard. An independent review of the release found ten
 defects in it, all fixed before shipping; 685 tests across 22 suites. \\
+Aug 16 & v2.2.0: a systematic sweep of everyday prompts (30 cases graded
+against computed machine truth) lifts live machine-state questions from 44\%
+to 72\% via a command cookbook in the prompt — and uncovers the deepest bug
+of the project: the memory consolidation daemon had been recording the
+model's own confabulations as facts and re-injecting them every turn, a
+self-reinforcing hallucination loop invisible to every sandboxed eval. \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}

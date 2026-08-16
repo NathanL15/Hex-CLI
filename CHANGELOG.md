@@ -4,6 +4,60 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.2.0 — 2026-08-16
+
+The everyday-correctness release. Two wild failures — "what cpu do i have"
+answered with a confabulated Intel chip on a Snapdragon machine, and one
+salary division wrong five different ways — triggered a systematic study of
+the prompts a normal user types in their first five minutes, instead of
+case-by-case patching. Four experiment arms, fresh server per arm, n=5
+triage on every moved case.
+
+| Everyday sweep (30 cases, n=3) | before | after |
+|---|---|---|
+| Live machine-state questions | 16/36 | **26/36** |
+| All categories | 58/90 | **69/90** |
+| Trap resistance (guard) | 10/20 | 9/20 (held) |
+
+### The command cookbook (rule 9)
+
+The dominant live-state failure was not the model refusing to run commands —
+it was not *knowing* the Windows commands: invented cmdlets (`Get-CPU`,
+`Get-CimComputer`), "what cpu" misread as CPU *usage*, registry fallbacks
+that collide with the sensitive-path tier. Rule 9 now carries exact
+known-good queries (CIM classes for CPU/GPU/RAM/cores, `Get-PSDrive`,
+`Get-Date`, `$env:` names) plus a scope sentence keeping the
+never-use-a-tool-just-because-it-was-named rule in charge everywhere else.
+That sentence is load-bearing: without it, trap resistance collapsed to
+4/20. Prompt cost: ~+200 tokens, spent knowingly.
+
+### Memory dreaming off by default
+
+The deepest root cause was not the model at all. The background "dreaming"
+consolidation daemon had distilled the model's own confabulations into
+`memory_rules.md` as fabricated machine facts (wrong CPU, wrong RAM, an
+invented temperature), re-appending the identical batch every idle cycle —
+then injecting them into every turn as "Prior knowledge", which the model
+trusted over running a command. A self-reinforcing hallucination loop that
+survived every prompt improvement. `memory_dreaming` now defaults to false;
+the roadmap had already ruled the daemon ships only with a quality eval it
+passes, and it now has one it failed. Hand-written memory rules still work.
+
+### Measured and rejected, continued
+
+- **Routing calendar math to `run_code`** — the tool takes a file path, not
+  inline code, so the model correctly refuses; inline-code support is now a
+  roadmap item. Days-until/weekday arithmetic stays a documented ceiling.
+- **The arithmetic "failure class" itself** — mostly an artifact of a
+  degraded 27-hour-old server; on a fresh server, everyday arithmetic is
+  9/10 at 3/3. The measurement trap struck the diagnosis itself; server
+  freshness now has a written protocol note.
+
+Also: `evals/cases_everyday.py` joins the live suites (30 common prompts
+graded against computed machine truth), and the roadmap's phases are named
+by content instead of version numbers, so release tags and plan phases can
+never collide again.
+
 ## 2.1.0 — 2026-08-14
 
 v2.0 was a loop that worked and a product almost nobody could install. v2.1
