@@ -17,6 +17,12 @@ Ground rules carried over from v2, non-negotiable:
   successor bundle exists (checked 2026-08-13: Qwen3.5 still ships only
   0.8B/2B, llamacpp-only).
 
+> **Phase names, not version numbers.** Phases were originally labelled
+> v2.1–v2.5, which collided with release tags the moment unplanned work
+> shipped between phases (the everyday-prompt study became release v2.2.0
+> while "roadmap v2.2" had not started). Phases are now named by content;
+> releases take whatever number is next when they ship.
+
 ## Where each v2-plan item stands
 
 | Plan item (V2_PLAN §) | Status | Disposition |
@@ -25,27 +31,27 @@ Ground rules carried over from v2, non-negotiable:
 | Edit formats, fuzzy apply, retry-with-feedback (§5.1) | shipped (as 4-tier fuzzy + unconditional retry) | done |
 | Native `<tool_call>` template (§5.1) | impossible (detokenizer) | dead |
 | Tool consolidation 15→8 (§5.2) | measured wrong target (~200 tok) | dead |
-| Persistent shell session (§5.2) | deferred, unproven at 4B | **v2.4** |
-| Plan ledger + recitation (§5.3) | deferred, unproven at 4B | **v2.4** |
+| Persistent shell session (§5.2) | deferred, unproven at 4B | **Capabilities** |
+| Plan ledger + recitation (§5.3) | deferred, unproven at 4B | **Capabilities** |
 | Verification-gated finish, loop detector (§5.3) | shipped | done |
 | Escalation ladder (§5.4) | shipped, off by default (no viable bigger local model) | dormant until model lever moves |
-| ≤800-token stable prefix (§6.1) | trimming rejected; **prefix byte-stability itself still unmeasured and is the precondition for any KV reuse** | **v2.3** |
+| ≤800-token stable prefix (§6.1) | trimming rejected; **prefix byte-stability itself still unmeasured and is the precondition for any KV reuse** | **Latency** |
 | Compaction on real token counts (§6.2) | shipped (estimator) | done |
-| Memory v2: files + ripgrep (§6.4) | deferred | **v2.4** |
-| I/O hygiene: JSONL history, git-state cache (§6.5) | not done, cheap | **v2.2** |
-| AST-based command classifier, deny>ask>allow policy rules (§7.1) | partially covered by sensitive tier; AST + policy-file layer not built | **v2.4** |
+| Memory v2: files + ripgrep (§6.4) | deferred | **Capabilities** |
+| I/O hygiene: JSONL history, git-state cache (§6.5) | not done, cheap | **Split** |
+| AST-based command classifier, deny>ask>allow policy rules (§7.1) | partially covered by sensitive tier; AST + policy-file layer not built | **Capabilities** |
 | Workspace write scoping, network deny (§7.2) | shipped | done |
-| Git-snapshot undo (§7.3) | deferred | **v2.4** |
+| Git-snapshot undo (§7.3) | deferred | **Capabilities** |
 | Runtime: usage/max_tokens/stop fixes (§9.2) | shipped in fork | done |
-| KV experiments: Rewind on non-Qwen3 bundle, GenieDialog_save/restore (§9.3) | **never run** | **v2.3** |
+| KV experiments: Rewind on non-Qwen3 bundle, GenieDialog_save/restore (§9.3) | **never run** | **Latency** |
 | GenieX bake-off (§9.4) | run; halted on this machine (0.74 tok/s, #1266) | watch item |
-| **Nexa SDK evaluation (§9.4)** | **never run** — claims JSON-schema function calling on NPU | **v2.3** |
-| Speculative decoding spike (§9.5) | never run | **v2.3 (strictly time-boxed)** |
+| **Nexa SDK evaluation (§9.4)** | **never run** — claims JSON-schema function calling on NPU | **Latency** |
+| Speculative decoding spike (§9.5) | never run | **Latency (strictly time-boxed)** |
 | Streaming, cancellation, /stats, doctor (§10) | shipped | done |
-| Mid-run steering (queue message) (§10) | not done | **v2.4** |
-| Background commands (§10) | deferred | **v2.4** |
-| External yardsticks: BFCL / Aider subset (§8.8) | not done | **v2.5 (optional)** |
-| Packaging / setup surface (§11) | not done — the user-facing gap | **v2.1** |
+| Mid-run steering (queue message) (§10) | not done | **Capabilities** |
+| Background commands (§10) | deferred | **Capabilities** |
+| External yardsticks: BFCL / Aider subset (§8.8) | not done | **Watch items (optional)** |
+| Packaging / setup surface (§11) | not done — the user-facing gap | **Packaging (shipped)** |
 
 Plus debt found in the audit, not in the original plan: ghost config keys
 (`require_verification`, `autopilot_system_prompt`), `workspace_write_allow`
@@ -57,7 +63,7 @@ stages.
 
 ---
 
-## v2.1 — Ship it to people (packaging + product surface)
+## Phase: Packaging — ship it to people  *(SHIPPED as release v2.1.0)*
 
 The biggest gap between "excellent project" and "usable product" is that
 installing Hex CLI is a ritual: QAIRT SDK download, npurun build, env vars,
@@ -85,7 +91,7 @@ model pull. Nobody but the author has ever run it.
 in ≤3 commands, `--doctor` green. CI covers the installer's non-download
 steps.*
 
-## v2.2 — Codebase health (the split, stages 3–8)
+## Phase: The Split — codebase health (agent.py stages 3–8)
 
 agent.py is ~3,300 lines. The split plan and its hazard playbook
 (monkeypatch vacuity — see project memory / §14.16) already exist; remaining
@@ -100,7 +106,7 @@ config/`_ACTIVE_CONFIG` (hardest) → repl → loop.
 *Exit gate: no module over ~800 lines; suite green with zero vacuous patches
 (each stage's patch sites verified by mutation).*
 
-## v2.3 — Latency: kill the per-turn prefill tax (time-boxed spikes)
+## Phase: Latency — kill the per-turn prefill tax (time-boxed spikes)
 
 The system prompt costs ~3s of prefill every turn because nothing reuses KV
 state. This is the single largest remaining UX lever and it is entirely
@@ -125,7 +131,7 @@ runtime work. Three spikes, each time-boxed to a day or two:
 *Exit gate: one mechanism demonstrates warm-turn prefill <1s — or every
 mechanism has a written dead-end verdict with numbers, closing §9 for good.*
 
-## v2.4 — Capability experiments at 4B (each behind a flag, each A/B'd)
+## Phase: Capabilities — experiments at 4B (each behind a flag, each A/B'd)
 
 The deferred features, revived one at a time under the v2 discipline: build
 behind a config flag, A/B on the instrument, keep only winners.
@@ -148,7 +154,7 @@ behind a config flag, A/B on the instrument, keep only winners.
 *Exit gate per feature: pass^5 non-regression on the full suite, win on its
 target cases, or it reverts to off/removed with the numbers recorded.*
 
-## v2.5 — Event-driven (watch items, no schedule)
+## Phase: Watch items — event-driven, no schedule
 
 Do these when the world changes, not before:
 
@@ -167,12 +173,12 @@ Do these when the world changes, not before:
 
 ## Sequencing rationale
 
-v2.1 first because the product's limiting factor is now adoption, not
-quality: v2.0 beat its gates, but no second human can run it. v2.2 before
-the experiment phases because every v2.4 feature touches the loop, and the
-split makes each subsequent change cheaper and safer. v2.3 before v2.4
+Packaging first because the product's limiting factor is now adoption, not
+quality: v2.0 beat its gates, but no second human can run it. The Split before
+the experiment phases because every Capabilities feature touches the loop, and
+the split makes each subsequent change cheaper and safer. Latency before Capabilities
 because a <1s warm turn changes the economics of every capability feature
 (recitation and plan ledgers cost tokens; cheap prefill makes them nearly
-free). v2.4 is deliberately last among the scheduled phases: it is the only
+free). Capabilities is deliberately last among the scheduled phases: it is the only
 speculative one, and the v2 lesson is that speculative work must queue
 behind the instrument, not ahead of it.
