@@ -293,8 +293,8 @@ if (-not $NoStartMenu) {
             $shortcut.Arguments        = "/c `"$targetCmd`""
             $shortcut.WorkingDirectory = $InstallDir
             $shortcut.Description      = "Hex CLI - local NPU terminal agent"
-            $icon = Join-Path $InstallDir "hex-cli.ico"
-            $shortcut.IconLocation = if (Test-Path $icon) { $icon } else { "powershell.exe,0" }
+            $icon = Join-Path $InstallDir "assets\hexcli.ico"
+            $shortcut.IconLocation = if (Test-Path $icon) { "$icon,0" } else { "powershell.exe,0" }
             $shortcut.Save()
             Write-Ok "Shortcut created: $lnkPath"
         } catch {
