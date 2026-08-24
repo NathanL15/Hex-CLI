@@ -329,7 +329,14 @@ class LineEditor:
             out.append(f"\033[{cursor_col}C")
         self._rendered_rows = total_rows
         self._cursor_row = cursor_row
-        self._write("".join(out))
+        payload = "".join(out)
+        if self.styled:
+            # Hide the cursor only for the duration of this redraw (kills the
+            # mid-repaint flicker), then show it again at its final position.
+            # Hiding it across the whole read() left users with no caret at
+            # all while typing.
+            payload = "\033[?25l" + payload + "\033[?25h"
+        self._write(payload)
 
     def _finish_render(self, prompt: str) -> None:
         """Leave the finished line on screen and the cursor below it."""
@@ -448,8 +455,6 @@ class LineEditor:
         self.buffer, self.pos = "", 0
         self._hist_index, self._hist_prefix, self._saved_draft = None, "", ""
         self._rendered_rows, self._cursor_row = 0, 0
-        if self.styled:
-            self._write("\033[?25l")
         try:
             self.render(prompt)
             while True:

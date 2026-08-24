@@ -117,6 +117,44 @@ HF_SUBFOLDER     = "gpu/gpu-int4-rtn-block-32"
 DML_MODEL_SUBDIR = "phi4-mini-gpu"
 
 # ---------------------------------------------------------------------------
+# Console dressing (classic conhost only)
+# ---------------------------------------------------------------------------
+# The Start Menu shortcut launches via conhost.exe on purpose: Windows
+# Terminal has no per-profile taskbar icon, so under WT the running app
+# always groups under the generic terminal icon. Classic conhost windows
+# accept WM_SETICON, which puts the Hex logo on the taskbar. Conhost does
+# not enable ANSI processing by itself the way WT does, so switch that on
+# too. Both calls are harmless no-ops under WT/ConPTY.
+
+def _dress_console_window() -> None:
+    if sys.platform != "win32":
+        return
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    for std in (-11, -12):  # stdout, stderr
+        handle = k32.GetStdHandle(std)
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            k32.SetConsoleMode(handle, mode.value | 0x0004)  # VT processing
+    hwnd = k32.GetConsoleWindow()
+    ico = APP_DIR / "assets" / "hexcli.ico"
+    if not (hwnd and ico.exists()):
+        return
+    u32 = ctypes.windll.user32
+    WM_SETICON, IMAGE_ICON, LR_LOADFROMFILE = 0x80, 1, 0x10
+    for which, size in ((0, 16), (1, 32)):  # ICON_SMALL, ICON_BIG
+        h_icon = u32.LoadImageW(None, str(ico), IMAGE_ICON, size, size,
+                                LR_LOADFROMFILE)
+        if h_icon:
+            u32.SendMessageW(hwnd, WM_SETICON, which, h_icon)
+
+
+try:
+    _dress_console_window()
+except Exception:
+    pass  # cosmetics only; never block launch over them
+
+# ---------------------------------------------------------------------------
 # ANSI helpers
 # ---------------------------------------------------------------------------
 
