@@ -3610,13 +3610,19 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             setup_wizard.run_wizard(config, wizard_path)
             continue
 
-        # ── clear screen ──────────────────────────────────────────────────
-        # /clear used to be an ALIAS for /new, so anyone typing it with the
-        # universal shell meaning ("clear my screen") silently ended their
-        # session and lost the conversation. It now does what every other
-        # terminal does; /new still starts a session.
+        # ── clear screen + context ────────────────────────────────────────
+        # v2.0 made /clear screen-only because the old silent alias-for-/new
+        # lost sessions without a trace. In practice the split was noise: you
+        # clear when the current thread is done, and an announced fresh
+        # session is not silent data loss — the old one stays one /resume
+        # away. /clear is now the one reset command; /new remains an alias
+        # that keeps the scrollback.
         if norm == "/clear":
             os.system("cls" if os.name == "nt" else "clear")
+            sync_session_store(sessions, current_session)
+            _close_session_resources(current_session)
+            current_session = create_session()
+            cprint("Fresh session — context cleared (previous kept in /history).", C.DIM)
             continue
 
         # ── new session ───────────────────────────────────────────────────

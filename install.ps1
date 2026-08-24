@@ -289,8 +289,12 @@ if (-not $NoStartMenu) {
         try {
             $shell    = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($lnkPath)
-            $shortcut.TargetPath       = "cmd.exe"
-            $shortcut.Arguments        = "/c `"$targetCmd`""
+            # conhost.exe on purpose: Windows Terminal ignores per-profile
+            # taskbar icons, so a WT-hosted launch always shows the generic
+            # terminal icon. Classic conhost lets launcher.py stamp the Hex
+            # logo on the window/taskbar via WM_SETICON.
+            $shortcut.TargetPath       = "$env:SystemRoot\System32\conhost.exe"
+            $shortcut.Arguments        = "cmd.exe /c `"$targetCmd`""
             $shortcut.WorkingDirectory = $InstallDir
             $shortcut.Description      = "Hex CLI - local NPU terminal agent"
             $icon = Join-Path $InstallDir "assets\hexcli.ico"
