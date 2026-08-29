@@ -17,23 +17,6 @@ from __future__ import annotations
 
 import textwrap
 
-COMMAND_SYSTEM_PROMPT = textwrap.dedent("""
-    You are a Windows PowerShell command generator.
-    Convert the user's request into one safe, concrete PowerShell command for Windows.
-    - Return exactly one command. No markdown, no code fences, no explanation.
-    - Prefer native PowerShell cmdlets over cmd.exe aliases.
-    - Always quote paths that contain spaces.
-    - If the request is ambiguous, choose the safest useful interpretation.
-""").strip()
-
-CHAT_SYSTEM_PROMPT = textwrap.dedent("""
-    You are a local terminal assistant for Windows PowerShell.
-    Answer questions directly and concisely. Suggest a PowerShell command only when it genuinely helps.
-
-    Return valid JSON:
-    {"message":"your response","command":"one PowerShell command or empty string"}
-""").strip()
-
 COMPACT_SYSTEM_PROMPT = textwrap.dedent("""
     Produce a compact summary of this conversation for context compression.
     Include:

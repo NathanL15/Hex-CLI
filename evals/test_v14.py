@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """evals/test_v14.py — Unit tests for v1.4 features.
 
-Tests: NPU process lock, /config helpers, /memory helpers, /profile,
+Tests: NPU process lock, /config helpers, /memory helpers,
 delegate sub-agent (no-recursion guard, session-ID restore).
 All offline — no LLM endpoint required.
 
@@ -267,30 +267,6 @@ def test_memory_unknown_subcommand_no_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
-# /profile — _show_profile
-# ---------------------------------------------------------------------------
-
-def test_show_profile_no_raise() -> None:
-    cfg = dict(sa.DEFAULT_CONFIG)
-    session = sa.create_session()
-    with unittest.mock.patch("hexcli.agent.ping_backend", return_value=False):
-        try:
-            sa._show_profile(cfg, "autopilot", session)
-        except Exception as exc:
-            assert False, f"_show_profile raised: {exc}"
-
-
-def test_show_profile_online_backend() -> None:
-    cfg = dict(sa.DEFAULT_CONFIG)
-    session = sa.create_session()
-    with unittest.mock.patch("hexcli.agent.ping_backend", return_value=True):
-        try:
-            sa._show_profile(cfg, "chat", session)
-        except Exception as exc:
-            assert False, f"_show_profile raised: {exc}"
-
-
-# ---------------------------------------------------------------------------
 # delegate tool — _run_delegate + _in_delegate flag
 # ---------------------------------------------------------------------------
 
@@ -437,8 +413,6 @@ TESTS = [
     test_memory_clear_aborted,
     test_memory_clear_confirmed,
     test_memory_unknown_subcommand_no_raise,
-    test_show_profile_no_raise,
-    test_show_profile_online_backend,
     test_delegate_no_recursion_guard,
     test_delegate_restores_session_id_on_success,
     test_delegate_restores_session_id_on_failure,

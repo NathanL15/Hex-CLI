@@ -53,7 +53,6 @@ Once installed:
 python -m hexcli.agent --doctor      # re-check the install any time
 python -m hexcli.agent               # autopilot REPL
 python -m hexcli.agent "what changed in this repo today?"
-python -m hexcli.agent --command-only "list the ten largest files here"
 git diff | python -m hexcli.agent "review this diff"      # piped input becomes context
 echo "summarize README.md" | python -m hexcli.agent       # ...or the task itself
 ```
@@ -124,18 +123,17 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | | |
 |---|---|
 | `/help` | full command list |
-| `/new` · `/clear` | new session · clear the screen |
+| `/clear` · `/new` | clear screen and chat history · same but keep the scrollback |
 | `/history` · `/resume <n>` | list · reopen a past session |
 | `/search <text>` | find past sessions by content — results carry `/resume` numbers |
 | `/diff` | what the agent changed this turn |
 | `/undo` | revert the last exchange, restoring any files it wrote |
-| `/stats` | turns, time, tokens, tool usage |
-| `/context` · `/compact` | context budget · compress history now |
-| `/save <name>` · `/load <name>` | session checkpoints |
+| `/stats` | turns, time, tokens, context usage |
+| `/compact` | compress history now |
 | `/memory [status\|list\|search\|clear\|prune]` | inspect the memory store |
 | `/config [key [value]]` | view or set config at runtime (session only) |
 | `/setup` | interactive config wizard — saves choices to the config file |
-| `/tools` · `/model <name>` · `/mode <mode>` · `/cwd [path]` | |
+| `/tools` · `/cwd [path]` | list agent tools · show or change directory |
 | `/doctor` | diagnose the installation |
 | `Esc` | cancel the running step (kills the whole process tree) |
 
@@ -161,7 +159,7 @@ and CI are unaffected.
 | | |
 |---|---|
 | `↑` · `↓` | history. With text already typed, it searches by that prefix |
-| `Tab` | complete slash commands, `/config` keys, `/mode` values, file paths |
+| `Tab` | complete slash commands, `/config` keys, file paths |
 | `←` `→` · `Ctrl+←` `Ctrl+→` | by character · by word |
 | `Home` · `End` | start · end of the current line |
 | `Ctrl+W` · `Ctrl+U` · `Ctrl+K` | kill the word before · to line start · to line end |

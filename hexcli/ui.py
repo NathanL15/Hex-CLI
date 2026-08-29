@@ -123,7 +123,7 @@ def error_box(message: str, *, file: Any = None) -> None:
     cprint("└" + "─" * width, C.RED, file=out)
 
 
-def print_banner(model: str, backend: str, mode: str) -> None:
+def print_banner(model: str, backend: str) -> None:
     title = "HEX CLI"
     width = max(len(title) + 4, 44)
     print()
@@ -132,7 +132,7 @@ def print_banner(model: str, backend: str, mode: str) -> None:
     cprint("└" + "─" * width + "┘", C.BCYAN)
     cprint(
         f"  model: {C.BWHITE}{model}{C.RESET}{C.DIM}  backend: {backend}  "
-        f"mode: {mode}  /help for commands  Esc cancels{C.RESET}",
+        f"/help for commands  Esc cancels{C.RESET}",
         C.DIM,
     )
     print()
@@ -145,33 +145,20 @@ def print_banner(model: str, backend: str, mode: str) -> None:
 HELP_TEXT = textwrap.dedent("""
     Hex CLI  —  local Hexagon NPU terminal agent
 
-    MODES:
-      autopilot   full agent with tools, loops until done  (default)
-      chat        conversational, suggests a command when helpful
-      command     generate one PowerShell command
-
     SLASH COMMANDS:
       /help                         this help
       /history                      list saved sessions
       /clear                        clear screen and chat history
       /new                          clear chat history, keep the scrollback
       /resume <n>                   resume session #n from /history
+      /search <text>                find past sessions by content, then /resume
       /compact                      summarise + compress history (saves context)
       /undo                         remove last exchange; restores files if the turn wrote any
-      /context                      show estimated context usage
-      /models                       list available Ollama models
-      /mode autopilot|chat|command  switch mode
-      /model <name>                 switch model  e.g. /model qwen2.5-coder:14b
+      /diff                         show what the agent changed this turn
+      /stats                        turns, elapsed time, tokens, context usage
       /cwd [path]                   show or change working directory
       /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
       /memory [status|list|search|clear|prune]  inspect or manage the memory store
-      /profile                      show backend, model, session and memory status
-      /save <name>                  save a named checkpoint of the current session
-      /load <name>                  restore a checkpoint into the current session
-      /checkpoints                  list all saved checkpoints
-      /diff                         show what the agent changed this turn
-      /stats                        turns, elapsed time, tokens, tool usage
-      /search <text>                find past sessions by content, then /resume
       /setup                        interactive config wizard (saves to file)
       /doctor                       diagnose the installation
       /tools                        list agent tools
@@ -191,7 +178,7 @@ HELP_TEXT = textwrap.dedent("""
       Esc                           clear the line — or cancel a running step
       \\ then Enter                  continue on a new line (pastes keep theirs)
 
-    AGENT TOOLS (autopilot):
+    AGENT TOOLS:
       run_command     read_file      edit_file      write_file    append_file
       list_directory  search_files   find_files     run_code      verify_syntax
       lint_code       search_memory  fetch_url      batch         delegate
@@ -201,17 +188,10 @@ HELP_TEXT = textwrap.dedent("""
       Primary path: npurun + qwen3-4b-instruct-2507 on the Hexagon NPU (~15 tok/s).
       Fallback: Phi-4-mini via DirectML (Adreno GPU) or Ollama on CPU.
       See README.md for setup. launcher.py auto-selects the best available backend.
-
-    GOOD MODELS (ollama pull <model>):
-      qwen2.5-coder:7b    ~4 GB   best default for agent tasks
-      qwen2.5-coder:14b   ~8 GB   better reasoning, slower
-      qwen2.5-coder:3b    ~2 GB   fast one-liners
-      qwen2.5:7b          ~4 GB   good for non-coding questions
-      deepseek-r1:7b      ~4 GB   strong reasoning, strips <think> tags
 """).strip()
 
 TOOLS_HELP = textwrap.dedent("""
-    Tools available in autopilot mode:
+    Tools available to the agent:
       run_command(command)                        Run a PowerShell command (safety-classified;
                                                   sensitive/destructive ones ask first).
       read_file(path, offset, limit)              Read a file; offset/limit page through big ones.
@@ -308,26 +288,6 @@ def render_search_results(term: str, hits: list[dict[str, Any]]) -> None:
 # Models list
 # ---------------------------------------------------------------------------
 
-def render_models(models: list[dict[str, Any]], current: str) -> None:
-    if not models:
-        print("No models installed. Pull one: ollama pull qwen2.5-coder:7b")
-        return
-    print()
-    cprint("Available Ollama models:", C.BOLD)
-    for m in models:
-        name = m.get("name", "")
-        size_bytes = m.get("size", 0)
-        size_gb = size_bytes / 1e9
-        marker = "▶ " if name == current else "  "
-        color = C.BCYAN if name == current else ""
-        cprint(f"{marker}{name:<36}  {size_gb:.1f} GB", color)
-    print()
-
-
-def render_models_error(exc: BaseException) -> None:
-    cprint(f"Could not reach Ollama: {exc}", C.RED)
-
-
 # ---------------------------------------------------------------------------
 # Context estimate
 # ---------------------------------------------------------------------------
@@ -395,18 +355,18 @@ def short_cwd() -> str:
         return str(cwd)
 
 
-def repl_prompt(config: dict[str, Any], mode: str) -> str:
+def repl_prompt(config: dict[str, Any]) -> str:
     model = str(config.get("model", "?"))
     cwd_str = short_cwd()
     branch = get_git_branch()
     branch_str = f" ({branch})" if branch else ""
     if _COLOR_ON:
         return (
-            f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | {C.BGREEN}{mode}{C.DIM} | "
+            f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | "
             f"{C.BYELLOW}{cwd_str}{branch_str}{C.DIM}]{C.RESET}\n"
             f"{C.BOLD}you>{C.RESET} "
         )
-    return f"[{model} | {mode} | {cwd_str}{branch_str}]\nyou> "
+    return f"[{model} | {cwd_str}{branch_str}]\nyou> "
 
 
 # ---------------------------------------------------------------------------

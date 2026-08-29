@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """evals/test_v16.py — Unit tests for v1.6 features.
 
-Tests: cloud escalation redaction, escalation gating, checkpoint
+Tests: cloud escalation redaction, escalation gating,
 round-trip, and per-project config merge order.
 All offline — no LLM endpoint required.
 
@@ -198,135 +198,6 @@ def test_escalation_new_keys_in_default_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Feature 17 — Checkpoint round-trip
-# ---------------------------------------------------------------------------
-
-def test_checkpoint_save_creates_file() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi"},
-            ]
-            cp_path = sa._save_checkpoint("mytest", session, tmp)
-            assert cp_path.exists(), "checkpoint file must be created"
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_load_restores_messages() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = [
-                {"role": "user", "content": "Test message"},
-                {"role": "assistant", "content": "Test reply"},
-            ]
-            sa._save_checkpoint("restore_test", session, tmp)
-            loaded = sa._load_checkpoint("restore_test")
-            assert loaded is not None
-            assert loaded["messages"] == session["messages"]
-            assert loaded["message_count"] == 2
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_load_nonexistent_returns_none() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            result = sa._load_checkpoint("definitely_does_not_exist")
-            assert result is None
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_list_returns_all() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = [{"role": "user", "content": "x"}]
-            sa._save_checkpoint("cp_alpha", session, tmp)
-            sa._save_checkpoint("cp_beta", session, tmp)
-            cps = sa._list_checkpoints()
-            names = {cp["name"] for cp in cps}
-            assert "cp_alpha" in names
-            assert "cp_beta" in names
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_list_empty_when_no_checkpoints() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            result = sa._list_checkpoints()
-            assert result == []
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_metadata_includes_workspace() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = []
-            sa._save_checkpoint("meta_test", session, tmp)
-            loaded = sa._load_checkpoint("meta_test")
-            assert "workspace_metadata" in loaded
-            assert "created_at" in loaded
-            assert loaded["cwd"] == tmp
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_name_sanitized() -> None:
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = [{"role": "user", "content": "test"}]
-            # Name with special chars
-            sa._save_checkpoint("my checkpoint/v1.0", session, tmp)
-            # Should still be loadable
-            loaded = sa._load_checkpoint("my checkpoint/v1.0")
-            assert loaded is not None
-            assert loaded["name"] == "my checkpoint/v1.0"  # raw name preserved in JSON
-        finally:
-            os.chdir(orig)
-
-
-def test_checkpoint_survives_new_session() -> None:
-    """Checkpoints must persist across /new (independent of session history)."""
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)
-        try:
-            session = sa.create_session()
-            session["messages"] = [{"role": "user", "content": "important work"}]
-            sa._save_checkpoint("before_new", session, tmp)
-
-            # Simulate /new — create fresh session
-            # Checkpoint dir is cwd-scoped, so it's still there.
-            loaded = sa._load_checkpoint("before_new")
-            assert loaded is not None, "checkpoint must survive after /new"
-        finally:
-            os.chdir(orig)
-
-
-# ---------------------------------------------------------------------------
 # Feature 18 — Per-project config merge order
 # ---------------------------------------------------------------------------
 
@@ -490,14 +361,6 @@ TESTS = [
     test_get_api_key_env_takes_priority_over_config,
     test_escalation_redacts_before_sending,
     test_escalation_new_keys_in_default_config,
-    test_checkpoint_save_creates_file,
-    test_checkpoint_load_restores_messages,
-    test_checkpoint_load_nonexistent_returns_none,
-    test_checkpoint_list_returns_all,
-    test_checkpoint_list_empty_when_no_checkpoints,
-    test_checkpoint_metadata_includes_workspace,
-    test_checkpoint_name_sanitized,
-    test_checkpoint_survives_new_session,
     test_project_config_overrides_global,
     test_global_config_overrides_defaults,
     test_defaults_apply_when_no_overrides,

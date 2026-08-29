@@ -99,8 +99,6 @@ render_result = ui.render_result
 # patches sa._AUTOPILOT_TEMPLATE. Same re-export pattern as hexcli.ui above.
 # ---------------------------------------------------------------------------
 
-COMMAND_SYSTEM_PROMPT = prompts.COMMAND_SYSTEM_PROMPT
-CHAT_SYSTEM_PROMPT = prompts.CHAT_SYSTEM_PROMPT
 COMPACT_SYSTEM_PROMPT = prompts.COMPACT_SYSTEM_PROMPT
 _AUTOPILOT_TEMPLATE = prompts._AUTOPILOT_TEMPLATE
 _LINT_TOOL_SCHEMA = prompts._LINT_TOOL_SCHEMA
@@ -270,7 +268,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "temperature": 0.1,
     "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
     "max_output_tokens": 512,
-    "chat_max_output_tokens": 1024,
     "autopilot_max_output_tokens": 2048,
     "compact_max_output_tokens": 512,
     "max_agent_steps": 15,
@@ -340,8 +337,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "escalation_local_bind": "127.0.0.1:11436",
     "escalation_max_output_tokens": 900,
     "escalation_timeout_seconds": 240,
-    "system_prompt": COMMAND_SYSTEM_PROMPT,
-    "chat_system_prompt": CHAT_SYSTEM_PROMPT,
     "ollama": {"host": "http://127.0.0.1:11434"},
     "openai_compatible": {
         "base_url": "http://127.0.0.1:8000/v1",
@@ -636,10 +631,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--backend", choices=["ollama", "openai"])
     parser.add_argument("--model")
-    parser.add_argument("--mode", choices=["autopilot", "chat", "command"], default="autopilot")
-    parser.add_argument("--copy", action="store_true")
-    parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--command-only", action="store_true")
     parser.add_argument("--print-config", action="store_true")
     parser.add_argument("--version", action="store_true", help="Print version and exit.")
     parser.add_argument("--doctor", action="store_true",
@@ -1180,25 +1171,6 @@ def call_llm(
 
 
 # ---------------------------------------------------------------------------
-# Ollama model listing
-# ---------------------------------------------------------------------------
-
-def list_ollama_models(config: dict[str, Any]) -> list[dict[str, Any]]:
-    host = config["ollama"]["host"].rstrip("/")
-    data = http_json_get(f"{host}/api/tags", timeout_s=10)
-    return data.get("models") or []
-
-
-def render_models(config: dict[str, Any]) -> None:
-    try:
-        models = list_ollama_models(config)
-    except Exception as exc:
-        ui.render_models_error(exc)
-        return
-    ui.render_models(models, str(config.get("model", "")))
-
-
-# ---------------------------------------------------------------------------
 # Text utilities
 # ---------------------------------------------------------------------------
 
@@ -1446,40 +1418,6 @@ def _iter_json_objects(text: str):
                 if depth == 0 and start >= 0:
                     yield text[start:i + 1]
                     start = -1
-
-
-def extract_command(raw_text: str) -> str:
-    text = raw_text.strip()
-    if not text:
-        raise RuntimeError("Model returned an empty response.")
-    if "```" in text:
-        for part in text.split("```"):
-            candidate = part.strip()
-            if not candidate:
-                continue
-            lines = [ln for ln in candidate.splitlines() if ln.strip()]
-            if not lines:
-                continue
-            if lines[0].lower() in {"powershell", "pwsh", "ps1", "bash", "sh"}:
-                lines = lines[1:]
-            if lines:
-                return "\n".join(lines).strip()
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if not lines:
-        raise RuntimeError("Model did not return a usable command.")
-    return lines[0]
-
-
-def parse_chat_response(raw_text: str) -> dict[str, str]:
-    parsed = parse_json_object(raw_text)
-    if isinstance(parsed, dict):
-        message = str(parsed.get("message") or "").strip()
-        command = str(parsed.get("command") or "").strip()
-        return {
-            "message": message or "Done.",
-            "command": extract_command(command) if command else "",
-        }
-    return {"message": strip_thinking(raw_text).strip() or "Done.", "command": ""}
 
 
 def parse_agent_action(raw_text: str) -> dict[str, Any]:
@@ -2194,67 +2132,7 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Checkpoints (Feature 17 — /save, /load, /checkpoints)
-# ---------------------------------------------------------------------------
-
-def _checkpoint_dir() -> Path:
-    return Path.cwd() / ".shellai" / "checkpoints"
-
-
-def _safe_checkpoint_name(name: str) -> str:
-    return re.sub(r"[^\w\-.]", "_", name)[:60]
-
-
-def _save_checkpoint(name: str, session: dict[str, Any], cwd: str) -> Path:
-    cp_dir = _checkpoint_dir()
-    cp_dir.mkdir(parents=True, exist_ok=True)
-    cp_path = cp_dir / f"{_safe_checkpoint_name(name)}.json"
-    cp_data = {
-        "name": name,
-        "created_at": iso_now(),
-        "cwd": cwd,
-        "message_count": len(session.get("messages", [])),
-        "messages": session.get("messages", []),
-        "workspace_metadata": workspace_snapshot(cwd),
-    }
-    payload = json.dumps(cp_data, indent=2) + "\n"
-    tmp = cp_path.with_suffix(".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(cp_path)
-    return cp_path
-
-
-def _load_checkpoint(name: str) -> dict[str, Any] | None:
-    cp_path = _checkpoint_dir() / f"{_safe_checkpoint_name(name)}.json"
-    if not cp_path.exists():
-        return None
-    try:
-        return json.loads(cp_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def _list_checkpoints() -> list[dict[str, Any]]:
-    cp_dir = _checkpoint_dir()
-    if not cp_dir.exists():
-        return []
-    checkpoints: list[dict[str, Any]] = []
-    for cp_file in sorted(cp_dir.glob("*.json")):
-        try:
-            data = json.loads(cp_file.read_text(encoding="utf-8"))
-            checkpoints.append({
-                "name": data.get("name", cp_file.stem),
-                "created_at": data.get("created_at", "?"),
-                "message_count": data.get("message_count", 0),
-                "cwd": data.get("cwd", "?"),
-            })
-        except Exception:
-            pass
-    return checkpoints
-
-
-# ---------------------------------------------------------------------------
-# /config, /memory, /profile REPL helpers
+# /config and /memory REPL helpers
 # ---------------------------------------------------------------------------
 
 _CONFIG_SETTABLE: dict[str, str] = {
@@ -2262,7 +2140,6 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "temperature":                    "float",
     "timeout_seconds":                "int",
     "max_output_tokens":              "int",
-    "chat_max_output_tokens":         "int",
     "autopilot_max_output_tokens":    "int",
     "compact_max_output_tokens":      "int",
     "max_agent_steps":                "int",
@@ -2424,34 +2301,6 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
 
     else:
         print("  Usage: /memory [status|list [n]|search <query>|clear|prune]")
-
-
-def _show_profile(config: dict[str, Any], mode: str, session: dict[str, Any]) -> None:
-    print()
-    cprint("  Hex CLI Profile", C.BOLD)
-    print(f"  Version         {VERSION}")
-    print(f"  Mode            {mode}")
-    backend = config.get("backend", "?")
-    print(f"  Backend         {backend}  →  {_backend_url(config)}")
-    print(f"  Model           {config.get('model', '?')}")
-    print(f"  Temperature     {config.get('temperature', '?')}")
-    print(f"  Max steps       {config.get('max_agent_steps', '?')}")
-    mem_state = "enabled" if config.get("memory_enabled", True) else "disabled"
-    tel_state = "enabled" if config.get("telemetry_enabled", True) else "disabled"
-    print(f"  Memory          {mem_state}")
-    print(f"  Telemetry       {tel_state}")
-    try:
-        alive = ping_backend(config)
-        status_str = "online" if alive else "offline"
-        status_col = C.BGREEN if alive else C.YELLOW
-    except Exception:
-        status_str, status_col = "unknown", C.DIM
-    cprint(f"  Backend status  {status_str}", status_col)
-    msgs = session.get("messages", [])
-    title = session.get("title", "New Chat")
-    est = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
-    print(f"  Session         {title!r}  ({len(msgs)} messages, ~{est:,} tokens)")
-    print()
 
 
 def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
@@ -2774,41 +2623,6 @@ def compact_history(
 # ---------------------------------------------------------------------------
 # Context estimate
 # ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Command generation (command mode)
-# ---------------------------------------------------------------------------
-
-def generate_command(config: dict[str, Any], query: str) -> str:
-    return extract_command(
-        run_cancellable(
-            "planning",
-            lambda: llm_generate(config, config["system_prompt"], f"User request: {query.strip()}"),
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
-# Chat mode
-# ---------------------------------------------------------------------------
-
-def chat_turn(
-    config: dict[str, Any], history: list[dict[str, str]], query: str
-) -> dict[str, str]:
-    if is_help_request(query):
-        return {"message": HELP_TEXT, "command": ""}
-    meta = local_meta_response(query, config)
-    if meta:
-        return {"message": meta, "command": ""}
-
-    msgs: list[dict[str, str]] = [
-        {"role": "system", "content": config.get("chat_system_prompt", CHAT_SYSTEM_PROMPT)},
-        *history,
-        {"role": "user", "content": query.strip()},
-    ]
-    raw, _ = call_llm(config, msgs, "chat_max_output_tokens", label="thinking")
-    return parse_chat_response(raw)
-
 
 # ---------------------------------------------------------------------------
 # Autopilot: multi-step agentic loop
@@ -3168,53 +2982,6 @@ def run_autopilot(
 
 
 # ---------------------------------------------------------------------------
-# Command execution UI
-# ---------------------------------------------------------------------------
-
-def copy_to_clipboard(command: str) -> None:
-    subprocess.run(["clip.exe"], input=command, text=True, check=True)
-
-
-def execute_command(command: str, shell_exe: str) -> int:
-    return subprocess.run([shell_exe, "-NoLogo", "-NoProfile", "-Command", command]).returncode
-
-
-def prompt_for_action() -> str:
-    while True:
-        choice = input("[E]xecute, [C]opy, [A]bort? ").strip().lower()
-        if choice in {"e", "execute", "c", "copy", "a", "abort"}:
-            return choice[:1]
-        print("Please choose E, C, or A.")
-
-
-def act_on_command(
-    command: str, shell_exe: str, force_copy: bool, force_execute: bool
-) -> int:
-    print()
-    cprint("Suggested command:", C.BOLD)
-    cprint(f"\n  {command}\n", C.BGREEN)
-    if force_copy:
-        copy_to_clipboard(command)
-        print("Copied.")
-        return 0
-    if force_execute:
-        return execute_command(command, shell_exe)
-    choice = prompt_for_action()
-    if choice == "c":
-        copy_to_clipboard(command)
-        print("Copied.")
-        return 0
-    if choice == "e":
-        return execute_command(command, shell_exe)
-    print("Aborted.")
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Result rendering
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # One-shot entry points
 # ---------------------------------------------------------------------------
 
@@ -3304,23 +3071,6 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     sync_session_store(sessions, session)
     render_result("Result", message)
     return 0
-
-
-def one_shot_command_mode(
-    config: dict[str, Any], query: str, shell_exe: str, args: argparse.Namespace
-) -> int:
-    sessions = load_history_store(config)
-    session = create_session()
-    append_session_message(session, "user", query)
-    tel = telemetry.SessionTelemetry(config)
-    turn = tel.start_turn("command", query)
-    llm_start = time.monotonic()
-    command = generate_command(config, query)
-    turn.record_llm(time.monotonic() - llm_start)
-    tel.record_turn(turn)
-    append_session_message(session, "assistant", f"Suggested command: {command}")
-    sync_session_store(sessions, session)
-    return act_on_command(command, shell_exe, args.copy, args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -3558,10 +3308,9 @@ def restart_backend(config: dict[str, Any]) -> bool:
 # did-you-mean hint, so anything missing here is invisible to both;
 # evals/test_lineedit.py cross-checks this against run_repl's source.
 REPL_COMMANDS = (
-    "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/open",
-    "/new", "/compact", "/context", "/config", "/memory", "/mode", "/model",
-    "/models", "/profile", "/checkpoints", "/tools", "/undo", "/save",
-    "/load", "/stats", "/diff", "/doctor", "/cwd", "/search", "/setup",
+    "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/new",
+    "/compact", "/config", "/memory", "/tools", "/undo", "/stats", "/diff",
+    "/doctor", "/cwd", "/search", "/setup",
 )
 
 
@@ -3573,14 +3322,13 @@ def _closest_command(word: str, extra: tuple[str, ...] = ()) -> str | None:
     return matches[0] if matches else None
 
 
-def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
+def run_repl(config: dict[str, Any]) -> int:
     shell_exe = detect_shell(str(config.get("shell_exe", "") or ""))
     sessions = load_history_store(config)
     current_session = create_session()
-    mode = initial_mode
     tel = telemetry.SessionTelemetry(config)
 
-    ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")), mode)
+    ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
     if config.get("memory_dreaming", False):
         memory.start_dreaming(lambda: config, llm_generate)
 
@@ -3594,7 +3342,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
     ) or (lambda p: input(p))
 
     while True:
-        prompt = repl_prompt(config, mode)
+        prompt = repl_prompt(config)
         try:
             query = read_line(prompt).strip()
         except EOFError:
@@ -3659,9 +3407,14 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 print(diffview.render_turn_diffs(snaps, _read_now))
             continue
 
-        # ── stats: read back what telemetry has been writing ──────────────
+        # ── stats: session summary + context usage (absorbed /context) ────
         if norm == "/stats" or norm.startswith("/stats "):
             _show_stats(config, tel, current_session)
+            _sys_tokens = estimate_tokens(build_autopilot_prompt(
+                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
+            show_context(current_session, config,
+                         budget=_history_budget_tokens(config),
+                         system_prompt_tokens=_sys_tokens)
             continue
 
         # ── doctor: diagnose the installation without leaving the REPL ────
@@ -3700,7 +3453,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             continue
 
         # ── resume ────────────────────────────────────────────────────────
-        if norm in {"/resume", "/open"} or norm.startswith("/resume ") or norm.startswith("/open "):
+        if norm == "/resume" or norm.startswith("/resume "):
             sync_session_store(sessions, current_session)
             sessions = load_history_store(config)
             parts = norm.split()
@@ -3769,47 +3522,6 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
                 print("Nothing to undo.")
             continue
 
-        # ── context ───────────────────────────────────────────────────────
-        if norm == "/context":
-            _sys_tokens = estimate_tokens(build_autopilot_prompt(
-                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
-            show_context(current_session, config,
-                         budget=_history_budget_tokens(config),
-                         system_prompt_tokens=_sys_tokens)
-            continue
-
-        # ── models ────────────────────────────────────────────────────────
-        if norm == "/models":
-            render_models(config)
-            continue
-
-        # ── mode ──────────────────────────────────────────────────────────
-        if norm in {"/mode autopilot", "/mode agent"}:
-            mode = "autopilot"
-            cprint("Mode: autopilot", C.DIM)
-            continue
-        if norm == "/mode chat":
-            mode = "chat"
-            cprint("Mode: chat", C.DIM)
-            continue
-        if norm == "/mode command":
-            mode = "command"
-            cprint("Mode: command", C.DIM)
-            continue
-        if norm == "/mode" or norm.startswith("/mode "):
-            cprint("Usage: /mode autopilot|chat|command", C.YELLOW)
-            continue
-
-        # ── model ─────────────────────────────────────────────────────────
-        if norm == "/model" or norm.startswith("/model "):
-            new_model = query.strip()[len("/model "):].strip() if " " in norm else ""
-            if new_model:
-                config["model"] = new_model
-                cprint(f"Model: {new_model}", C.BCYAN)
-            else:
-                cprint(f"Current model: {config.get('model', 'unknown')}", C.DIM)
-            continue
-
         # ── cwd ───────────────────────────────────────────────────────────
         if norm == "/cwd" or norm.startswith("/cwd "):
             parts_cwd = query.strip().split(None, 1)
@@ -3834,66 +3546,6 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             _handle_memory_cmd(query.strip(), config)
             continue
 
-        # ── profile ───────────────────────────────────────────────────────
-        if norm == "/profile":
-            _show_profile(config, mode, current_session)
-            continue
-
-        # ── checkpoints ───────────────────────────────────────────────────
-        if norm == "/checkpoints":
-            cps = _list_checkpoints()
-            if not cps:
-                print("  No checkpoints saved.")
-            else:
-                print()
-                for cp in cps:
-                    ts = cp["created_at"][:16] if len(cp.get("created_at", "")) >= 16 else cp.get("created_at", "?")
-                    cprint(
-                        f"  {cp['name']:<24}  {ts}  ({cp['message_count']} messages)  {cp['cwd']}",
-                        C.DIM,
-                    )
-                print()
-            continue
-
-        if norm == "/save" or norm.startswith("/save "):
-            cp_name = query.strip()[len("/save "):].strip() if " " in norm else ""
-            if not cp_name:
-                print("  Usage: /save <name>")
-            else:
-                try:
-                    cp_path = _save_checkpoint(cp_name, current_session, str(Path.cwd()))
-                    cprint(f"  Checkpoint saved: {cp_path.name}", C.BCYAN)
-                except Exception as exc:
-                    cprint(f"  Could not save checkpoint: {exc}", C.YELLOW)
-            continue
-
-        if norm == "/load" or norm.startswith("/load "):
-            cp_name = query.strip()[len("/load "):].strip() if " " in norm else ""
-            if not cp_name:
-                print("  Usage: /load <name>")
-                continue
-            cp_data = _load_checkpoint(cp_name)
-            if cp_data is None:
-                cprint(f"  No checkpoint named '{cp_name}' found.", C.YELLOW)
-                continue
-            msgs = current_session.get("messages", [])
-            if msgs:
-                try:
-                    confirm = input(
-                        f"  Load '{cp_name}'? This will replace {len(msgs)} current message(s). [y/N] "
-                    ).strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    confirm = "n"
-                if confirm not in ("y", "yes"):
-                    print("  Aborted.")
-                    continue
-            current_session["messages"] = cp_data.get("messages", [])
-            touch_session(current_session)
-            sync_session_store(sessions, current_session)
-            n = len(current_session["messages"])
-            cprint(f"  Loaded checkpoint '{cp_name}' ({n} messages).", C.BCYAN)
-            continue
-
         # Custom commands — user-authored prompt templates. Consulted only
         # after every built-in above has declined, so a custom file can
         # never shadow a real command. The expanded template falls through
@@ -3902,9 +3554,9 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
         if query.startswith("/"):
             cmd_word = query.split()[0]
             # Belt-and-braces on top of dispatch order: a built-in NAME is
-            # never eligible for the custom lookup. Several built-ins only
-            # matched their "<cmd> <arg>" form, so a bare /save or /load fell
-            # through here and ran a user template as an agent task.
+            # never eligible for the custom lookup, even when its handler
+            # only matched the "<cmd> <arg>" form (a bare built-in must not
+            # run a same-named user template as an agent task).
             is_builtin = cmd_word.lower() in REPL_COMMANDS
             template = None if is_builtin else custom_commands.load(cmd_word)
             if template is not None:
@@ -3922,56 +3574,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             cprint(f"  Unknown command {cmd_word}.{hint} Type /help for the list.", C.YELLOW)
             continue
 
-        # ── dispatch to mode ──────────────────────────────────────────────
+        # ── agent turn ────────────────────────────────────────────────────
         history: list[dict[str, str]] = current_session.get("messages", [])
-
-        if mode == "command":
-            turn = tel.start_turn("command", query)
-            try:
-                llm_start = time.monotonic()
-                command = generate_command(config, query)
-                turn.record_llm(time.monotonic() - llm_start)
-                act_on_command(command, shell_exe, False, False)
-                append_session_message(current_session, "user", query)
-                append_session_message(current_session, "assistant", f"Command: {command}")
-                sync_session_store(sessions, current_session)
-                tel.record_turn(turn)
-            except (UserCancelled, KeyboardInterrupt):
-                print("\nCancelled.\n")
-                tel.record_turn(turn, status="cancelled")
-            except Exception as exc:  # noqa: BLE001
-                ui.error_box(str(exc))
-                tel.record_turn(turn, status="error")
-                if DEBUG:
-                    raise
-            continue
-
-        if mode == "chat":
-            turn = tel.start_turn("chat", query)
-            try:
-                llm_start = time.monotonic()
-                response = chat_turn(config, history, query)
-                turn.record_llm(time.monotonic() - llm_start)
-                render_result("Answer", response["message"])
-                append_session_message(current_session, "user", query)
-                assistant_content = response["message"]
-                if response["command"]:
-                    act_on_command(response["command"], shell_exe, False, False)
-                    assistant_content += f"\nCommand: {response['command']}"
-                append_session_message(current_session, "assistant", assistant_content)
-                sync_session_store(sessions, current_session)
-                tel.record_turn(turn)
-            except (UserCancelled, KeyboardInterrupt):
-                print("\nCancelled.\n")
-                tel.record_turn(turn, status="cancelled")
-            except Exception as exc:  # noqa: BLE001
-                ui.error_box(str(exc))
-                tel.record_turn(turn, status="error")
-                if DEBUG:
-                    raise
-            continue
-
-        # autopilot
         turn = tel.start_turn("autopilot", query)
         try:
             message = run_autopilot(config, history, query, shell_exe, session=current_session, turn=turn)
@@ -4085,25 +3689,7 @@ def main() -> int:
 
     try:
         if not query:
-            return run_repl(config, initial_mode=args.mode)
-        if args.command_only or args.mode == "command":
-            return one_shot_command_mode(config, query, shell_exe, args)
-        if args.mode == "chat":
-            sessions = load_history_store(config)
-            session = create_session()
-            append_session_message(session, "user", query)
-            tel = telemetry.SessionTelemetry(config)
-            turn = tel.start_turn("chat", query)
-            llm_start = time.monotonic()
-            response = chat_turn(config, [], query)
-            turn.record_llm(time.monotonic() - llm_start)
-            tel.record_turn(turn)
-            append_session_message(session, "assistant", response["message"])
-            sync_session_store(sessions, session)
-            render_result("Answer", response["message"])
-            if response["command"]:
-                act_on_command(response["command"], shell_exe, args.copy, args.execute)
-            return 0
+            return run_repl(config)
         return one_shot_autopilot(config, query, shell_exe)
     except (UserCancelled, KeyboardInterrupt):
         cprint("Cancelled.", C.YELLOW, file=sys.stderr)
