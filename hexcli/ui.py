@@ -153,8 +153,8 @@ HELP_TEXT = textwrap.dedent("""
     SLASH COMMANDS:
       /help                         this help
       /history                      list saved sessions
-      /clear                        clear screen + start fresh context (old session stays in /history)
-      /new                          same, but keeps the scrollback
+      /clear                        clear screen and start a new session (previous saved to /history)
+      /new                          start a new session, keep the scrollback
       /resume <n>                   resume session #n from /history
       /compact                      summarise + compress history (saves context)
       /undo                         remove last exchange; restores files if the turn wrote any
@@ -362,9 +362,9 @@ def show_context(
     print(f"  Model:            {config.get('model', 'unknown')}")
     print(f"  Backend:          {config.get('backend', 'ollama')}")
     if est_tokens >= crit:
-        cprint("  ✗ Past the degradation threshold — auto-compact fires after the next turn.", C.BRED)
+        cprint("  ✗ Past degradation threshold; auto-compact runs after the next turn.", C.BRED)
     elif est_tokens >= warn:
-        cprint("  ⚠ At the history budget — auto-compact fires after this turn.", C.BYELLOW)
+        cprint("  ⚠ At history budget; auto-compact runs after this turn.", C.BYELLOW)
     print()
 
 
@@ -462,7 +462,7 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
             return buf.strip().lower() in {"y", "yes"}
         if ch == "\x03":  # Ctrl-C — an emphatic no, not a crash
             print()
-            cprint("   Cancelled — treating as no.", C.DIM)
+            cprint("   Cancelled; denied.", C.DIM)
             return False
         if ch in ("\b", "\x7f"):
             if buf:
@@ -479,7 +479,7 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
         sys.stdout.write(ch)
         sys.stdout.flush()
     print()
-    cprint(f"   No response for {timeout_s:.0f}s — denying.", C.DIM)
+    cprint(f"   No response after {timeout_s:.0f}s; denied.", C.DIM)
     return False
 
 
@@ -499,7 +499,7 @@ def confirm_sensitive_command(cmd: str) -> bool:
     print()
     cprint("⚠  Agent wants to access sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
     cprint(f"   {cmd}", C.RED)
-    cprint("   (credentials / keys / security files — deny unless YOU asked for exactly this)", C.DIM)
+    cprint("   (credentials / keys / security files: deny unless YOU asked for exactly this)", C.DIM)
     print()
     return confirm_or_deny("Allow? [y/N] ")
 

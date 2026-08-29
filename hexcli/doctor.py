@@ -183,7 +183,7 @@ def run_doctor(config: dict[str, Any], app_dir: Path) -> int:
     checks += check_workspace()
 
     print()
-    cprint("Hex CLI — installation check", C.BOLD)
+    cprint("Hex CLI installation check", C.BOLD)
     print()
     for c in checks:
         print(f"  {_mark(c.status)}  {c.name:<22} {c.detail}")
