@@ -106,7 +106,7 @@ def run_wizard(
     session immediately, not just the next launch.
     """
     print()
-    cprint("  Hex CLI setup — Enter keeps the current value.", C.BOLD)
+    cprint("  Hex CLI setup  (Enter keeps the current value)", C.BOLD)
     print()
     chosen: dict[str, Any] = {}
     try:
@@ -126,7 +126,7 @@ def run_wizard(
         confirm = ask(f"  Save to {config_path.name}? [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        cprint("  Setup cancelled — nothing written.", C.YELLOW)
+        cprint("  Setup cancelled; nothing written.", C.YELLOW)
         return False
     if confirm not in ("", "y", "yes"):
         cprint("  Nothing written.", C.YELLOW)

@@ -2420,7 +2420,7 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
         if removed:
             cprint(f"  Pruned {removed} old rule(s) from memory_rules.md.", C.BCYAN)
         else:
-            cprint("  Rules file is within the cap — nothing pruned.", C.DIM)
+            cprint("  Rules file within cap; nothing pruned.", C.DIM)
 
     else:
         print("  Usage: /memory [status|list [n]|search <query>|clear|prune]")
@@ -3401,8 +3401,8 @@ def _maybe_auto_compact(
             return
     label = f"~{est:,} tokens"
     if est >= crit_tokens:
-        label += " — past degradation threshold"
-    cprint(f"  Context {label} — auto-compacting…", C.BCYAN)
+        label += ", past degradation threshold"
+    cprint(f"  Auto-compacting ({label})", C.BCYAN)
     try:
         if use_llm:
             compact_history(config, session, quiet=True)
@@ -3412,7 +3412,7 @@ def _maybe_auto_compact(
         n_after = len(session.get("messages", []))
         cprint(f"  Auto-compacted. {n_after} active messages.", C.DIM)
     except UserCancelled:
-        cprint("  Auto-compact cancelled. Run /compact manually when ready.", C.YELLOW)
+        cprint("  Auto-compact cancelled. Run /compact manually.", C.YELLOW)
     except Exception as exc:  # noqa: BLE001
         cprint(f"  Auto-compact failed ({exc}). Run /compact manually.", C.YELLOW)
 
@@ -3513,7 +3513,7 @@ def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
         answer = "n"
     if answer in ("", "y", "yes"):
         if restart_backend(config):
-            cprint("  Server restarted — your session is intact, try the request again.", C.BGREEN)
+            cprint("  Server restarted; session intact. Retry the last request.", C.BGREEN)
         else:
             cprint("  Restart failed. Run: python launcher.py", C.YELLOW)
 
@@ -3638,8 +3638,8 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             parts = query.split(None, 1)
             term = parts[1].strip() if len(parts) > 1 else ""
             if not term:
-                cprint("  Usage: /search <text> — searches titles and messages "
-                       "of saved sessions.", C.DIM)
+                cprint("  Usage: /search <text>   (searches titles and messages "
+                       "of saved sessions)", C.DIM)
                 continue
             sync_session_store(sessions, current_session)
             sessions = load_history_store(config)
@@ -3689,7 +3689,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = create_session()
-            cprint("Fresh session — context cleared (previous kept in /history).", C.DIM)
+            cprint("Session cleared. Previous saved to /history.", C.DIM)
             continue
 
         # ── new session ───────────────────────────────────────────────────
