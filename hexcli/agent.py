@@ -3388,7 +3388,7 @@ def _maybe_auto_compact(
     """
     msgs = session.get("messages", [])
     est = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
-    warn_tokens, crit_tokens = _history_budget_tokens(config)
+    warn_tokens, _ = _history_budget_tokens(config)
     if est < warn_tokens:
         return
     use_llm = bool(config.get("auto_compact_uses_llm", False))
@@ -3399,18 +3399,17 @@ def _maybe_auto_compact(
             for m in compact_history_deterministic(probe)))
         if est - est_after < _AUTO_COMPACT_MIN_GAIN_TOKENS:
             return
-    label = f"~{est:,} tokens"
-    if est >= crit_tokens:
-        label += ", past degradation threshold"
-    cprint(f"  Auto-compacting ({label})", C.BCYAN)
+    # One line, after the fact, no numbers — token detail lives in /context.
+    # The slow LLM path announces itself first so the pause is explained;
+    # the deterministic path is instant and needs no preamble.
     try:
         if use_llm:
+            cprint("  Compacting chat history...", C.BCYAN)
             compact_history(config, session, quiet=True)
         else:
             compact_history_deterministic(session)
         sync_session_store(sessions, session)
-        n_after = len(session.get("messages", []))
-        cprint(f"  Auto-compacted. {n_after} active messages.", C.DIM)
+        cprint("  Chat history compacted.", C.DIM)
     except UserCancelled:
         cprint("  Auto-compact cancelled. Run /compact manually.", C.YELLOW)
     except Exception as exc:  # noqa: BLE001
@@ -3513,7 +3512,7 @@ def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
         answer = "n"
     if answer in ("", "y", "yes"):
         if restart_backend(config):
-            cprint("  Server restarted; session intact. Retry the last request.", C.BGREEN)
+            cprint("  Server restarted. Retry the last request.", C.BGREEN)
         else:
             cprint("  Restart failed. Run: python launcher.py", C.YELLOW)
 
@@ -3689,7 +3688,7 @@ def run_repl(config: dict[str, Any], initial_mode: str = "autopilot") -> int:
             sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = create_session()
-            cprint("Session cleared. Previous saved to /history.", C.DIM)
+            cprint("Chat history cleared.", C.DIM)
             continue
 
         # ── new session ───────────────────────────────────────────────────
