@@ -153,8 +153,8 @@ HELP_TEXT = textwrap.dedent("""
     SLASH COMMANDS:
       /help                         this help
       /history                      list saved sessions
-      /clear                        clear screen and start a new session (previous saved to /history)
-      /new                          start a new session, keep the scrollback
+      /clear                        clear screen and chat history
+      /new                          clear chat history, keep the scrollback
       /resume <n>                   resume session #n from /history
       /compact                      summarise + compress history (saves context)
       /undo                         remove last exchange; restores files if the turn wrote any
