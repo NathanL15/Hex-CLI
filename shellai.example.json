@@ -5,7 +5,6 @@
   "temperature": 0.1,
   "timeout_seconds": 300,
   "max_output_tokens": 512,
-  "chat_max_output_tokens": 1024,
   "autopilot_max_output_tokens": 2048,
   "compact_max_output_tokens": 512,
   "max_agent_steps": 15,

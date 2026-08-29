@@ -177,7 +177,6 @@ def _path_candidates(fragment: str) -> list[str]:
 def default_completer(
     commands: Sequence[str],
     config_keys: Callable[[], Iterable[str]] | None = None,
-    modes: Sequence[str] = ("autopilot", "chat", "command"),
 ) -> Callable[[str], list[str]]:
     """Completer over slash commands, their arguments, and file paths.
 
@@ -198,10 +197,8 @@ def default_completer(
         head = parts[0].lower() if parts else ""
         if head == "/config" and len(parts) <= 2 and config_keys is not None:
             return sorted(k for k in config_keys() if k.startswith(word))
-        if head == "/mode" and len(parts) <= 2:
-            return [m for m in modes if m.startswith(word.lower())]
-        if head in {"/save", "/load", "/resume", "/model", "/memory"}:
-            return []  # names are not on disk in a predictable place
+        if head in {"/resume", "/memory"}:
+            return []  # arguments are not on disk in a predictable place
         return _path_candidates(word)
 
     return complete

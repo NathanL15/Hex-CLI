@@ -311,7 +311,6 @@ def _write_npurun_config() -> None:
         "temperature": 0.1,
         "timeout_seconds": 300,
         "max_output_tokens": 1024,
-        "chat_max_output_tokens": 2048,
         "autopilot_max_output_tokens": 4096,
         "max_agent_steps": 15,
         "tool_output_limit": 12000,
@@ -465,7 +464,7 @@ except Exception as e:
     dml_cfg = {
         "backend": "openai", "model": "phi4-mini",
         "temperature": 0.1, "timeout_seconds": 300,
-        "max_output_tokens": 512, "chat_max_output_tokens": 1024,
+        "max_output_tokens": 512,
         "autopilot_max_output_tokens": 2048, "max_agent_steps": 15,
         "tool_output_limit": 12000, "use_streaming": True,
         "openai_compatible": {"base_url": f"http://127.0.0.1:{DML_PORT}/v1", "api_key": "local"},

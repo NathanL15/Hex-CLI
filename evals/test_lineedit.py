@@ -344,7 +344,7 @@ def test_history_survives_a_corrupt_file() -> None:
 # Completion
 # ---------------------------------------------------------------------------
 
-COMMANDS = ("/help", "/history", "/config", "/compact", "/mode", "/new")
+COMMANDS = ("/help", "/history", "/config", "/compact", "/memory", "/new")
 
 
 def test_unique_command_completes_fully() -> None:
@@ -375,10 +375,12 @@ def test_config_keys_complete() -> None:
     assert run(keys, completer=comp) == "/config show_diffs "
 
 
-def test_mode_values_complete() -> None:
+def test_memory_arguments_do_not_path_complete() -> None:
+    # /memory takes store subcommands, not paths — Tab must stay quiet
+    # instead of inserting a filename from the cwd.
     comp = default_completer(COMMANDS)
-    keys = typed("/mode ch") + [TAB, ENTER]
-    assert run(keys, completer=comp) == "/mode chat "
+    keys = typed("/memory li") + [TAB, ENTER]
+    assert run(keys, completer=comp) == "/memory li"
 
 
 def test_path_completion_finds_a_file() -> None:
@@ -627,7 +629,7 @@ TESTS = [
     test_ambiguous_command_completes_common_prefix,
     test_common_prefix_is_inserted_when_it_helps,
     test_config_keys_complete,
-    test_mode_values_complete,
+    test_memory_arguments_do_not_path_complete,
     test_path_completion_finds_a_file,
     test_path_completion_marks_directories,
     test_completed_directory_can_still_be_submitted,
