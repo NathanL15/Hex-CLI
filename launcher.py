@@ -148,11 +148,10 @@ def _dress_console_window() -> None:
         if h_icon:
             u32.SendMessageW(hwnd, WM_SETICON, which, h_icon)
 
-
-try:
-    _dress_console_window()
-except Exception:
-    pass  # cosmetics only; never block launch over them
+# Called from main(), NOT at import time: the evals import this module, and
+# an import-time WM_SETICON re-badges whatever console the importing process
+# happens to be running in (a test run turned the developer's own terminal
+# tab into a Hex window).
 
 # ---------------------------------------------------------------------------
 # ANSI helpers
@@ -547,6 +546,10 @@ def run_dml_path(conda: Path) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    try:
+        _dress_console_window()
+    except Exception:
+        pass  # cosmetics only; never block launch over them
     print()
     print(bold(cyan("  Hex CLI")))
     print(dim("  Qwen3-4B (Hexagon NPU) → Phi-4-mini (Adreno GPU) → Ollama CPU"))
