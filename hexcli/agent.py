@@ -2603,6 +2603,30 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
 # /compact
 # ---------------------------------------------------------------------------
 
+# Markers for the deterministic compactor's output. Constants because the
+# compactor must RECOGNISE its own previous output on re-compaction (see
+# below); inline strings in two places would drift apart silently.
+_CONDENSED_MARKER = "[Earlier turns, condensed:]"
+_CONDENSED_ACK = "Understood — continuing with that context in mind."
+_CONDENSED_DROP_RE = re.compile(r"^- \[…(\d+) earlier turn")
+
+
+def _expand_condensed(content: str) -> tuple[list[str], int]:
+    """Split a previous condensed block back into (stub_lines, dropped_count)."""
+    lines: list[str] = []
+    dropped = 0
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line.startswith("- "):
+            continue  # header/footer markers
+        m = _CONDENSED_DROP_RE.match(line)
+        if m:
+            dropped += int(m.group(1))
+            continue
+        lines.append(line)
+    return lines, dropped
+
+
 def compact_history_deterministic(
     session: dict[str, Any],
     keep_recent: int = 4,
@@ -2617,6 +2641,15 @@ def compact_history_deterministic(
     keeps the most recent turns verbatim and reduces older ones to one-line
     stubs: instant, free, and impossible to hallucinate. The LLM summariser
     stays available for explicit /compact, where the user opts into the cost.
+
+    Re-compaction is merge-aware: a previous run's condensed block is expanded
+    back into its stub lines instead of being stubbed as an opaque message.
+    Before this, every re-compact crushed the whole block into one 160-char
+    stub (stubs-of-stubs), so at the 250-token budget floor — where compaction
+    fires every couple of turns — older context was destroyed almost
+    immediately. Merging also makes the function idempotent: with no new
+    messages the output is byte-identical, which is what lets auto-compact
+    dry-run it as a thrash guard.
     """
     messages: list[dict[str, str]] = list(session.get("messages", []))
     if len(messages) <= keep_recent + 1:
@@ -2629,17 +2662,31 @@ def compact_history_deterministic(
     stub_lines: list[str] = []
     used = 0
     dropped = 0
-    for m in reversed(head):
-        text = " ".join((m.get("content") or "").split())
-        if not text:
-            continue
-        who = "You" if m.get("role") == "user" else "Hex"
-        line = f"- {who}: {text[:stub_chars]}" + ("…" if len(text) > stub_chars else "")
+
+    def _take(line: str) -> None:
+        nonlocal used, dropped
         if used + len(line) > total_stub_chars:
             dropped += 1
-            continue
+            return
         stub_lines.append(line)
         used += len(line)
+
+    for m in reversed(head):
+        role = m.get("role")
+        raw = m.get("content") or ""
+        if role == "assistant" and raw.strip() == _CONDENSED_ACK:
+            continue  # scaffolding from a previous compaction, not content
+        if role == "user" and raw.lstrip().startswith(_CONDENSED_MARKER):
+            inner, inner_dropped = _expand_condensed(raw)
+            dropped += inner_dropped
+            for line in reversed(inner):
+                _take(line)
+            continue
+        text = " ".join(raw.split())
+        if not text:
+            continue
+        who = "You" if role == "user" else "Hex"
+        _take(f"- {who}: {text[:stub_chars]}" + ("…" if len(text) > stub_chars else ""))
     stub_lines.reverse()
     if dropped:
         stub_lines.insert(0, f"- […{dropped} earlier turn(s) dropped]")
@@ -2647,12 +2694,12 @@ def compact_history_deterministic(
     new_messages: list[dict[str, str]] = [
         {
             "role": "user",
-            "content": ("[Earlier turns, condensed:]\n" + "\n".join(stub_lines)
+            "content": (_CONDENSED_MARKER + "\n" + "\n".join(stub_lines)
                         + "\n[Continue from here]"),
         },
         {
             "role": "assistant",
-            "content": "Understood — continuing with that context in mind.",
+            "content": _CONDENSED_ACK,
         },
         *tail,
     ]
@@ -3288,6 +3335,10 @@ _DEGRADATION_CLIFF_TOKENS = 2_600
 _TURN_OVERHEAD_TOKENS = 500
 # Never demand compaction below this — pathological when the prompt is huge.
 _MIN_HISTORY_BUDGET_TOKENS = 250
+# Auto-compact only fires when its dry run shows at least this much freed.
+# Below that, compacting is churn: it rewrites history the model then has to
+# re-read, without buying room for the next turn.
+_AUTO_COMPACT_MIN_GAIN_TOKENS = 100
 
 
 def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
@@ -3326,18 +3377,34 @@ def _maybe_auto_compact(
     Fires after each autopilot turn. The threshold is derived from the actual
     system-prompt size (see _history_budget_tokens), not a hardcoded guess.
     The full summary is suppressed (quiet=True); only a one-line notice prints.
+
+    Thrash guard: with a 2,200-token prompt the history budget clamps to the
+    250-token floor, and the compacted tail itself usually still exceeds that —
+    so v2.2 re-fired every single turn, shredding the condensed block a little
+    further each time while freeing almost nothing (the user-reported "by the
+    time it compacts, it autocompacts again by the next message"). The
+    deterministic compactor is instant and idempotent, so dry-run it first and
+    fire only when it would actually reclaim meaningful room.
     """
     msgs = session.get("messages", [])
     est = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
     warn_tokens, crit_tokens = _history_budget_tokens(config)
     if est < warn_tokens:
         return
+    use_llm = bool(config.get("auto_compact_uses_llm", False))
+    if not use_llm:
+        probe: dict[str, Any] = {"messages": msgs}
+        est_after = _TOKEN_ESTIMATOR.estimate(sum(
+            len(m.get("content", ""))
+            for m in compact_history_deterministic(probe)))
+        if est - est_after < _AUTO_COMPACT_MIN_GAIN_TOKENS:
+            return
     label = f"~{est:,} tokens"
     if est >= crit_tokens:
         label += " — past degradation threshold"
     cprint(f"  Context {label} — auto-compacting…", C.BCYAN)
     try:
-        if config.get("auto_compact_uses_llm", False):
+        if use_llm:
             compact_history(config, session, quiet=True)
         else:
             compact_history_deterministic(session)
