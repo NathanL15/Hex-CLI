@@ -136,6 +136,61 @@ def test_deterministic_compaction_preserves_recent_facts() -> None:
     assert "config/secrets.toml" in joined, "recent concrete facts must survive"
 
 
+def test_recompaction_is_idempotent() -> None:
+    """Compacting an already-compacted history with no new messages must be a
+    byte-identical no-op — the property the auto-compact dry-run guard relies
+    on. Before the merge-aware compactor, each pass crushed the condensed
+    block into a single 160-char stub (stubs-of-stubs)."""
+    s = _session(10)
+    sa.compact_history_deterministic(s)
+    first = [dict(m) for m in s["messages"]]
+    out = sa.compact_history_deterministic(s)
+    assert out == first, "re-compaction with no new content must not change history"
+
+
+def test_condensed_lines_survive_recompaction() -> None:
+    """After new turns arrive, re-compaction must carry the previous block's
+    stub lines through (newest kept under the budget), not stub the block."""
+    s = _session(6)
+    sa.compact_history_deterministic(s)
+    inner = [ln for ln in s["messages"][0]["content"].splitlines()
+             if ln.startswith("- ") and not ln.startswith("- […")]
+    assert inner, "setup: first compaction produced no stub lines"
+    s["messages"].append({"role": "user", "content": "new question " + "detail " * 80})
+    s["messages"].append({"role": "assistant", "content": "new answer " + "words " * 80})
+    out = sa.compact_history_deterministic(s)
+    block = out[0]["content"]
+    assert "[Earlier turns, condensed:]" not in block.split("\n", 1)[1], (
+        "previous condensed block was stubbed wholesale instead of merged")
+    kept = sum(1 for ln in inner if ln in block)
+    assert kept >= len(inner) // 2, (
+        f"only {kept}/{len(inner)} previous stub lines survived the merge")
+
+
+def test_auto_compact_skips_zero_gain_refire() -> None:
+    """The thrash case: already at the floor, nothing new to shed → the guard
+    must skip instead of rewriting history every turn."""
+    s = _session(10)
+    sa.compact_history_deterministic(s)
+    assert s["compact_count"] == 1
+    before = [dict(m) for m in s["messages"]]
+    sa._maybe_auto_compact({**_CFG, "context_warn_tokens": 10}, s, [s])
+    assert s["compact_count"] == 1, "auto-compact re-fired with nothing to gain"
+    assert s["messages"] == before, "guarded auto-compact must not touch history"
+
+
+def test_auto_compact_fires_again_after_real_growth() -> None:
+    """The guard must not wedge compaction shut: once enough new content
+    accumulates that compacting frees real room, it fires again."""
+    s = _session(10)
+    sa.compact_history_deterministic(s)
+    for i in range(3):
+        s["messages"].append({"role": "user", "content": f"more q{i} " + "detail " * 120})
+        s["messages"].append({"role": "assistant", "content": f"more a{i} " + "words " * 120})
+    sa._maybe_auto_compact({**_CFG, "context_warn_tokens": 10}, s, [s])
+    assert s["compact_count"] == 2, "auto-compact should fire after real growth"
+
+
 def test_auto_compact_uses_deterministic_path_by_default() -> None:
     s = _session(12)
     sessions = [s]
@@ -203,6 +258,10 @@ TESTS = [
     test_deterministic_compaction_makes_no_llm_call,
     test_deterministic_compaction_noop_on_short_history,
     test_deterministic_compaction_preserves_recent_facts,
+    test_recompaction_is_idempotent,
+    test_condensed_lines_survive_recompaction,
+    test_auto_compact_skips_zero_gain_refire,
+    test_auto_compact_fires_again_after_real_growth,
     test_auto_compact_uses_deterministic_path_by_default,
 ]
 
