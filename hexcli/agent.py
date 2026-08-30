@@ -703,17 +703,25 @@ def _http_request(
         conn.request(method, path, body=body, headers=headers)
         resp = conn.getresponse()
     except (
-        http.client.RemoteDisconnected, http.client.CannotSendRequest,
+        http.client.RemoteDisconnected, http.client.ImproperConnectionState,
         http.client.BadStatusLine,
         BrokenPipeError, ConnectionResetError, ConnectionAbortedError,
     ):
+        # ImproperConnectionState covers CannotSendRequest AND ResponseNotReady:
+        # a request that died mid-cycle (server killed for a restart) leaves the
+        # cached connection stuck in Request-sent, and without the reconnect the
+        # first call after a successful restart failed with ResponseNotReady.
         conn.close()
         try:
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
         except OSError as exc:
+            conn.close()
             raise urllib.error.URLError(exc) from exc
     except OSError as exc:
+        # Close before raising, or the poisoned connection stays cached and
+        # every later call inherits its half-sent state.
+        conn.close()
         raise urllib.error.URLError(exc) from exc
 
     if resp.status >= 400:
