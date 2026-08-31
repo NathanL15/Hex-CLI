@@ -92,3 +92,6 @@ jobs:
 
       - name: Unit tests — /setup wizard
         run: python evals/test_setup_wizard.py
+
+      - name: Unit tests — prompt split (direct stage + router)
+        run: python evals/test_prompt_split.py

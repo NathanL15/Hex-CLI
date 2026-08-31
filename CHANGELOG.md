@@ -4,6 +4,64 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.3.0 — 2026-08-31
+
+The simplification release — and the one that closes the context question
+with measurement instead of leaving it open.
+
+### One mode, 18 commands
+
+Chat and command modes are gone, along with `/save`, `/load`,
+`/checkpoints`, `/open`, `/profile`, `/model`, `/models`, `/mode`, and
+`/context` (now the tail of `/stats`): −685 lines, no capability anyone
+used. The app is the agent: REPL, one-shot, pipe. Status messages were
+rewritten to terminal-tool voice ("Chat history cleared."), and `/clear`
+now actually clears — screen and context — with `/new` keeping the
+scrollback.
+
+### Auto-compact stops thrashing
+
+At the 250-token history floor, auto-compact re-fired every message and
+crushed its own previous summary into a single stub each pass. The
+deterministic compactor is now merge-aware (idempotent on its own output)
+and auto-compact dry-runs it first, firing only when ≥100 tokens would
+actually be freed.
+
+### The context question, closed
+
+A dedicated sweep (`evals/cases_cliff.py`) ran the production loop at
+controlled input sizes: quality is **flat** from 2,370 to 2,973 measured
+input tokens, and the runtime silently trims anything above ~3K — the
+shipping config already sits at that ceiling. A two-stage prompt-split A/B
+(extended suite, fresh server per arm) kept one stage and rejected the
+other:
+
+| Prompt-split A/B (extended ×3) | baseline | split |
+|---|---|---|
+| Run-level | 91/117 (77.8%) | 87/117 (74.4%), p=0.65 |
+| Knowledge-query first token (median) | 10.1 s | **6.0 s** |
+
+The **direct stage** ships on by default (`prompt_split`): pure-knowledge
+queries get a small no-tools prompt, tool restraint becomes structural,
+and first-token latency on those turns drops 40%. The **continuation
+stage** (leaner prompt for steps ≥ 2) was rejected: edit anchors
+degenerated under the changed prompt — the trimming experiment's
+degradation fingerprint, now reproduced at every loop depth. Conclusion,
+recorded in the paper: the 250-token history floor is a property of the
+model and the 4K bundle, not a harness gap.
+
+### Fixes
+
+- Visible caret while typing (the line editor hid the hardware cursor for
+  the whole read; now only per-repaint).
+- Real Hex taskbar icon: the Start Menu shortcut launches through classic
+  conhost (Windows Terminal has no per-profile taskbar icon), and the
+  launcher sets the window icon at startup — from `main()`, not import,
+  after a test run re-badged the developer's own terminal.
+- A failed request can no longer poison the cached keep-alive connection:
+  reconnect covers `ResponseNotReady`, so "restart the model server" is
+  followed by a working retry.
+
 ## 2.2.0 — 2026-08-16
 
 The everyday-correctness release. Two wild failures — "what cpu do i have"
