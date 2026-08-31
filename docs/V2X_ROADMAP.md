@@ -98,10 +98,22 @@ steps.*
 
 ## Phase: The Split — codebase health (agent.py stages 3–8)
 
-agent.py is ~3,300 lines. The split plan and its hazard playbook
-(monkeypatch vacuity — see project memory / §14.16) already exist; remaining
-stages in order of increasing risk: parsing → backends → tools →
-config/`_ACTIVE_CONFIG` (hardest) → repl → loop.
+**Progress 2026-08-31 (commits 7156138..cac1462):** four stages landed —
+`parsing.py` (protocol text + TOOL_NAMES), `http_client.py` (keep-alive
+transport), `cancel.py` (Esc-cancel primitives; the eval runner now silences
+BOTH hexcli.agent and hexcli.cancel), `tools.py` (15 leaf tools +
+write-scope guards owning `_HOME`). agent.py 3,818 → 2,829 lines; every
+moved-and-patched symbol verified live by sentinel/mutation probes (zero
+vacuous patches).
+
+Remaining, in order of increasing risk: config/compaction → repl → loop/LLM.
+The repl move needs a name-qualification pass over ~40 agent-resident
+references (beware: run_repl's local `sessions` shadows the module — the
+`sessions_search` alias exists for exactly this). The loop/LLM layer is
+entangled with five patched globals (mock queue, token estimator, session
+id, `_ACTIVE_CONFIG`, undo snapshots) and should be a state-injection
+redesign, not a cut-and-paste. The hazard playbook (monkeypatch vacuity —
+see project memory / §14.16) applies to every stage.
 
 - One stage per PR, mutation-tested (neutralize the moved thing, confirm the
   suite fails, restore).
