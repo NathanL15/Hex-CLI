@@ -255,6 +255,7 @@ The ones most worth knowing:
 | `autopilot_confirm_sensitive` | `true` | gate credential/key access |
 | `network_access` | `"ask"` | confirm each `fetch_url`; `"deny"` / `"allow"` |
 | `require_verification` | `true` | nudge the agent to check its own edits |
+| `prompt_split` | `true` | no-tools fast path for pure-knowledge queries |
 | `escalation_local_model` | `""` | bigger local model to consult when stuck |
 | `memory_enabled` | `true` | semantic memory |
 
@@ -263,7 +264,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**19 offline suites (591 tests)** — no LLM required, all against a mock backend:
+**23 offline suites (687 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage
