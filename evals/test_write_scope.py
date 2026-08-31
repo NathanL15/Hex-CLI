@@ -24,6 +24,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hexcli.agent as sa  # noqa: E402
+import hexcli.tools as hextools  # noqa: E402
 
 _CFG: dict[str, Any] = {
     **sa.DEFAULT_CONFIG,
@@ -267,14 +268,18 @@ def test_every_mutating_tool_refuses_sensitive_paths() -> None:
             (fake_home / ".ssh").mkdir(parents=True)
             victim = fake_home / ".ssh" / "id_rsa"
             victim.write_text("original", encoding="utf-8")
-            prev_home = sa._HOME
+            # Split stage 3b: the guards and their _HOME state live in
+            # hexcli.tools now — patching sa._HOME would be a stale alias the
+            # guard never reads (verified by mutation probe in the split
+            # commit).
+            prev_home = hextools._HOME
             # MUST be resolved. The tools resolve their path argument, and on
             # the CI runner TEMP is an 8.3 short path ("RUNNER~1") that expands
             # to a different string. An unresolved _HOME then fails
             # relative_to(), the sensitive check silently never fires, and the
             # test reports the tool as unguarded. Production is unaffected —
             # _HOME comes from Path.home(), which is already canonical.
-            sa._HOME = fake_home.resolve()
+            hextools._HOME = fake_home.resolve()
             try:
                 # Precondition: the fixture really does look like a key path to
                 # the guard. Without this, a broken fixture is indistinguishable
@@ -284,7 +289,7 @@ def test_every_mutating_tool_refuses_sensitive_paths() -> None:
                     sa._check_sensitive_path(sa.resolve_path(str(victim)), "probe")
                     raise AssertionError(
                         "fixture broken: _check_sensitive_path does not treat "
-                        f"{victim} as sensitive under _HOME={sa._HOME}")
+                        f"{victim} as sensitive under _HOME={hextools._HOME}")
                 except RuntimeError:
                     pass
                 try:
@@ -292,7 +297,7 @@ def test_every_mutating_tool_refuses_sensitive_paths() -> None:
                 except RuntimeError as exc:
                     result = str(exc)
             finally:
-                sa._HOME = prev_home
+                hextools._HOME = prev_home
             assert "blocked" in result.lower(), f"{label} allowed a key path: {result}"
             assert victim.read_text(encoding="utf-8") == "original", \
                 f"{label} mutated an SSH key"
