@@ -10,7 +10,6 @@ import argparse
 import ast
 import concurrent.futures
 import json
-import msvcrt
 import os
 import queue
 import re
@@ -28,9 +27,7 @@ from typing import Any
 from uuid import uuid4
 
 from hexcli import (
-    commands as custom_commands,
-)
-from hexcli import (
+    cancel,
     diffview,
     distribution,
     escalate,
@@ -47,6 +44,9 @@ from hexcli import (
     setup_wizard,
     telemetry,
     ui,
+)
+from hexcli import (
+    commands as custom_commands,
 )
 
 # Windows consoles often default to cp1252, which can't encode the box-drawing
@@ -550,62 +550,16 @@ REFUSAL_PHRASES = (
 
 
 # ---------------------------------------------------------------------------
-# UI helpers
+# Cancellation — split stage 3a: lives in hexcli.cancel, re-bound here by
+# name. run_cancellable resolves CancelMonitor/Spinner inside hexcli.cancel,
+# so anything replacing those (the eval runner's no-op silencers) patches
+# BOTH hexcli.agent and hexcli.cancel.
 # ---------------------------------------------------------------------------
 
-class UserCancelled(Exception):
-    pass
-
-
-def clear_keyboard_buffer() -> None:
-    while msvcrt.kbhit():
-        msvcrt.getwch()
-
-
-class CancelMonitor:
-    def __init__(self) -> None:
-        self.cancelled = threading.Event()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-
-    def _watch(self) -> None:
-        while not self._stop.wait(0.05):
-            if msvcrt.kbhit():
-                if msvcrt.getwch() == "\x1b":
-                    self.cancelled.set()
-
-    def __enter__(self) -> CancelMonitor:
-        clear_keyboard_buffer()
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self._stop.set()
-        self._thread.join(timeout=1)
-        clear_keyboard_buffer()
-
-
-def run_cancellable(label: str, work: Any) -> Any:
-    result: dict[str, Any] = {}
-    error: dict[str, BaseException] = {}
-
-    def worker() -> None:
-        try:
-            result["value"] = work()
-        except BaseException as exc:  # noqa: BLE001
-            error["value"] = exc
-
-    thread = threading.Thread(target=worker, daemon=True)
-    with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
-        thread.start()
-        while thread.is_alive():
-            if monitor.cancelled.is_set():
-                raise UserCancelled()
-            thread.join(0.05)
-
-    if "value" in error:
-        raise error["value"]
-    return result.get("value")
+UserCancelled = cancel.UserCancelled
+clear_keyboard_buffer = cancel.clear_keyboard_buffer
+CancelMonitor = cancel.CancelMonitor
+run_cancellable = cancel.run_cancellable
 
 
 # ---------------------------------------------------------------------------
