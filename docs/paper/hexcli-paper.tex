@@ -321,12 +321,29 @@ trimmed either.
 \legend{14 behavioral rules (73\%), 15 tool schemas (23\%), scaffolding (4\%)}
 \end{axis}
 \end{tikzpicture}
-\caption{Anatomy of the 1{,}990-token system-prompt template. With the full
-prompt near 2{,}100 tokens, almost half the 4{,}096-token window is spent
+\caption{Anatomy of the 1{,}990-token system-prompt template at v2.0. With the
+full prompt near 2{,}100 tokens, almost half the 4{,}096-token window is spent
 before the user types a word. Each rule earned its place by fixing a measured
 failure.}
 \label{fig:prompt}
 \end{figure}
+
+By v2.2 the live-state cookbook had grown the prompt to 2{,}355 tokens
+(measured exactly via the server's usage report; the 14 rules are 1{,}689 of
+them), clamping the history budget to its 250-token floor and making
+auto-compaction fire every few messages. Two follow-up measurements closed
+this line of work. First, compaction itself was the thrash: the deterministic
+compactor re-fired every turn and crushed its own previous summary block into
+a single stub each time. Making it merge-aware (idempotent on its own output)
+and adding a dry-run gain guard fixed the churn without touching the prompt.
+Second, a dedicated sweep ran the production loop at controlled input sizes
+from 2{,}370 to 2{,}973 measured tokens and found quality \emph{flat} across
+the whole range — while inputs targeted above $\sim$3K came back truncated to
+$\sim$2{,}92x by the runtime. The shipping configuration already sits at that
+ceiling. Together with the negative results in \S\ref{sec:negative}, the
+conclusion is that the 250-token history floor is a property of the model and
+the compiled 4K bundle, not a harness gap: within this model and runtime, the
+context budget is fully spent, and spent well.
 
 \subsection{Why the NPU, when the CPU decodes faster}
 
@@ -451,6 +468,16 @@ and the damage did not scale with rules dropped & rejected \\[3pt]
 8K context window (recompiled bundle) &
 6 tok/s vs.\ 15, with no quality gain; compaction already keeps sessions under
 the degradation cliff & rejected \\[3pt]
+Raise the compaction threshold (re-measure the $\sim$2{,}600-token cliff) &
+a dedicated sweep found quality \emph{flat} from 2{,}370 to 2{,}973 measured
+input tokens — but the runtime silently trims inputs above $\sim$3K to
+$\sim$2{,}92x, and the shipping configuration already operates at that
+ceiling, so a higher threshold buys zero usable history & closed \\[3pt]
+Leaner prompt for agent steps $\ge 2$ (drop the five step-1 decision rules) &
+overall quality flat (77.8\% vs.\ 74.4\%, $p = 0.65$), but the JSON-edit case
+fell 3/3 $\to$ 1/3 with degenerate \code{old\_string} anchors — the trimming
+experiment's degradation fingerprint, reproduced at continuation steps &
+rejected \\[3pt]
 Escalate hard cases to Qwen3-8B &
 0.9 tok/s: silent CPU fallback on a 16\,GB machine & rejected \\[3pt]
 Qwen3.5-4B (newer successor model) &
@@ -465,7 +492,7 @@ Python's share of a turn is below 1\% of wall-clock; the bottleneck is
 inference & declined \\
 \bottomrule
 \end{tabular}
-\caption{Eight plausible improvements that failed their evaluations. Writing
+\caption{Ten plausible improvements that failed their evaluations. Writing
 these down, with the evidence, is what keeps the next month of work from
 re-fighting the last one.}
 \label{tab:rejected}
@@ -477,7 +504,16 @@ months against one prompt becomes specialized to that exact prompt. Dropping
 even provably irrelevant rules degraded behavior, and the damage did not scale
 with the number of rules dropped: removing one rule hurt more than removing
 four. At this scale the prompt is not documentation the model consults. It is
-part of the distribution the model has adapted to.
+part of the distribution the model has adapted to. The continuation-stage
+experiment extended this finding: the specialization holds at \emph{every}
+step of the loop, not just the first — a prompt the model has not been tuned
+against degrades adjacent behavior even when the removed text is logically
+irrelevant to the failing action. The one split that survived measurement is
+the one that changes the model's task rather than shrinking its prompt: a
+harness-routed \emph{direct stage} for pure-knowledge queries, whose no-tools
+prompt makes tool restraint structural and cut knowledge-query first-token
+latency by 40\% (10.1\,s $\to$ 6.0\,s median) with no regression in its
+routed subset.
 
 % ═══════════════════════════════════════════════════════════════
 \section{Security: assume the model is 100\% injectable}
@@ -538,6 +574,13 @@ to 72\% via a command cookbook in the prompt — and uncovers the deepest bug
 of the project: the memory consolidation daemon had been recording the
 model's own confabulations as facts and re-injecting them every turn, a
 self-reinforcing hallucination loop invisible to every sandboxed eval. \\
+Aug 29--31 & The context question is closed by measurement. Auto-compact
+thrash fixed (merge-aware compactor, dry-run gain guard); the command surface
+pruned to one mode and 18 commands ($-685$ lines); a cliff sweep finds
+quality flat to the runtime's own $\sim$2.9K input ceiling, retiring
+threshold tuning; and a two-stage prompt-split A/B keeps the no-tools direct
+stage ($-40\%$ knowledge-query latency, structural tool restraint) while
+rejecting the leaner continuation prompt on the trimming fingerprint. \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}
@@ -569,8 +612,10 @@ evidence, they keep future work from re-fighting settled questions.
 % ═══════════════════════════════════════════════════════════════
 \section{Status and future work}
 
-Every measurement in this report is from v2.0.0, whose scope is closed.
-v2.1.0 followed with the packaging work: a one-command installer replacing
+The core measurements in this report are from v2.0.0, whose scope is closed;
+sections that cite later dates (the context-budget follow-ups, the prompt-split
+A/B, the everyday-prompt study) say so inline. v2.1.0 followed with the
+packaging work: a one-command installer replacing
 the SDK-and-runtime setup ritual, plus the shell features that make the agent
 scriptable. It deliberately did not touch the prompt or the loop, and the
 live gate confirmed as much before and after.
@@ -583,10 +628,12 @@ its own test certified because the chosen version numbers happened to sort
 identically either way. Tests pin the invariant you thought of, not the one
 that matters; the fix was to re-derive the invariants and mutation-test them.
 
-The next steps are completing the decomposition of the main module and
-attacking the per-turn prefill cost, which is now the largest remaining
-latency lever. The model upgrade path stays a watch item rather than a work
-item: the moment a supported successor bundle appears for this NPU, the
+The context question is now closed by measurement rather than left open: the
+history budget is fully spent against the model's own ceilings, and the
+remaining levers all require a different model or runtime. The next steps are
+completing the decomposition of the main module and attacking the per-turn
+prefill cost, which is now the largest remaining latency lever. The model
+upgrade path stays a watch item rather than a work item: the moment a supported successor bundle appears for this NPU, the
 instrument that produced every number here can judge it in an
 afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
 (X1E78100), 16\,GB RAM, Windows 11 ARM, with Qwen3-4B-Instruct-2507 (w4a16) on
