@@ -164,8 +164,10 @@ Do these when the world changes, not before:
 - **GenieX #1266 resolves** (maintainer engaged 2026-08-10, cannot repro) or
   an NPU driver/GenieX release notes a perf fix → re-run the qairt
   migration checklist; the prize is KeepCache + exact usage reporting.
-- **A Windows-viable fine-tune→bundle path appears** → LoRA the 14 rules
-  into the weights; frees ~1,459 prompt tokens *and* the latency tax.
+- ~~A Windows-viable fine-tune→bundle path appears → LoRA the 14 rules into
+  the weights~~ — **ruled out 2026-08-31** (owner decision: no fine-tuning
+  path for this project). Per-stage prompts (the prompt split) are the only
+  remaining route to a smaller per-call prompt.
 - **External yardsticks** (BFCL subset, Aider-polyglot subset against the
   local endpoint) — optional credibility measurement, dev-machine-only.
 
