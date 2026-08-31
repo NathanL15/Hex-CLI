@@ -37,8 +37,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa  # noqa: E402
 from evals import checks as ck  # noqa: E402
 from evals.runner import (  # noqa: E402
-    Case, RESULTS_DIR, backend_preflight, load_live_config,
-    print_case_report, run_cases,
+    RESULTS_DIR,
+    Case,
+    backend_preflight,
+    load_live_config,
+    print_case_report,
+    run_cases,
 )
 
 # Measured 2026-08-29 against the live bundle tokenizer (usage.prompt_tokens):
