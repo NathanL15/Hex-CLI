@@ -5,7 +5,7 @@ Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
 cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
 LangChain.
 
-Current version: **2.2.0**
+Current version: **2.3.0**
 
 ```
 you ▸ the median calc in processor.py is wrong for even-length lists — fix it
@@ -21,16 +21,6 @@ you ▸ the median calc in processor.py is wrong for even-length lists — fix i
 Fixed: even-length lists now average the two middle values. Verified — the
 test file prints 3.5 for [1, 2, 5, 6].
 ```
-
----
-
-## Modes
-
-| Mode | What it does |
-|---|---|
-| **Autopilot** (default) | Full agentic loop — runs tools, edits files, verifies its own work, loops until done. |
-| **Chat** | Prose answer; suggests a command only when it genuinely helps. |
-| **Command-only** | Returns one PowerShell command, then prompts Execute / Copy / Abort. |
 
 ---
 
