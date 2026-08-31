@@ -6,9 +6,6 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## 2.3.0 — 2026-08-31
 
-The simplification release — and the one that closes the context question
-with measurement instead of leaving it open.
-
 ### One mode, 18 commands
 
 Chat and command modes are gone, along with `/save`, `/load`,
