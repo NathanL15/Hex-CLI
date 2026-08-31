@@ -262,6 +262,44 @@ _AUTOPILOT_TEMPLATE = _AUTOPILOT_HEAD + "".join(
     _AUTOPILOT_RULES[n] for n in sorted(_AUTOPILOT_RULES)) + _AUTOPILOT_TAIL
 
 
+# ---------------------------------------------------------------------------
+# Prompt split (experimental, config "prompt_split") — two extra stages.
+#
+# Stage DIRECT: pure-knowledge queries routed by agent._route_direct get a
+# no-tools prompt. Tool use is refused harness-side, so restraint does not
+# depend on the model — the bait rules exist in the monolith because the
+# model complies with named-tool bait ~1 time in 3; here there is nothing to
+# comply WITH. Format (rule 1 / finish shape) is kept verbatim: format
+# specialization is the strongest measured effect in this project.
+#
+# Stage CONTINUATION: steps >= 2 of the agent loop. The step-1 decision rules
+# (4 direct-answer, 5 finish-confidence, 9 live-state cookbook, 10 tool-bait,
+# 12 ambiguous-edit) govern WHETHER and HOW to start using tools — decisions
+# already taken by step 2. Dropping them frees ~740 tokens of input room at
+# exactly the depth where edit quality degrades. Rule text that remains is
+# byte-identical to the monolith's. Step 1 always uses the full monolith, so
+# the cases the 2026-07-31 conditional-rules A/B showed regressing (trap-4
+# 5/8 -> 2/8, ambiguous-1 3/8 -> 1/8) are decided by an unchanged prompt.
+# ---------------------------------------------------------------------------
+
+_DIRECT_TEMPLATE = """You are a powerful local coding and system agent running on Windows 11 / PowerShell.
+   Date: {date}. Working directory: {cwd}.
+   This request needs no tools — it is a direct question or conversation.
+
+   RULES:
+   1. Respond with EXACTLY ONE JSON object. Nothing outside the JSON. No markdown.
+      The ONLY valid shape is {{"action":"finish","message":"..."}}. Never invent other
+      top-level fields — if you cannot answer, that explanation still goes in
+      finish's "message" field, never anywhere else.
+   2. Answer directly from general knowledge: math, facts, explanations, poems,
+      random numbers, step-by-step reasoning — all belong in the message text.
+      Example: "give me a random number" -> {{"action":"finish","message":"42"}}.
+   3. Give the actual answer, complete and concrete, in the message field.
+"""
+
+_CONTINUATION_OMIT_RULES = frozenset({4, 5, 9, 10, 12})
+
+
 # Keyword sets for conditional injection heuristics.
 _MEMORY_KW = frozenset({"earlier", "last time", "before", "previously", "you said", "we did", "i told", "last session", "prior session", "what error"})
 _FETCH_KW   = frozenset({"look up", "lookup", "latest version", "documentation", "docs", "check the site", "from the web", "online", "fetch", "download the"})
