@@ -1024,7 +1024,12 @@ def test_http_request_reconnects_on_cannot_send_request() -> None:
     mock_conn.request.side_effect = [http.client.CannotSendRequest(), None]
     mock_conn.getresponse.return_value = mock_response
 
-    with unittest.mock.patch.object(sa, "_get_connection", return_value=(mock_conn, "/api/chat")):
+    # Split stage 2: _http_request resolves _get_connection inside
+    # hexcli.http_client, so the patch must target that module — patching
+    # sa._get_connection would be vacuous (the mutation probe in the split
+    # commit verified this test still bites).
+    from hexcli import http_client
+    with unittest.mock.patch.object(http_client, "_get_connection", return_value=(mock_conn, "/api/chat")):
         resp = sa._http_request(
             "POST", "http://127.0.0.1:11434/api/chat",
             {"Content-Type": "application/json"}, b"{}", 10.0,
