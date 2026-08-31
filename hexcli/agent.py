@@ -101,6 +101,8 @@ render_result = ui.render_result
 
 COMPACT_SYSTEM_PROMPT = prompts.COMPACT_SYSTEM_PROMPT
 _AUTOPILOT_TEMPLATE = prompts._AUTOPILOT_TEMPLATE
+_DIRECT_TEMPLATE = prompts._DIRECT_TEMPLATE
+_CONTINUATION_OMIT_RULES = prompts._CONTINUATION_OMIT_RULES
 _LINT_TOOL_SCHEMA = prompts._LINT_TOOL_SCHEMA
 _SEARCH_MEMORY_SCHEMA = prompts._SEARCH_MEMORY_SCHEMA
 _FETCH_URL_SCHEMA = prompts._FETCH_URL_SCHEMA
@@ -190,19 +192,28 @@ def _select_autopilot_rules(query: str, recent_tools: list[str]) -> set[int]:
     return selected
 
 
-def _autopilot_template(query: str, recent_tools: list[str]) -> str:
+def _autopilot_template(query: str, recent_tools: list[str],
+                        omit_rules: frozenset[int] = frozenset()) -> str:
     """Assemble the template for this turn.
 
     With every rule selected the result is byte-identical to
     prompts._AUTOPILOT_TEMPLATE — asserted in evals/test_v13.py.
+
+    omit_rules subtracts rules AFTER selection — used by the prompt-split
+    continuation stage (steps >= 2), where the step-1 decision rules cannot
+    fire any more. Rule text that remains is byte-identical.
     """
     config = _ACTIVE_CONFIG or {}
     # Fallback read from DEFAULT_CONFIG rather than a literal: outside an agent
     # turn there is no active config, and a hardcoded default here would drift
     # from the shipped one silently.
     if not config.get("conditional_rules", DEFAULT_CONFIG["conditional_rules"]):
-        return _AUTOPILOT_TEMPLATE
-    selected = _select_autopilot_rules(query, recent_tools)
+        if not omit_rules:
+            return _AUTOPILOT_TEMPLATE
+        selected = set(_AUTOPILOT_RULES)
+    else:
+        selected = _select_autopilot_rules(query, recent_tools)
+    selected -= omit_rules
     return (_AUTOPILOT_HEAD
             + "".join(_AUTOPILOT_RULES[n] for n in sorted(selected))
             + _AUTOPILOT_TAIL)
@@ -213,13 +224,14 @@ def build_autopilot_prompt(
     max_steps: int,
     query: str = "",
     recent_tools: list[str] | None = None,
+    omit_rules: frozenset[int] = frozenset(),
 ) -> str:
     """Build the autopilot system prompt, injecting conditional tool schemas based on query
     content and recently-used tools to stay within the token budget."""
     if recent_tools is None:
         recent_tools = []
 
-    prompt = _autopilot_template(query, recent_tools).format(
+    prompt = _autopilot_template(query, recent_tools, omit_rules).format(
         date=datetime.now().strftime("%Y-%m-%d"),
         cwd=cwd,
         max_steps=max_steps,
@@ -262,6 +274,54 @@ def build_autopilot_prompt(
     return prompt
 
 
+# ---------------------------------------------------------------------------
+# Prompt split (experimental, config "prompt_split")
+# ---------------------------------------------------------------------------
+
+# Route to the no-tools direct stage ONLY when both hold: the query matches a
+# clear knowledge/conversation shape (allow) and contains nothing that could
+# refer to this machine, its files, or the tools (deny). Every miss is safe:
+# a query kept on the agent path behaves exactly as with the flag off.
+_DIRECT_ALLOW_RE = re.compile(
+    r"^(hi|hey|hello|yo|thanks|thank you|good (morning|afternoon|evening))\b"
+    r"|\b(what is|what's|what are|who is|who was|why (is|do|does|did)"
+    r"|how (does|do|did)|explain|difference between|fun fact|tell me about"
+    r"|joke|poem|haiku|meaning of|define|definition of)\b",
+    re.IGNORECASE,
+)
+_DIRECT_DENY_RE = re.compile(
+    r"\b(file|files|folder|directory|directories|disk|drive|cpu|gpu|ram"
+    r"|memory|process|processes|install|installed|version|machine|computer"
+    r"|laptop|device|repo|repository|git|test|tests|lint|run|running|create"
+    r"|write|read|edit|fix|update|delete|remove|move|rename|list"
+    r"|find|open|download|fetch|execute|script|command|terminal|shell"
+    r"|web|internet|online|browse"
+    r"|powershell|cmdlet|server|port|clipboard|screenshot|wifi|network"
+    r"|battery|username|hostname|env|path|here|current time|current date"
+    r"|what time|today's date|tool|tools)\b",
+    re.IGNORECASE,
+)
+
+
+def _route_direct(query: str) -> bool:
+    """True when the query is safely answerable with no tools at all.
+
+    Deliberately conservative: the direct stage exists for latency and for
+    structural tool restraint, and a false DIRECT on a query that needed the
+    machine (the livestate failure class) would be a real regression, while a
+    false AGENT merely forgoes the win.
+    """
+    q = " ".join((query or "").split())
+    if len(q) > 200:
+        return False
+    return bool(_DIRECT_ALLOW_RE.search(q)) and not _DIRECT_DENY_RE.search(q)
+
+
+def build_direct_prompt(cwd: str) -> str:
+    return _DIRECT_TEMPLATE.format(
+        date=datetime.now().strftime("%Y-%m-%d"), cwd=cwd)
+
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "backend": "ollama",
     "model": "qwen2.5-coder:7b",
@@ -290,6 +350,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # independent A/B runs (Fisher p~=0.017). See docs/V2_PLAN.md §14.15.
     # Opt in only with a bigger-context bundle or a different model.
     "conditional_rules": False,
+    "prompt_split": False,
     # Rich input line: persistent history, Tab completion, multi-line paste.
     # Falls back to bare input() automatically when stdin/stdout is not a tty.
     "rich_input": True,
@@ -2160,6 +2221,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "require_verification":           "bool",
     "show_diffs":                     "bool",
     "conditional_rules":              "bool",
+    "prompt_split":                   "bool",
     "network_access":                 "str",
     "rich_input":                     "bool",
     "input_history_file":             "str",
@@ -2699,6 +2761,21 @@ def run_autopilot(
                 C.YELLOW,
             )
 
+    # Prompt split (experimental): a conservatively-routed knowledge query
+    # gets the small no-tools prompt; agent-path turns get a leaner prompt
+    # from step 2 on (built here, swapped in at the top of the loop). A
+    # config_system override wins over both, like it wins over the monolith.
+    split_on = bool(config.get("prompt_split", False)) and not config_system
+    direct_stage = split_on and _route_direct(query)
+    continuation_prompt: str | None = None
+    if direct_stage:
+        system_prompt = build_direct_prompt(cwd)
+        max_steps = min(max_steps, 4)
+    elif split_on:
+        continuation_prompt = build_autopilot_prompt(
+            cwd=cwd, max_steps=max_steps, query=query,
+            recent_tools=recent_tools, omit_rules=_CONTINUATION_OMIT_RULES)
+
     ws = workspace_snapshot(cwd)
     user_content = f"{ws}\nWorking directory: {cwd}\n\nRequest: {query.strip()}"
     messages: list[dict[str, str]] = [
@@ -2758,6 +2835,14 @@ def run_autopilot(
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
         cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
+
+        # Continuation stage: from step 2 the step-1 decision rules cannot
+        # fire any more, so the leaner prompt frees ~740 tokens of input room
+        # at exactly the depth where edit quality degrades. Costs one full
+        # re-prefill at step 2 (the server's append-only continuation check
+        # breaks once), then increments again from step 3.
+        if step == 1 and continuation_prompt is not None:
+            messages[0] = {"role": "system", "content": continuation_prompt}
 
         # Up to 2 retries on bad JSON
         raw = ""
@@ -2849,7 +2934,8 @@ def run_autopilot(
                         f"without having modified any file. Its answer was: {msg[:300]}", raw)):
                 continue
             # Nudge once if the model refused to use tools
-            if step == 0 and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES):
+            if (step == 0 and not direct_stage
+                    and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES)):
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({
                     "role": "user",
@@ -2871,6 +2957,17 @@ def run_autopilot(
             fallthrough = action.get("message", "") or last_tool_output or "Done."
             _probe(probe, "on_end", "fallthrough", fallthrough)
             return fallthrough
+
+        # Direct stage: refuse tools structurally. Restraint here does not
+        # depend on the model — there is nothing it can execute.
+        if direct_stage:
+            messages.append({"role": "assistant", "content": strip_thinking(raw)})
+            messages.append({
+                "role": "user",
+                "content": ('This request has no tools. Respond with '
+                            '{"action":"finish","message":"<your answer>"} only.'),
+            })
+            continue
 
         tool_name = action["tool"]
         tools_used.append(tool_name)
