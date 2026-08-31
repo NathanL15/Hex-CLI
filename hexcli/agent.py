@@ -102,7 +102,6 @@ render_result = ui.render_result
 COMPACT_SYSTEM_PROMPT = prompts.COMPACT_SYSTEM_PROMPT
 _AUTOPILOT_TEMPLATE = prompts._AUTOPILOT_TEMPLATE
 _DIRECT_TEMPLATE = prompts._DIRECT_TEMPLATE
-_CONTINUATION_OMIT_RULES = prompts._CONTINUATION_OMIT_RULES
 _LINT_TOOL_SCHEMA = prompts._LINT_TOOL_SCHEMA
 _SEARCH_MEMORY_SCHEMA = prompts._SEARCH_MEMORY_SCHEMA
 _FETCH_URL_SCHEMA = prompts._FETCH_URL_SCHEMA
@@ -192,28 +191,19 @@ def _select_autopilot_rules(query: str, recent_tools: list[str]) -> set[int]:
     return selected
 
 
-def _autopilot_template(query: str, recent_tools: list[str],
-                        omit_rules: frozenset[int] = frozenset()) -> str:
+def _autopilot_template(query: str, recent_tools: list[str]) -> str:
     """Assemble the template for this turn.
 
     With every rule selected the result is byte-identical to
     prompts._AUTOPILOT_TEMPLATE — asserted in evals/test_v13.py.
-
-    omit_rules subtracts rules AFTER selection — used by the prompt-split
-    continuation stage (steps >= 2), where the step-1 decision rules cannot
-    fire any more. Rule text that remains is byte-identical.
     """
     config = _ACTIVE_CONFIG or {}
     # Fallback read from DEFAULT_CONFIG rather than a literal: outside an agent
     # turn there is no active config, and a hardcoded default here would drift
     # from the shipped one silently.
     if not config.get("conditional_rules", DEFAULT_CONFIG["conditional_rules"]):
-        if not omit_rules:
-            return _AUTOPILOT_TEMPLATE
-        selected = set(_AUTOPILOT_RULES)
-    else:
-        selected = _select_autopilot_rules(query, recent_tools)
-    selected -= omit_rules
+        return _AUTOPILOT_TEMPLATE
+    selected = _select_autopilot_rules(query, recent_tools)
     return (_AUTOPILOT_HEAD
             + "".join(_AUTOPILOT_RULES[n] for n in sorted(selected))
             + _AUTOPILOT_TAIL)
@@ -224,14 +214,13 @@ def build_autopilot_prompt(
     max_steps: int,
     query: str = "",
     recent_tools: list[str] | None = None,
-    omit_rules: frozenset[int] = frozenset(),
 ) -> str:
     """Build the autopilot system prompt, injecting conditional tool schemas based on query
     content and recently-used tools to stay within the token budget."""
     if recent_tools is None:
         recent_tools = []
 
-    prompt = _autopilot_template(query, recent_tools, omit_rules).format(
+    prompt = _autopilot_template(query, recent_tools).format(
         date=datetime.now().strftime("%Y-%m-%d"),
         cwd=cwd,
         max_steps=max_steps,
@@ -350,7 +339,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # independent A/B runs (Fisher p~=0.017). See docs/V2_PLAN.md §14.15.
     # Opt in only with a bigger-context bundle or a different model.
     "conditional_rules": False,
-    "prompt_split": False,
+    "prompt_split": True,
     # Rich input line: persistent history, Tab completion, multi-line paste.
     # Falls back to bare input() automatically when stdin/stdout is not a tty.
     "rich_input": True,
@@ -2761,20 +2750,19 @@ def run_autopilot(
                 C.YELLOW,
             )
 
-    # Prompt split (experimental): a conservatively-routed knowledge query
-    # gets the small no-tools prompt; agent-path turns get a leaner prompt
-    # from step 2 on (built here, swapped in at the top of the loop). A
-    # config_system override wins over both, like it wins over the monolith.
-    split_on = bool(config.get("prompt_split", False)) and not config_system
+    # Prompt split: a conservatively-routed knowledge query gets the small
+    # no-tools prompt (structural tool restraint + ~40% lower first-token
+    # latency, measured 2026-08-31). A config_system override wins over it,
+    # like it wins over the monolith. The continuation-stage half of the
+    # original experiment (leaner prompt from step 2) was REJECTED the same
+    # day: no quality win, and edit anchors under the changed prompt showed
+    # the trimming experiment's degradation fingerprint (agentic-3 3/3->1/3,
+    # degenerate old_string anchors).
+    split_on = bool(config.get("prompt_split", True)) and not config_system
     direct_stage = split_on and _route_direct(query)
-    continuation_prompt: str | None = None
     if direct_stage:
         system_prompt = build_direct_prompt(cwd)
         max_steps = min(max_steps, 4)
-    elif split_on:
-        continuation_prompt = build_autopilot_prompt(
-            cwd=cwd, max_steps=max_steps, query=query,
-            recent_tools=recent_tools, omit_rules=_CONTINUATION_OMIT_RULES)
 
     ws = workspace_snapshot(cwd)
     user_content = f"{ws}\nWorking directory: {cwd}\n\nRequest: {query.strip()}"
@@ -2835,14 +2823,6 @@ def run_autopilot(
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
         cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
-
-        # Continuation stage: from step 2 the step-1 decision rules cannot
-        # fire any more, so the leaner prompt frees ~740 tokens of input room
-        # at exactly the depth where edit quality degrades. Costs one full
-        # re-prefill at step 2 (the server's append-only continuation check
-        # breaks once), then increments again from step 3.
-        if step == 1 and continuation_prompt is not None:
-            messages[0] = {"role": "system", "content": continuation_prompt}
 
         # Up to 2 retries on bad JSON
         raw = ""

@@ -263,23 +263,23 @@ _AUTOPILOT_TEMPLATE = _AUTOPILOT_HEAD + "".join(
 
 
 # ---------------------------------------------------------------------------
-# Prompt split (experimental, config "prompt_split") — two extra stages.
+# Prompt split (config "prompt_split", default on) — the DIRECT stage.
 #
-# Stage DIRECT: pure-knowledge queries routed by agent._route_direct get a
-# no-tools prompt. Tool use is refused harness-side, so restraint does not
-# depend on the model — the bait rules exist in the monolith because the
-# model complies with named-tool bait ~1 time in 3; here there is nothing to
+# Pure-knowledge queries routed by agent._route_direct get this no-tools
+# prompt. Tool use is refused harness-side, so restraint does not depend on
+# the model — the bait rules exist in the monolith because the model
+# complies with named-tool bait ~1 time in 3; here there is nothing to
 # comply WITH. Format (rule 1 / finish shape) is kept verbatim: format
 # specialization is the strongest measured effect in this project.
+# Measured 2026-08-31 (extended x3 A/B): no regression in the routed
+# subset, median first-token latency on knowledge cases 10.1s -> 6.0s.
 #
-# Stage CONTINUATION: steps >= 2 of the agent loop. The step-1 decision rules
-# (4 direct-answer, 5 finish-confidence, 9 live-state cookbook, 10 tool-bait,
-# 12 ambiguous-edit) govern WHETHER and HOW to start using tools — decisions
-# already taken by step 2. Dropping them frees ~740 tokens of input room at
-# exactly the depth where edit quality degrades. Rule text that remains is
-# byte-identical to the monolith's. Step 1 always uses the full monolith, so
-# the cases the 2026-07-31 conditional-rules A/B showed regressing (trap-4
-# 5/8 -> 2/8, ambiguous-1 3/8 -> 1/8) are decided by an unchanged prompt.
+# The experiment's other half — a leaner CONTINUATION prompt for agent
+# steps >= 2 (rules 4/5/9/10/12 dropped) — was REJECTED the same day: no
+# quality win anywhere, and agentic-3 fell 3/3 -> 1/3 with degenerate edit
+# anchors under the changed prompt, the same degradation fingerprint the
+# rejected trimming experiment produced. Do not re-add it without a full
+# pass^5 run showing otherwise.
 # ---------------------------------------------------------------------------
 
 _DIRECT_TEMPLATE = """You are a powerful local coding and system agent running on Windows 11 / PowerShell.
@@ -296,9 +296,6 @@ _DIRECT_TEMPLATE = """You are a powerful local coding and system agent running o
       Example: "give me a random number" -> {{"action":"finish","message":"42"}}.
    3. Give the actual answer, complete and concrete, in the message field.
 """
-
-_CONTINUATION_OMIT_RULES = frozenset({4, 5, 9, 10, 12})
-
 
 # Keyword sets for conditional injection heuristics.
 _MEMORY_KW = frozenset({"earlier", "last time", "before", "previously", "you said", "we did", "i told", "last session", "prior session", "what error"})
