@@ -39,6 +39,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root
 sys.path.insert(0, str(APP_DIR))
 
 import hexcli.agent as sa  # noqa: E402
+from hexcli import cancel as cancel_mod  # noqa: E402
 from hexcli import memory  # noqa: E402
 
 # Mirror production main(): point the embedder at the local ONNX model so
@@ -260,6 +261,11 @@ class _EvalEnv:
         self._saved["global_store"] = memory._GLOBAL_STORE_DIR
         self._saved["monitor"] = sa.CancelMonitor
         self._saved["spinner"] = sa.Spinner
+        # Split stage 3a: run_cancellable (and future movers) resolve these
+        # names inside hexcli.cancel, so silence that namespace too — the
+        # sa.* patch alone would leave moved code polling msvcrt for real.
+        self._saved["cancel_monitor"] = cancel_mod.CancelMonitor
+        self._saved["cancel_spinner"] = cancel_mod.Spinner
         # The fake home lives OUTSIDE the sandbox: anything inside it would
         # show up in the model's own directory listings and skew count
         # fixtures (dot-prefixed dirs are NOT hidden on Windows).
@@ -268,6 +274,8 @@ class _EvalEnv:
         memory._GLOBAL_STORE_DIR = Path(self._home) / "global_vector_store"
         sa.CancelMonitor = _NoopMonitor  # type: ignore[misc,assignment]
         sa.Spinner = _NoopSpinner  # type: ignore[misc,assignment]
+        cancel_mod.CancelMonitor = _NoopMonitor  # type: ignore[misc,assignment]
+        cancel_mod.Spinner = _NoopSpinner  # type: ignore[misc,assignment]
         os.chdir(self.sandbox)
         return self
 
@@ -277,6 +285,8 @@ class _EvalEnv:
         memory._GLOBAL_STORE_DIR = self._saved["global_store"]
         sa.CancelMonitor = self._saved["monitor"]
         sa.Spinner = self._saved["spinner"]
+        cancel_mod.CancelMonitor = self._saved["cancel_monitor"]
+        cancel_mod.Spinner = self._saved["cancel_spinner"]
         if self._home:
             import shutil
             shutil.rmtree(self._home, ignore_errors=True)
