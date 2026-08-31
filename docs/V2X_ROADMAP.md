@@ -12,7 +12,12 @@ Ground rules carried over from v2, non-negotiable:
 - **The rejected list stays rejected** without new external evidence: v2
   protocol as default, prompt trimming / conditional rules, tool
   consolidation, 8K bundle, 8B escalation, `<tool_call>` template, CPU-only
-  runtime, GenieX qairt on this machine (issue #1266 open), Rust rewrite.
+  runtime, GenieX qairt on this machine (issue #1266 open), Rust rewrite,
+  compaction-threshold tuning (2026-08-31 cliff sweep: quality flat to the
+  runtime's ~2.9K input trim; the floor is a model/runtime property), and the
+  leaner continuation prompt for agent steps ≥ 2 (trimming fingerprint at
+  steps ≥ 2; only the no-tools direct stage survived its A/B and shipped as
+  `prompt_split`).
 - **The model is frozen** at qwen3-4b-instruct-2507 until a supported
   successor bundle exists (checked 2026-08-13: Qwen3.5 still ships only
   0.8B/2B, llamacpp-only).
