@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""evals/test_prompt_split.py — Unit tests for the experimental prompt split.
+"""evals/test_prompt_split.py — Unit tests for the prompt split (DIRECT stage).
 
-The split (config "prompt_split", default OFF) adds two stages:
-  * DIRECT — conservatively-routed knowledge queries get a small no-tools
-    prompt; tool calls are refused harness-side.
-  * CONTINUATION — agent-path steps >= 2 swap to a prompt without the step-1
-    decision rules (4, 5, 9, 10, 12), freeing ~740 tokens of input room.
+Config "prompt_split" (default ON) routes conservatively-matched knowledge
+queries to a small no-tools prompt; tool calls there are refused
+harness-side. Measured 2026-08-31: no regression in the routed subset,
+knowledge-case first-token latency -40%. The continuation-stage half of the
+original experiment was measured and REJECTED the same day (see prompts.py).
 
-These tests pin: the flag defaults off and changes nothing when off; the
-router is conservative (all measured-risk queries stay on the agent path);
-the direct stage cannot execute tools; and the continuation prompt keeps the
-remaining rule text byte-identical.
+These tests pin: the router is conservative (all measured-risk queries stay
+on the agent path); the direct stage cannot execute tools; agent-path turns
+keep one prompt for every step; flag off restores baseline entirely.
 
 Usage:
     python evals/test_prompt_split.py
@@ -86,31 +85,14 @@ def test_direct_prompt_offers_no_tools() -> None:
         assert name not in p, f"direct prompt must not mention {name}"
 
 
-def test_continuation_prompt_drops_decision_rules_keeps_rest_verbatim() -> None:
-    full = sa.build_autopilot_prompt(cwd="C:/x", max_steps=15)
-    lean = sa.build_autopilot_prompt(cwd="C:/x", max_steps=15,
-                                     omit_rules=sa._CONTINUATION_OMIT_RULES)
-    assert len(lean) < len(full) - 2000, (len(full), len(lean))
-    # Dropped: the step-1 decision rules, by their distinctive wording.
-    for marker in ("NEVER call a tool just because",       # rule 10
-                   "AMBIGUOUS EDIT/FIX REQUESTS ONLY",      # rule 12
-                   "Get-CimInstance Win32_Processor",       # rule 9
-                   "Direct answers: general knowledge"):    # rule 4
-        assert marker in full and marker not in lean, marker
-    # Kept byte-identical: format, edit discipline, verification, tail.
-    for n in sorted(set(sa._AUTOPILOT_RULES) - set(sa._CONTINUATION_OMIT_RULES)):
-        body = sa._AUTOPILOT_RULES[n].format(max_steps=15)
-        assert body in lean, f"rule {n} must survive verbatim"
-    assert "TOOLS:" in lean and '"action":"run_command"' in lean
-
-
-def test_flag_off_is_byte_identical_to_baseline() -> None:
+def test_split_defaults_on_and_monolith_untouched() -> None:
+    assert sa.DEFAULT_CONFIG["prompt_split"] is True
     sa.set_active_config(dict(_CFG))
     try:
+        # The agent-path prompt is the unchanged monolith regardless of flag.
         base = sa.build_autopilot_prompt(cwd="C:/x", max_steps=15, query="hello")
-        again = sa.build_autopilot_prompt(cwd="C:/x", max_steps=15, query="hello")
-        assert base == again
-        assert sa.DEFAULT_CONFIG["prompt_split"] is False
+        assert "NEVER call a tool just because" in base
+        assert "TOOLS:" in base
     finally:
         sa.set_active_config(None)
 
@@ -147,35 +129,10 @@ def test_direct_stage_refuses_tool_calls() -> None:
             "direct stage executed a tool call"
 
 
-def test_agent_path_swaps_to_continuation_prompt_at_step_two() -> None:
+def test_agent_path_keeps_one_prompt_for_every_step() -> None:
+    # The continuation-stage prompt swap was measured and rejected
+    # (2026-08-31); this pins that agent-path steps never change prompt.
     cfg = {**_CFG, "prompt_split": True}
-    seen: list[str] = []
-    orig, wrapper = _capture_prompts(seen)
-    sa.set_mock_responses([
-        '{"action":"list_directory","args":{"path":"."}}',
-        '{"action":"finish","message":"Two files present."}',
-    ])
-    sa.call_llm = wrapper
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            import os
-            old = Path.cwd()
-            try:
-                os.chdir(tmp)
-                sa.run_autopilot(cfg, [], "Create a file called notes.txt with a summary of this directory", "powershell")
-            finally:
-                os.chdir(old)
-    finally:
-        sa.call_llm = orig
-    assert len(seen) >= 2, "expected two LLM calls"
-    assert "NEVER call a tool just because" in seen[0], "step 1 must use the monolith"
-    assert "NEVER call a tool just because" not in seen[1], \
-        "step 2 must use the continuation prompt"
-    assert '"action":"run_command"' in seen[1], "tools must survive in continuation"
-
-
-def test_flag_off_never_swaps_prompts() -> None:
-    cfg = {**_CFG, "prompt_split": False}
     seen: list[str] = []
     orig, wrapper = _capture_prompts(seen)
     sa.set_mock_responses([
@@ -195,18 +152,16 @@ def test_flag_off_never_swaps_prompts() -> None:
     finally:
         sa.call_llm = orig
     assert len(seen) >= 2
-    assert seen[0] == seen[1], "flag off must keep one prompt for every step"
+    assert seen[0] == seen[1], "agent path must keep one prompt for every step"
 
 
 TESTS = [
     test_router_accepts_knowledge_queries,
     test_router_keeps_measured_risk_queries_on_agent_path,
     test_direct_prompt_offers_no_tools,
-    test_continuation_prompt_drops_decision_rules_keeps_rest_verbatim,
-    test_flag_off_is_byte_identical_to_baseline,
+    test_split_defaults_on_and_monolith_untouched,
     test_direct_stage_refuses_tool_calls,
-    test_agent_path_swaps_to_continuation_prompt_at_step_two,
-    test_flag_off_never_swaps_prompts,
+    test_agent_path_keeps_one_prompt_for_every_step,
 ]
 
 

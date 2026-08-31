@@ -16,7 +16,7 @@
   "show_diffs": true,
   "network_access": "ask",
   "conditional_rules": false,
-  "prompt_split": false,
+  "prompt_split": true,
   "rich_input": true,
   "input_history_file": "",
   "input_history_limit": 500,
