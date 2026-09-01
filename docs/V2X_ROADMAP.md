@@ -98,6 +98,27 @@ steps.*
 
 ## Phase: The Split — codebase health (agent.py stages 3–8)
 
+> **COMPLETE 2026-09-01 (commits 7156138..cf20b8c).** Seven stages shipped;
+> agent.py 3,818 → 1,499 lines and no module exceeds 800 (tools 738, repl
+> 613, llm 506). Exit gate met: 23 suites / 687 tests green after every
+> stage, zero vacuous patches (each stage's patch sites verified by
+> sentinel or mutation probe). Live NPU smoke suite after the final stage:
+> **10/10, no retries.** The full pass^3 extended arm against the 08-31
+> baseline (91/117) was interrupted three times by the environment and is
+> still worth running once the machine can sit uninterrupted for ~45 min:
+> `python evals/cases_extended.py --runs 3` on a fresh server, compare to
+> `evals/results/ab_baseline_20260831_r3.json`.
+>
+> Three traps the playbook caught, worth re-reading before any future move:
+> the `_HOME` guard alias (patching the stale name would have silently
+> disarmed the sensitive-path enforcement in tests), the agent↔repl import
+> cycle (solved with a call-time proxy so `inspect.getsource(sa.run_repl)`
+> and every `sa.*` patch still work), and `_CURRENT_SESSION_ID` — a
+> module-local copy in `llm.py` would have cost npurun's continuation
+> detection in production while every mock-backend test stayed green. Also
+> note a module-level `__getattr__` does NOT serve bare globals inside that
+> module's own functions.
+
 **Progress 2026-08-31 (commits 7156138..cac1462):** four stages landed —
 `parsing.py` (protocol text + TOOL_NAMES), `http_client.py` (keep-alive
 transport), `cancel.py` (Esc-cancel primitives; the eval runner now silences
@@ -106,14 +127,16 @@ write-scope guards owning `_HOME`). agent.py 3,818 → 2,829 lines; every
 moved-and-patched symbol verified live by sentinel/mutation probes (zero
 vacuous patches).
 
-Remaining, in order of increasing risk: config/compaction → repl → loop/LLM.
-The repl move needs a name-qualification pass over ~40 agent-resident
-references (beware: run_repl's local `sessions` shadows the module — the
-`sessions_search` alias exists for exactly this). The loop/LLM layer is
-entangled with five patched globals (mock queue, token estimator, session
-id, `_ACTIVE_CONFIG`, undo snapshots) and should be a state-injection
-redesign, not a cut-and-paste. The hazard playbook (monkeypatch vacuity —
-see project memory / §14.16) applies to every stage.
+Stages 4–7 (compaction, config, repl, llm) followed on 2026-09-01 using two
+patterns worth reusing: re-bind moved names in agent.py so `sa.<name>`
+patches keep intercepting, and resolve anything the moved code borrows back
+*through* the agent hub at call time rather than copying it locally.
+
+What still lives in agent.py (1,499 lines) is the coherent core: the prompt
+builder, `run_autopilot`, `execute_tool_call`, one-shot entry points and
+`main`. Splitting `run_autopilot` (363 lines) further would mean cutting a
+single control-flow narrative in half, which costs more readability than it
+buys — leave it unless it grows.
 
 - One stage per PR, mutation-tested (neutralize the moved thing, confirm the
   suite fails, restore).
