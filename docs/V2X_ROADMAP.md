@@ -103,11 +103,16 @@ steps.*
 > 613, llm 506). Exit gate met: 23 suites / 687 tests green after every
 > stage, zero vacuous patches (each stage's patch sites verified by
 > sentinel or mutation probe). Live NPU smoke suite after the final stage:
-> **10/10, no retries.** The full pass^3 extended arm against the 08-31
-> baseline (91/117) was interrupted three times by the environment and is
-> still worth running once the machine can sit uninterrupted for ~45 min:
-> `python evals/cases_extended.py --runs 3` on a fresh server, compare to
-> `evals/results/ab_baseline_20260831_r3.json`.
+> **10/10, no retries.** Full post-split regression arm (extended ×3, fresh
+> server, collected 2026-09-01 via `evals/run_chunk.py` in chunks on one
+> server after background runs kept being killed): **87/117 vs the 08-31
+> baseline's 91/117, Fisher p=0.65; pass^3 27/39 vs 28/39, McNemar p=1.0 —
+> statistical parity, zero invalid runs.** The only large per-case swing
+> (ambiguous-3 3/3→0/3) is the documented clarification-marker grader gap
+> (correct zero-tool restraint, statement phrasing); its mirror
+> (self-correct-1 0/3→3/3) swung equally the other way. Knowledge-case
+> first-token latency 10.1s→6.5s median — the direct-stage win replicated
+> on an independent run.
 >
 > Three traps the playbook caught, worth re-reading before any future move:
 > the `_HOME` guard alias (patching the stale name would have silently
