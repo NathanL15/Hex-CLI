@@ -52,8 +52,15 @@ def test_budget_shrinks_as_context_fills() -> None:
     assert small > large, (small, large)
 
 
+# The budget npurun advertises for the 4,096 bundle (window minus its
+# 400-token reply reserve); the config default (3,000) is the fallback for a
+# server that advertises nothing.
+_PROD: dict[str, Any] = {**_CFG, "context_window_tokens": 3_696}
+
+
 def test_budget_never_exceeds_configured_ceiling() -> None:
-    assert sa._step_tool_output_limit(_CFG, []) == _CFG["tool_output_limit"]
+    assert sa._step_tool_output_limit(_PROD, []) == _CFG["tool_output_limit"]
+    assert sa._step_tool_output_limit(_CFG, []) <= _CFG["tool_output_limit"]
 
 
 def test_budget_never_below_floor() -> None:
@@ -66,10 +73,19 @@ def test_budget_at_the_shipped_prompt_size_cannot_overflow() -> None:
     """The regression that motivated this: prompt (~2,355 tok) + a max-size
     tool result must stay under the window with room to answer."""
     prompt_chars = 9_300  # measured autopilot prompt
-    limit = sa._step_tool_output_limit(_CFG, _msgs(prompt_chars) + [{"role": "user", "content": "x" * 400}])
+    limit = sa._step_tool_output_limit(_PROD, _msgs(prompt_chars) + [{"role": "user", "content": "x" * 400}])
     total_tokens = sa._TOKEN_ESTIMATOR.estimate(prompt_chars + 400 + limit)
-    assert total_tokens + sa._TOOL_OUTPUT_RESERVE_TOKENS <= _CFG["context_window_tokens"], (limit, total_tokens)
+    assert total_tokens + sa._TOOL_OUTPUT_RESERVE_TOKENS <= _PROD["context_window_tokens"], (limit, total_tokens)
     assert limit < _CFG["tool_output_limit"], "the ceiling alone would overflow — budget must bite"
+    assert limit >= 2_400, f"a first page must be worth reading at the shipped prompt size: {limit}"
+
+
+def test_fallback_budget_only_guarantees_the_floor() -> None:
+    """Against a server that advertises no budget (3,000 fallback) the shipped
+    prompt leaves too little room for a real page; the floor still applies
+    and the server's trim keeps the request (first-user policy, fork 0.2.1)."""
+    limit = sa._step_tool_output_limit(_CFG, _msgs(9_300) + [{"role": "user", "content": "x" * 400}])
+    assert sa._TOOL_OUTPUT_MIN_CHARS <= limit <= 2_000, limit
 
 
 def test_bigger_window_config_restores_old_behaviour() -> None:
@@ -169,6 +185,7 @@ def test_message_shorter_than_catches_tool_dumps() -> None:
 
 
 TESTS = [
+    test_fallback_budget_only_guarantees_the_floor,
     test_budget_shrinks_as_context_fills,
     test_budget_never_exceeds_configured_ceiling,
     test_budget_never_below_floor,

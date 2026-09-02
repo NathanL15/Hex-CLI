@@ -13,6 +13,7 @@ scrolled past. Checks that only whisper are checks that don't work.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -164,7 +165,17 @@ def check_server(config: dict[str, Any]) -> Check:
     try:
         with urllib.request.urlopen(f"http://{host}/healthz", timeout=3) as r:
             if r.status == 200:
-                return Check("model server", PASS, f"healthy at {host}")
+                detail = f"healthy at {host}"
+                try:
+                    with urllib.request.urlopen(f"http://{host}/v1/models", timeout=3) as m:
+                        models = json.loads(m.read().decode("utf-8")).get("data") or []
+                    first = models[0] if models else {}
+                    if first.get("input_token_budget"):
+                        detail += (f" — input budget {first['input_token_budget']} of "
+                                   f"{first.get('context_size', '?')} tokens")
+                except Exception:
+                    pass
+                return Check("model server", PASS, detail)
     except Exception:
         pass
     return Check("model server", WARN, f"not responding at {host}",

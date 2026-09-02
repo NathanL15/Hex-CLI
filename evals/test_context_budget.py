@@ -40,11 +40,58 @@ def test_budget_is_derived_not_hardcoded() -> None:
     warn, crit = sa._history_budget_tokens(_CFG)
     base = len(sa.build_autopilot_prompt(cwd=".", max_steps=15)) // 4
     assert crit > warn, (warn, crit)
-    # The whole point: warn + base + overhead must land at or under the cliff.
-    assert warn + base <= sa._DEGRADATION_CLIFF_TOKENS, (
+    # The whole point: warn + base + overhead must land at or under the
+    # server's input budget, or the server drops history the harness thinks
+    # it still has.
+    window = int(_CFG["context_window_tokens"])
+    assert warn + base <= window, (
         f"budget {warn} + prompt {base} = {warn + base} exceeds the "
-        f"{sa._DEGRADATION_CLIFF_TOKENS}-token cliff"
+        f"{window}-token input budget"
     )
+
+
+def test_budget_follows_the_server_window() -> None:
+    """The floor is a consequence of the window, not a constant: a server
+    that admits 3,700 tokens (the compiled 4,096 minus a reply reserve) must
+    lift the history budget well off the 250 floor."""
+    base = sa.estimate_tokens(sa.build_autopilot_prompt(cwd=str(Path.cwd()), max_steps=15))
+    small, _ = sa._history_budget_tokens({**_CFG, "context_window_tokens": 3_000})
+    large, _ = sa._history_budget_tokens({**_CFG, "context_window_tokens": 3_700})
+    expected = max(sa._MIN_HISTORY_BUDGET_TOKENS, 3_700 - base - sa._TURN_OVERHEAD_TOKENS)
+    assert large == expected, (large, expected, base)
+    assert large - small >= 400, (small, large)
+
+
+def test_context_window_adopted_from_server() -> None:
+    """The harness adopts the budget npurun advertises, once, and only when
+    the user has not pinned the key away from the default."""
+    calls: list[str] = []
+
+    def fake_get(url: str, timeout_s: int = 10):
+        calls.append(url)
+        return {"data": [{"id": "m", "context_size": 4096, "input_token_budget": 3696}]}
+
+    orig = sa.http_json_get
+    sa.http_json_get = fake_get
+    try:
+        cfg = {**_CFG, "backend": "openai",
+               "openai_compatible": {"base_url": "http://127.0.0.1:1/v1"}}
+        sa._sync_context_window(cfg)
+        assert cfg["context_window_tokens"] == 3696, cfg["context_window_tokens"]
+        sa._sync_context_window(cfg)
+        assert len(calls) == 1, "must probe once per config object"
+
+        pinned = {**_CFG, "backend": "openai", "context_window_tokens": 3_000 + 1,
+                  "openai_compatible": {"base_url": "http://127.0.0.1:1/v1"}}
+        sa._sync_context_window(pinned)
+        assert pinned["context_window_tokens"] == 3_001, "a pinned value is the A/B lever"
+
+        mock = {**_CFG}
+        sa._sync_context_window(mock)
+        assert mock["context_window_tokens"] == _CFG["context_window_tokens"]
+        assert len(calls) == 1, "mock backend never probes"
+    finally:
+        sa.http_json_get = orig
 
 
 def test_budget_never_below_floor() -> None:
@@ -81,7 +128,7 @@ def test_budget_respects_explicit_override() -> None:
 def test_old_hardcoded_threshold_would_have_missed_the_cliff() -> None:
     """Regression guard for the actual v1.7 bug."""
     base = len(sa.build_autopilot_prompt(cwd=".", max_steps=15)) // 4
-    assert base + 1_300 > sa._DEGRADATION_CLIFF_TOKENS, (
+    assert base + 1_300 > int(_CFG["context_window_tokens"]), (
         "if this fails the prompt shrank enough that the old constant would "
         "have been fine — re-derive the story before changing the test"
     )
@@ -246,6 +293,8 @@ def test_mock_backend_never_feeds_the_estimator() -> None:
 
 
 TESTS = [
+    test_budget_follows_the_server_window,
+    test_context_window_adopted_from_server,
     test_estimator_default_matches_chars_over_4,
     test_estimator_learns_from_observations,
     test_estimator_clamps_and_rejects_garbage,

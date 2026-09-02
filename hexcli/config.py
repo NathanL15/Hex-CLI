@@ -31,7 +31,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # single tool result can never overflow the window (an overflow returns
     # an EMPTY generation — measured 2026-09-01). Raise only with a bigger
     # bundle.
-    "context_window_tokens": 4096,
+    "context_window_tokens": 3000,
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
