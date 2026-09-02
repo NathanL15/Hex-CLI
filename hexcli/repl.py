@@ -298,6 +298,14 @@ def restart_backend(config: dict[str, Any]) -> bool:
     env["ADSP_LIBRARY_PATH"] = str(sdk / "lib" / "hexagon-v73" / "unsigned")
     env["PATH"] = (f"{sdk / 'bin' / 'aarch64-windows-msvc'};"
                    f"{sdk / 'lib' / 'aarch64-windows-msvc'};{env.get('PATH', '')}")
+    try:
+        # The launcher owns runtime selection (newest valid QAIRT, and the
+        # Rewind/prefix-reuse mode when SDK >= 2.50 and npurun >= 0.2.0);
+        # a restart must respawn the same server the launcher started.
+        import launcher
+        env = launcher._npurun_env()
+    except Exception:
+        pass
     bind = sa._backend_url(config).split("//")[-1].split("/")[0]
     try:
         subprocess.Popen(

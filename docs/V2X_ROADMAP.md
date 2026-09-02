@@ -153,6 +153,14 @@ buys — leave it unless it grows.
 
 ## Phase: Latency — kill the per-turn prefill tax (time-boxed spikes)
 
+> **SHIPPED 2026-09-02 (Rewind runtime).** See docs/RESEARCH_NEXT_LEVERS.md
+> §6: QAIRT 2.50 + fork 0.2.0 (`NPURUN_REWIND=2`, never reset, rebuild on
+> divergence) + `prompt_stable_prefix`. Whole-turn mean 16.0 s -> 9.5 s,
+> step >= 2 median 7.6 s -> 3.2 s, quality 97/117 vs 91/117. Item 4 below
+> (prefix byte-stability) was the precondition and is done; items 1-2 are
+> superseded; 3 and 5 remain optional spikes.
+
+
 The system prompt costs ~3s of prefill every turn because nothing reuses KV
 state. This is the single largest remaining UX lever and it is entirely
 runtime work. Three spikes, each time-boxed to a day or two:

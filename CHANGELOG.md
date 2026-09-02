@@ -6,6 +6,31 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## 2.4.0 — unreleased
 
+### Every turn ~40% faster: the KV cache finally survives between calls
+
+On QAIRT 2.50 the npurun fork (0.2.0) keeps the Genie dialog alive across
+requests and sends every warm query as a prefix-matching `Rewind`, so the
+2,355-token system prompt is prefilled once per process, not once per
+step — and, because the prompt is now byte-identical across directories
+and days (`prompt_stable_prefix`), even a brand-new conversation starts
+warm. Two Genie 1.20 behaviours shaped the server: a reset after a large
+prefill wedges the dialog (so it never resets), and an early-diverging
+transcript poisons it (so it rebuilds the dialog in place, ~5 s, only on a
+different system prompt). The launcher turns all of this on when it finds
+QAIRT >= 2.50 and npurun >= 0.2.0, and leaves everything as before
+otherwise.
+
+| Extended suite, 3 runs/case | before | after |
+|---|---|---|
+| run-level pass | 91/117 | **97/117** (no regression, p=0.41) |
+| first token, median | 6.8 s | **3.7 s** |
+| agent step >= 2, median | 7.6 s | **3.2 s** |
+| whole turn, mean | 16.0 s | **9.5 s** |
+
+The no-tools direct stage is off in this configuration: with prefix reuse
+a knowledge query on the agent path is already decode-bound, and a
+different system prompt would cost a rebuild.
+
 ### Large tool results no longer break the step
 
 The compiled window is 4,096 tokens. The server drops older messages to
