@@ -155,6 +155,58 @@ def test_agent_path_keeps_one_prompt_for_every_step() -> None:
     assert seen[0] == seen[1], "agent path must keep one prompt for every step"
 
 
+# ---------------------------------------------------------------------------
+# Stable prefix (prompt_stable_prefix): the KV-reuse precondition
+# ---------------------------------------------------------------------------
+
+def test_stable_prefix_is_byte_identical_across_cwd_and_off_by_default() -> None:
+    assert sa.DEFAULT_CONFIG["prompt_stable_prefix"] is False
+    sa.set_active_config({**_CFG, "prompt_stable_prefix": True})
+    try:
+        a = sa.build_autopilot_prompt(cwd="C:/one", max_steps=15)
+        b = sa.build_autopilot_prompt(cwd="D:/two", max_steps=15)
+        assert a == b, "stable prefix must not depend on cwd"
+        assert "Working directory:" not in a and "Date:" not in a
+        assert "NEVER call a tool just because" in a and "TOOLS:" in a, "rules and tools intact"
+    finally:
+        sa.set_active_config(None)
+
+
+def test_default_prefix_unchanged_and_carries_cwd() -> None:
+    sa.set_active_config(dict(_CFG))
+    try:
+        a = sa.build_autopilot_prompt(cwd="C:/one", max_steps=15)
+        assert "Working directory: C:/one" in a
+    finally:
+        sa.set_active_config(None)
+
+
+def test_stable_prefix_moves_date_into_user_message() -> None:
+    cfg = {**_CFG, "prompt_stable_prefix": True}
+    seen: list[list[dict[str, str]]] = []
+    orig = sa.call_llm
+
+    def wrapper(config, messages, key, **kw):
+        seen.append([dict(m) for m in messages])
+        return orig(config, messages, key, **kw)
+    sa.set_mock_responses(['{"action":"finish","message":"ok"}'])
+    sa.call_llm = wrapper
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            import os
+            old = Path.cwd()
+            try:
+                os.chdir(tmp)
+                sa.run_autopilot(cfg, [], "Create a file called notes.txt with hi", "powershell")
+            finally:
+                os.chdir(old)
+    finally:
+        sa.call_llm = orig
+    sys_msg, user_msg = seen[0][0]["content"], seen[0][-1]["content"]
+    assert "Date:" not in sys_msg and "Working directory:" not in sys_msg
+    assert user_msg.startswith("Date: ") and "Working directory:" in user_msg
+
+
 TESTS = [
     test_router_accepts_knowledge_queries,
     test_router_keeps_measured_risk_queries_on_agent_path,
@@ -162,6 +214,9 @@ TESTS = [
     test_split_defaults_on_and_monolith_untouched,
     test_direct_stage_refuses_tool_calls,
     test_agent_path_keeps_one_prompt_for_every_step,
+    test_stable_prefix_is_byte_identical_across_cwd_and_off_by_default,
+    test_default_prefix_unchanged_and_carries_cwd,
+    test_stable_prefix_moves_date_into_user_message,
 ]
 
 

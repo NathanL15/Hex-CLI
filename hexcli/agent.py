@@ -120,6 +120,8 @@ render_result = ui.render_result
 
 COMPACT_SYSTEM_PROMPT = prompts.COMPACT_SYSTEM_PROMPT
 _AUTOPILOT_TEMPLATE = prompts._AUTOPILOT_TEMPLATE
+_AUTOPILOT_HEAD_STABLE = prompts._AUTOPILOT_HEAD_STABLE
+_AUTOPILOT_TEMPLATE_STABLE = prompts._AUTOPILOT_TEMPLATE_STABLE
 _DIRECT_TEMPLATE = prompts._DIRECT_TEMPLATE
 _LINT_TOOL_SCHEMA = prompts._LINT_TOOL_SCHEMA
 _SEARCH_MEMORY_SCHEMA = prompts._SEARCH_MEMORY_SCHEMA
@@ -220,10 +222,11 @@ def _autopilot_template(query: str, recent_tools: list[str]) -> str:
     # Fallback read from DEFAULT_CONFIG rather than a literal: outside an agent
     # turn there is no active config, and a hardcoded default here would drift
     # from the shipped one silently.
+    stable = bool(config.get("prompt_stable_prefix", DEFAULT_CONFIG["prompt_stable_prefix"]))
     if not config.get("conditional_rules", DEFAULT_CONFIG["conditional_rules"]):
-        return _AUTOPILOT_TEMPLATE
+        return _AUTOPILOT_TEMPLATE_STABLE if stable else _AUTOPILOT_TEMPLATE
     selected = _select_autopilot_rules(query, recent_tools)
-    return (_AUTOPILOT_HEAD
+    return ((_AUTOPILOT_HEAD_STABLE if stable else _AUTOPILOT_HEAD)
             + "".join(_AUTOPILOT_RULES[n] for n in sorted(selected))
             + _AUTOPILOT_TAIL)
 
@@ -969,6 +972,9 @@ def run_autopilot(
 
     ws = workspace_snapshot(cwd)
     user_content = f"{ws}\nWorking directory: {cwd}\n\nRequest: {query.strip()}"
+    if config.get("prompt_stable_prefix", False):
+        # The date left the system prompt (stable prefix); it rides here.
+        user_content = f"Date: {datetime.now().strftime('%Y-%m-%d')}.\n" + user_content
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system_prompt},
         *history,
