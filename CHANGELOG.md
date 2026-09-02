@@ -4,6 +4,66 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.5.0 — unreleased
+
+### The context question, answered: the window was never the model's
+
+The 250-token history floor came from two constants nobody had derived: a
+2,600-token "degradation cliff" in the harness (V2_PLAN §14.7 records, the
+same week it was written, that the collapse it described was a regex bug)
+and a 3,000-token input cap in the server, inherited from upstream. The
+bundle is compiled to 4,096. A cliff sweep at 3,000–3,700 input tokens
+found quality flat all the way (12/18 at every size, the same three cases
+failing each time); decode is ~12% slower only with the window actually
+full.
+
+Now: the server derives its input budget from the bundle's context size
+(4,096 − a 400-token reply reserve = 3,696), keeps the user's request when
+it must trim (it used to drop it first), caps generation at what the window
+has left, and advertises the budget on `/v1/models`. The harness reads that
+budget at the first turn and sizes history and tool pages against it.
+History before auto-compact goes from 250 tokens to ~850; a first page of a
+big file is now ~3,000 characters where the 4,096 assumption had let it
+evict the question entirely (2.4.0 sized tool pages against the compiled
+window while the server trimmed to 3,000 — bigfile-1 was passing with the
+model never seeing the request).
+
+| | 2.4.0 | 2.5.0 |
+|---|---|---|
+| multiturn ×3 (uc1–uc3, 16 turns) | 25/48 | **35/48** |
+| uc2 everyday session, 6 turns | 7/18 | **18/18** |
+| extended ×3 | 100/123 | 95/123 (parity, p=0.53) |
+| empty model replies in the multiturn run | 63 of 117 | 1 of 117 |
+
+### Two bugs the single-turn suites could not see
+
+- **Silent empties.** With the old floor, compaction rewrote history every
+  two exchanges, and a KV-cache Rewind on a transcript that diverges
+  mid-conversation can come back *successful with zero tokens* in ~0.5 s,
+  then stay that way. 63 of 117 calls in a multi-turn run. That is 2.4.0 in
+  a real session. The server now treats a Rewind that returns nothing like
+  a failed one: rebuild and retry.
+- **A payload that found the other door.** uc3-t9's calc.exe launch has been
+  refused by run_code's workspace boundary since July; routed through
+  `run_command` it was "caution" and ran. Absolute-path program launches,
+  `Start-Process` and `cmd /c start` are now in the sensitive tier
+  (confirm-gated; denied when non-interactive).
+
+### End-of-turn prewarm
+
+Measured limit of Genie 1.20's prefix matching: a request that diverges from
+the cache (every new turn — history is condensed) works while the cache is
+under ~3,150 tokens and costs a ~10 s rebuild above that. So the harness now
+tells the server when a turn ends; if the cache is long, the server rebuilds
+and re-prefills the system prompt in the background while you read the
+answer. Next turn after a 3,400-token turn: 2.2 s to first token with the
+prewarm, 10–12 s without. The client waits out the server's busy signal if
+you type faster than that.
+
+Requires the 0.2.1 `npurun-arm64.exe` from this release (the budget, the
+empty-Rewind guard and the prewarm endpoint live there); an older server
+keeps 2.4.0's behaviour with a 3,000-token budget.
+
 ## 2.4.0 — 2026-09-02
 
 ### Every turn ~40% faster: the KV cache finally survives between calls

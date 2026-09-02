@@ -197,6 +197,29 @@ runtime work. Three spikes, each time-boxed to a day or two:
 *Exit gate: one mechanism demonstrates warm-turn prefill <1s — or every
 mechanism has a written dead-end verdict with numbers, closing §9 for good.*
 
+## Phase: Context — the window the bundle already has  *(DONE 2026-09-02, ships as 2.5.0)*
+
+The 250-token history floor was two undocumented constants: the harness's
+2,600-token "cliff" (never a length effect — V2_PLAN §14.7) and the
+server's 3,000-token input cap (upstream's generic guard). Measured with
+the Rewind runtime in place (docs/RESEARCH_NEXT_LEVERS.md §8):
+
+- quality flat from 2,370 to 3,697 input tokens (cliff sweep ×3);
+- server budget = context size − 400 reserve (3,696), first-user-preserving
+  trim, advertised on /v1/models; harness adopts it → history budget ~850;
+- multiturn ×3: 25/48 → 35/48; extended ×3 parity (95 vs 100 of 123, p=0.53);
+- found on the way: silent empty replies on divergent Rewinds (63/117 calls
+  in a multi-turn run under the old floor — fixed in fork 0.2.1), and the
+  calc.exe payload routed through run_command (now sensitive-tier);
+- Genie 1.20 limit: a divergent Rewind fails once the cache is > ~3,200
+  tokens → end-of-turn prewarm (fork endpoint + harness signal) keeps the
+  next turn at ~2 s instead of ~10 s.
+
+Not pursued, with reasons: the 8K bundle (6 tok/s), reset() (wedges after a
+long prefill on Genie 1.20), a second standby dialog (context binary cannot
+be loaded twice — err 1007), append-only raw history across turns (would
+make every turn an extension; deferred — changes what the model reads).
+
 ## Phase: Capabilities — experiments at 4B (each behind a flag, each A/B'd)
 
 The deferred features, revived one at a time under the v2 discipline: build
