@@ -18,6 +18,7 @@
   "network_access": "ask",
   "conditional_rules": false,
   "prompt_split": true,
+  "prompt_stable_prefix": false,
   "rich_input": true,
   "input_history_file": "",
   "input_history_limit": 500,

@@ -51,6 +51,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Opt in only with a bigger-context bundle or a different model.
     "conditional_rules": False,
     "prompt_split": True,
+    # Byte-stable system prompt (date/cwd move to the first user message).
+    # Precondition for KV prefix reuse; default flips after the A/B.
+    "prompt_stable_prefix": False,
     # Rich input line: persistent history, Tab completion, multi-line paste.
     # Falls back to bare input() automatically when stdin/stdout is not a tty.
     "rich_input": True,
@@ -162,6 +165,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "show_diffs":                     "bool",
     "conditional_rules":              "bool",
     "prompt_split":                   "bool",
+    "prompt_stable_prefix":           "bool",
     "network_access":                 "str",
     "rich_input":                     "bool",
     "input_history_file":             "str",

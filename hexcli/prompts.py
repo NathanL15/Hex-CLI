@@ -261,6 +261,20 @@ _DELEGATE_SCHEMA = textwrap.dedent("""
 _AUTOPILOT_TEMPLATE = _AUTOPILOT_HEAD + "".join(
     _AUTOPILOT_RULES[n] for n in sorted(_AUTOPILOT_RULES)) + _AUTOPILOT_TAIL
 
+# Stable-prefix variant (config "prompt_stable_prefix"): identical to the
+# head above minus its second line. Date and working directory move into the
+# first user message instead, so the system prompt is byte-identical across
+# directories and days. That is the precondition for KV prefix reuse: with
+# NPURUN_REWIND=2 on QAIRT 2.50, Genie prefix-matches the cached transcript,
+# and a prefix that diverges at token ~20 (a different cwd) costs a full
+# dialog rebuild instead of a warm prefill (measured 2026-09-02: 26 rebuilds
+# in 50 eval requests).
+_PER_TURN_HEAD_LINE = "   Date: {date}. Working directory: {cwd}.\n"
+assert _PER_TURN_HEAD_LINE in _AUTOPILOT_HEAD
+_AUTOPILOT_HEAD_STABLE = _AUTOPILOT_HEAD.replace(_PER_TURN_HEAD_LINE, "", 1)
+_AUTOPILOT_TEMPLATE_STABLE = _AUTOPILOT_HEAD_STABLE + "".join(
+    _AUTOPILOT_RULES[n] for n in sorted(_AUTOPILOT_RULES)) + _AUTOPILOT_TAIL
+
 
 # ---------------------------------------------------------------------------
 # Prompt split (config "prompt_split", default on) — the DIRECT stage.
