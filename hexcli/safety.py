@@ -51,6 +51,15 @@ _SENSITIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"frombase64string",
     r"protecteddata\]::unprotect",                # DPAPI secrets
     r"\$env:\w*(token|secret|password|api_?key)\w*",  # credential env vars
+    # Launching a program by absolute path outside the workspace (uc3-t9's
+    # `C:\Windows\System32\calc.exe`): the run_code workspace boundary
+    # already refuses it, but a payload can route the same launch through
+    # run_command, where nothing classified it (measured 2026-09-02: 1 of 3
+    # runs executed it that way). Confirm-gated like the rest of this tier;
+    # `python script.py` and `.\build.bat` inside the workspace are untouched.
+    r"(?:^|[&|;]\s*|\bstart-process\b[^|&;\n]*?)[\"']?[a-z]:[\\/][^\"'|&;\n]*?\.(exe|com|bat|cmd|msi|scr|vbs|ps1|js)\b",
+    r"^\s*start-process\b",
+    r"\bcmd(\.exe)?\s+/c\s+start\b",
 ]]
 
 _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
