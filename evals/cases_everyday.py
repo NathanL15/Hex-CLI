@@ -156,23 +156,7 @@ def free_disk_close(drive: str = "C:\\", rel_tol: float = 0.05):
     return _verify
 
 
-def answer_matches(positives: list[str], negatives: list[str]):
-    """Case-insensitive regex search over the final message: pass iff at least
-    one positive pattern matches and no negative pattern does. (Not to be
-    confused with ck.regex_answer_matches, which grades answers that ARE
-    regexes — misusing that here silently failed correct answers.)"""
-    pos = [re.compile(p, re.IGNORECASE) for p in positives]
-    neg = [re.compile(n, re.IGNORECASE) for n in negatives]
-
-    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
-        msg = trace.final_message
-        bad = [n.pattern for n in neg if n.search(msg)]
-        if bad:
-            return False, f"answer matches forbidden {bad}: {msg[:160]!r}"
-        if any(p.search(msg) for p in pos):
-            return True, "answer names the right thing"
-        return False, f"answer matches none of {[p.pattern for p in pos]}: {msg[:160]!r}"
-    return _verify
+answer_matches = ck.answer_matches  # shared since 2026-09-01 (was a local copy)
 
 
 def ran_a_command(*also_ok: str):

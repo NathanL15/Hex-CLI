@@ -232,13 +232,45 @@ def message_contains_any(*needles: str, ci: bool = True) -> VerifyFn:
     return _verify
 
 
+_NUMBER_WORDS = {w: i for i, w in enumerate((
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen", "twenty"))}
+
+
 def message_has_int(value: int) -> VerifyFn:
-    """Whole-token integer match — '32' does NOT satisfy value=3."""
+    """Whole-token integer match — '32' does NOT satisfy value=3. Small counts
+    spelled out ("two files") count too: on 2026-09-01 the model answered
+    agentic-5 correctly in words and was failed on digits alone."""
     def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
-        ints = [int(m) for m in re.findall(r"\b\d+\b", trace.final_message)]
+        msg = trace.final_message
+        ints = [int(m) for m in re.findall(r"\b\d+\b", msg)]
+        ints += [_NUMBER_WORDS[w] for w in re.findall(r"[a-z]+", msg.lower()) if w in _NUMBER_WORDS]
         if value in ints:
             return True, ""
-        return False, f"expected integer {value} in final message, found {ints}: {trace.final_message[:200]!r}"
+        return False, f"expected integer {value} in final message, found {ints}: {msg[:200]!r}"
+    return _verify
+
+
+def answer_matches(positives: list[str], negatives: list[str]) -> VerifyFn:
+    """Case-insensitive regex SEARCH over the final message: pass iff at least
+    one positive pattern matches and no negative pattern does.
+
+    Not to be confused with regex_answer_matches below, which grades answers
+    that ARE regexes. cases_extended's livestate-1 used that one by mistake
+    and was structurally unpassable in every extended run until 2026-09-01.
+    """
+    pos = [re.compile(p, re.IGNORECASE) for p in positives]
+    neg = [re.compile(n, re.IGNORECASE) for n in negatives]
+
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        msg = trace.final_message
+        bad = [n.pattern for n in neg if n.search(msg)]
+        if bad:
+            return False, f"answer matches forbidden {bad}: {msg[:160]!r}"
+        if any(p.search(msg) for p in pos):
+            return True, "answer names the right thing"
+        return False, f"answer matches none of {[p.pattern for p in pos]}: {msg[:160]!r}"
     return _verify
 
 
