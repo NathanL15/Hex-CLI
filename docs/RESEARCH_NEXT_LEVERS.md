@@ -191,4 +191,46 @@ prompt is identical across directories and days.
 ### Measurement (extended suite, 3 runs/case, one fresh 2.50 server,
 `prompt_split=false prompt_stable_prefix=true`)
 
-(filled in below as chunks complete)
+| metric | baseline (2.47, 08-31) | Rewind runtime (2.50) |
+|---|---|---|
+| run-level pass | 91/117 (77.8%) | **97/117 (82.9%)**, Fisher p=0.41 |
+| pass^3 | 28/39 | 29/39 (McNemar p=1.0) |
+| first-token latency, median (mean) | 6.8 s (8.5 s) | **3.7 s (5.5 s)** |
+| agent step >= 2 latency, median (n~110) | 7.6 s | **3.2 s** |
+| whole turn, mean wall | 16.0 s | **9.5 s (-41%)** |
+| invalid runs | 0 | 0 |
+
+No regression: the only drops are the `ambiguous-*` family (statement-phrased
+refusals, the documented marker gap, which swings +-3 between any two
+runs) and two single-run flakes; `self-correct-1` 0/3 -> 3/3, `trap-4`
+1/3 -> 3/3, `livestate-1` 0/3 -> 3/3 (the grader fix), `bigfile-1` 3/3.
+
+Shipped: fork 0.2.0 installed as the production binary; launcher selects
+QAIRT 2.50 + `NPURUN_REWIND=2` + stable prefix + direct stage off whenever
+both prerequisites are present (inert otherwise).
+
+## 7. Plan: what is next (significant, no regressions)
+
+1. **Release 2.4.0 with the Rewind runtime** — the release asset
+   `npurun-arm64.exe` must be rebuilt from `hexcli-fork` 0.2.0 (the
+   installer and `--update` fetch it from Latest), and the installer/README
+   should say QAIRT 2.50+ is what unlocks prefix reuse (2.47 still works,
+   just without it). Owner's release ritual; nothing else blocks it.
+2. **Make compaction share the prefix.** `/compact` and LLM auto-compact use
+   their own system prompt, so each costs a ~5 s dialog rebuild. Sending
+   the summary instructions as a user message under the agent system prompt
+   would make them warm. Model-facing; A/B on the multiturn suite.
+3. **Paging nudge (`bigfile-2`)** — the 4B does not follow the page header.
+   Try a harness-side second read (auto-page when the model asks about
+   content beyond page 1) rather than more prompt text. Measurable by
+   bigfile-2 alone.
+4. **Ambiguous-phrasing gap** — rule 12 asks for a question ending in "?";
+   the model refuses correctly but as a statement in ~half the runs. Either
+   accept statement refusals in the grader (they are the safe behaviour) or
+   one worked example in rule 12. Prompt change: full pass^5 A/B.
+5. **Do NOT touch**: the monolith's rule text (specialization fingerprint,
+   measured three times), threshold tuning, the 8K bundle, LoRA.
+6. **Watch**: GenieX #1266 (speculative decoding + GGUF models live there),
+   a successor 4B bundle, and each QAIRT release (2.50 fixed Rewind; the
+   next one may fix the reset-wedge and the early-divergence poison, which
+   would let the server drop the rebuild path).

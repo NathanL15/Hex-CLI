@@ -89,8 +89,19 @@ def check_embedding_model(app_dir: Path) -> list[Check]:
     return checks
 
 
+def _launcher():
+    try:
+        import launcher
+        return launcher
+    except Exception:
+        return None
+
+
 def check_qairt() -> list[Check]:
     sdk = Path(os.environ.get("QNN_SDK_ROOT", r"C:\Qualcomm\AIStack\QAIRT_2.47.0"))
+    ln = _launcher()
+    if ln is not None:
+        sdk = ln.QNN_SDK_ROOT   # what the launcher actually exports (newest valid; Rewind SDK first)
     checks: list[Check] = []
     if not sdk.exists():
         checks.append(Check("QAIRT SDK", FAIL, f"not found at {sdk}",
@@ -121,6 +132,17 @@ def check_npurun() -> list[Check]:
                       "Build it: cd npurun && scripts\\dev-shell-local.bat "
                       "cargo install --path crates\\npurun-cli")]
     checks = [Check("npurun", PASS, str(path))]
+    ln = _launcher()
+    if ln is not None:
+        ver = ".".join(str(n) for n in ln._npurun_version(path)) or "unknown"
+        if ln.REWIND_ROOT is not None:
+            checks.append(Check("KV prefix reuse", PASS,
+                                f"on — npurun {ver}, {ln.REWIND_ROOT.name}"))
+        else:
+            checks.append(Check("KV prefix reuse", WARN,
+                                f"off — npurun {ver}, {ln.QNN_SDK_ROOT.name}",
+                                "Needs QAIRT >= 2.50 under C:/Qualcomm/AIStack and npurun >= 0.2.0 "
+                                "(turns are ~40% faster with it)."))
     try:
         r = subprocess.run([str(path), "list"], capture_output=True, text=True, timeout=20)
         models = [ln.split()[0] for ln in r.stdout.splitlines() if ln.strip()]

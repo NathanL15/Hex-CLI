@@ -72,7 +72,10 @@ once; `--doctor` verifies each one.
 enables the `lint_code` tool).
 
 **2. QAIRT SDK** — free Qualcomm developer account; not redistributable.
-Install to `C:\Qualcomm\AIStack\QAIRT_2.47.0`, then set both variables:
+Install **2.50 or newer** to `C:\Qualcomm\AIStack\QAIRT_<version>` (2.47
+works too, but 2.50 is what lets the server keep the prompt's KV cache
+between calls — every turn ~40% faster). The launcher picks the newest
+valid install under that folder; to pin one, set both variables:
 
 ```powershell
 setx QNN_SDK_ROOT "C:\Qualcomm\AIStack\QAIRT_2.47.0"
