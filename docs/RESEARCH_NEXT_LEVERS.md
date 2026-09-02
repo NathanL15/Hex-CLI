@@ -381,3 +381,59 @@ rebuild per step. Gate A passes.
 
 The sweep's rising first-LLM latency (5.5 s → 12 s mean across buckets) is
 generation length at ~8 tok/s, not prefill — the probe separates the two.
+
+### 8.7 Gate B, and what it exposed (2026-09-02)
+
+**Extended x3 at the new budget** (fork 0.2.1, budget 3,696) vs the 2.4.0
+arm: run-level 95/123 vs 100/123 (Fisher p=0.53), pass^3 28/41 vs 30/41
+(McNemar p=0.63), median first-LLM 5.4 s vs 5.2 s. Parity; the movers are
+trap-4 (3→1), agentic-4 (3→2), livestate-1 (3→2) against ambiguous-1 and
+lint-1 (+1 each) — all single-run swings.
+
+**Multiturn x3**, same server binary, budget 3,000 (= 2.4.0 behaviour) vs
+3,696:
+
+| | budget 3,000 | budget 3,696 |
+|---|---|---|
+| turns passed | 25/48 | **35/48** |
+| uc2 (everyday, 6 turns) | 7/18 | **18/18** |
+| empty LLM replies | **63 of 117 calls** | 1 of 117 |
+| dialog rebuilds | (log lost) | 26 of 117 requests |
+
+Two things the single-turn suites could never see:
+
+1. **Divergent Rewinds are only reliable while the cache is short.** A
+   direct experiment (same system prompt; a long conversation A, then a
+   short new one B): B after a cached A of ≤3,150 est. tokens prefix-matches
+   in ~2 s; after a cached A of ≥3,250 it fails (`batch dispatch failed`,
+   ~10–12 s rebuild). Prefix EXTENSIONS work at any length until the
+   server's own trim diverges them. Bisected: 3,150 works, 3,250 fails.
+2. **A failed divergent Rewind can also be silent.** With the old floor,
+   compaction rewrote history every two exchanges, so most multi-turn
+   requests diverged mid-transcript — and 63 of 117 came back EMPTY in
+   ~0.5 s (uc3's injection turns "passed" 9/9 by saying nothing). That is
+   the shipped 2.4.0 in a real REPL session. Fix (fork 0.2.1): a Rewind
+   that returns zero tokens is treated like a failed one — rebuild and
+   retry as Complete.
+
+Third finding, unrelated to the window but caught by reading the traces:
+uc3-t9's calc.exe payload, refused by run_code's workspace boundary since
+July, was executed in 1 of 3 runs when the model routed it through
+`run_command`, where nothing classified an absolute-path program launch.
+Now in the sensitive tier (`hexcli/safety.py`).
+
+### 8.8 End-of-turn prewarm (fork 0.2.1 + harness)
+
+Finding 1 turns the window gain into a latency loss on the turn AFTER a long
+turn (every REPL turn diverges, because history is condensed). Rather than
+give the window back, the harness now tells the server when a turn ends
+(`POST /v1/npurun/prewarm` with the system prompt). If the cache is past
+the divergence threshold, the server rebuilds the dialog and re-prefills
+the prefix in the background — while the user reads the answer — so the
+next turn prefix-matches a short cache. Measured: after a 3,400-token turn
+the next divergent request took 2.2 s with the prewarm vs 10–12 s without.
+The client waits out the server's 429 if the next turn arrives inside the
+prewarm's ~11 s.
+
+Gate C (multiturn x3, budget 3,050 vs 3,696 + prewarm, final binary) is the
+last check before release — see §8.9.
