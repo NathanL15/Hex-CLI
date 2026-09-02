@@ -437,3 +437,41 @@ prewarm's ~11 s.
 
 Gate C (multiturn x3, budget 3,050 vs 3,696 + prewarm, final binary) is the
 last check before release — see §8.9.
+
+### 8.9 Gate C — final binary (fork 0.2.1 with the empty-Rewind guard and prewarm)
+
+Multiturn x3 (uc1–uc3, 16 turns, 48 turn-runs), fresh server per arm:
+
+| arm | pass | empties | rebuilds / requests | server trims | turn wall mean / median | 1st-LLM mean |
+|---|---|---|---|---|---|---|
+| 2.4.0 binary, budget 3,000 | 25/48 | 63 | (log lost) | — | 9.3 s / 2.2 s (empties return in 0.5 s) | 5.4 s |
+| final binary, budget 3,050 | 34/48 | 0 | 44 / 198 | **141** | 32.2 s / 18.8 s | 13.6 s |
+| final binary, budget 3,696, no prewarm | 35/48 | 1 | 26 / 117 | 17 | 26.6 s / 14.0 s | 10.2 s |
+| final binary, budget 3,696 + prewarm | 34/48 | 0 | **14** / 183 | 17 | 27.2 s / 19.8 s | 13.9 s |
+
+Reading it:
+
+- The quality gain (25 → 34–35) is the empty-Rewind guard: every arm on
+  the new binary gets it. The 2.4.0 arm's "fast" turns were the empties.
+- The wider budget is what keeps the transcript intact: 141 trims per run at
+  3,050 vs 17 at 3,696 — and every trim is a divergence, so 3,050 also
+  pays more rebuilds (44 vs 14–26) and the slowest turns (uc1-t6 51.8 s).
+- **The prewarm cannot score in this instrument.** The runner fires the
+  next turn the instant the previous one returns, so the client waits out
+  the prewarm (~11 s) exactly as it would have waited for the in-line
+  rebuild; total-LLM time even includes that wait. Its benefit needs think
+  time between turns, which the direct probe supplies: 2.2 s vs 10–12 s to
+  first token on the turn after a 3,400-token turn. A think-time parameter
+  for the multiturn runner is the instrument change to make next.
+- uc1-t4..t6 (edit quality deep into a coding session) stay 0–1/3 in every
+  arm: the documented 4B ceiling, not a context effect (est. input at those
+  turns is 2,600–3,000 in all arms).
+- uc3-t9 with the broadened program-launch rule: see the targeted re-run
+  recorded below.
+
+Smoke 10/10 on the final configuration. Extended x3 parity (§8.7).
+
+**Verdict:** ship budget 3,696 + empty-Rewind guard + prewarm as 2.5.0.
+Against 2.4.0 as actually shipped: +9 multiturn turn-runs, zero empties,
+the user's request never evicted, extended at parity; the one cost is
+~12% slower decode only when the window is actually full.
