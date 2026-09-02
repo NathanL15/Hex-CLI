@@ -122,6 +122,7 @@ Then `python launcher.py` starts the NPU server and the REPL together.
 | `/diff` | what the agent changed this turn |
 | `/undo` | revert the last exchange, restoring any files it wrote |
 | `/stats` | turns, time, tokens, context usage |
+| `/context` | how full the context is and when it compacts |
 | `/compact` | compress history now |
 | `/memory [status\|list\|search\|clear\|prune]` | inspect the memory store |
 | `/config [key [value]]` | view or set config at runtime (session only) |
@@ -276,7 +277,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**25 offline suites (714 tests)** — no LLM required, all against a mock backend:
+**25 offline suites (715 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage
