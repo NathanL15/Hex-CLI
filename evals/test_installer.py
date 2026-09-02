@@ -210,7 +210,33 @@ def _run(fn) -> bool:
         return False
 
 
+def _fake_qairt(stack: Path, name: str) -> Path:
+    root = stack / name
+    for rel in ("lib/aarch64-windows-msvc", "bin/aarch64-windows-msvc", "lib/hexagon-v73/unsigned"):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_rewind_runtime_needs_both_new_sdk_and_new_npurun() -> None:
+    """The Rewind runtime (KV prefix reuse) must stay OFF unless a >= 2.50
+    QAIRT *and* a >= 0.2.0 fork build are present: an older build resets the
+    dialog per request, which Genie 1.20 cannot tolerate after a large
+    prefill (measured 2026-09-02)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        stack = Path(tmp)
+        _fake_qairt(stack, "QAIRT_2.47.0")
+        assert launcher.rewind_runtime_root(stack, npurun_version=(0, 2, 0)) is None, "no 2.50 SDK -> off"
+        new = _fake_qairt(stack, "QAIRT_2.50.0")
+        assert launcher.rewind_runtime_root(stack, npurun_version=(0, 1, 0)) is None, "old npurun -> off"
+        assert launcher.rewind_runtime_root(stack, npurun_version=()) is None, "unknown npurun -> off"
+        assert launcher.rewind_runtime_root(stack, npurun_version=(0, 2, 0)) == new
+        # numeric ordering: 2.9 must not beat 2.50
+        _fake_qairt(stack, "QAIRT_2.9.0")
+        assert launcher.rewind_runtime_root(stack, npurun_version=(0, 2, 0)) == new
+
+
 TESTS = [
+    test_rewind_runtime_needs_both_new_sdk_and_new_npurun,
     test_install_ps1_parses_as_valid_powershell,
     test_install_ps1_references_only_existing_repo_files,
     test_installer_and_launcher_agree_on_binary_name,

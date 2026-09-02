@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -185,6 +186,46 @@ def warn(msg: str) -> None:
 NPURUN_EXE   = find_npurun_exe() or (Path.home() / ".cargo" / "bin" / "npurun.exe")
 QNN_SDK_ROOT = find_qairt_root() or Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
 
+# KV prefix reuse ("Rewind runtime"), measured 2026-09-02: on QAIRT >= 2.50
+# the fork's NPURUN_REWIND=2 mode keeps the system prompt's KV cache across
+# steps AND turns (first-token latency 2-7 s vs 6-10 s). It needs BOTH a
+# >= 2.50 SDK and a fork build that knows the mode (>= 0.2.0); older builds
+# reset the dialog per request, which 2.50 cannot tolerate after a large
+# prefill. When both are present the newest SDK wins over QNN_SDK_ROOT.
+MIN_REWIND_QAIRT = (2, 50)
+MIN_REWIND_NPURUN = (0, 2, 0)
+
+
+def _npurun_version(exe: Path) -> tuple[int, ...]:
+    """(major, minor, patch) from `npurun --version`; () if unknown."""
+    try:
+        out = subprocess.run([str(exe), "--version"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ()
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+    return tuple(int(x) for x in m.groups()) if m else ()
+
+
+def rewind_runtime_root(stack_dir: Path | None = None,
+                        npurun_version: tuple[int, ...] | None = None) -> Path | None:
+    """The QAIRT root to use for the Rewind runtime, or None when the
+    machine lacks a new-enough SDK or npurun build."""
+    version = npurun_version if npurun_version is not None else _npurun_version(NPURUN_EXE)
+    if tuple(version) < MIN_REWIND_NPURUN:
+        return None
+    stack = stack_dir or Path("C:/Qualcomm/AIStack")
+    if not stack.exists():
+        return None
+    for candidate in sorted(stack.glob("QAIRT_*"), key=_qairt_version_key, reverse=True):
+        if _qairt_version_key(candidate)[:2] >= MIN_REWIND_QAIRT and _qairt_valid(candidate):
+            return candidate
+    return None
+
+
+REWIND_ROOT = rewind_runtime_root()
+if REWIND_ROOT is not None:
+    QNN_SDK_ROOT = REWIND_ROOT
+
 def err(msg: str) -> None:
     print(f"        {red('✗')} {msg}", flush=True)
 
@@ -262,6 +303,10 @@ def _npurun_env() -> dict:
     env["QNN_SDK_ROOT"] = str(QNN_SDK_ROOT)
     env["ADSP_LIBRARY_PATH"] = str(QNN_SDK_ROOT / "lib" / "hexagon-v73" / "unsigned")
     env["PATH"] = f"{bin_dir};{lib_dir};{NPURUN_EXE.parent};{env.get('PATH', '')}"
+    if REWIND_ROOT is not None:
+        env["NPURUN_REWIND"] = "2"   # never reset; prefix-match every warm query
+    else:
+        env.pop("NPURUN_REWIND", None)
     return env
 
 
@@ -332,6 +377,12 @@ def _write_npurun_config() -> None:
                         cfg[key] = value
         except (json.JSONDecodeError, OSError):
             pass  # unreadable: fall back to a clean write
+    # Runtime-coupled prompt keys are ours when the Rewind runtime is on:
+    # prefix reuse needs a byte-stable system prompt, and the no-tools direct
+    # stage becomes a cost (every knowledge query diverges -> dialog rebuild).
+    if REWIND_ROOT is not None:
+        cfg["prompt_stable_prefix"] = True
+        cfg["prompt_split"] = False
     NPURUN_CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     ok(str(NPURUN_CONFIG))
 
@@ -363,7 +414,7 @@ def run_npurun_path(conda: Path | None) -> int:
             warn("Falling back to DirectML / Phi-4-mini path.")
             if conda:
                 return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
+            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
     elif not NPURUN_CONFIG.exists():
         _write_npurun_config()
 
@@ -376,7 +427,7 @@ def run_npurun_path(conda: Path | None) -> int:
             warn("Falling back to DirectML / Phi-4-mini.")
             if conda:
                 return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
+            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
 
         if not _wait_npurun(timeout=60):
             print()
@@ -385,7 +436,7 @@ def run_npurun_path(conda: Path | None) -> int:
             warn("Falling back to DirectML / Phi-4-mini.")
             if conda:
                 return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
+            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
 
         print(f"\r  {green('✓')} npurun server ready on port {NPURUN_PORT}                  ")
     else:
