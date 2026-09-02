@@ -26,15 +26,16 @@ from pathlib import Path
 from typing import Any
 
 from hexcli import (
-    commands as custom_commands,
-)
-from hexcli import (
+    chatlog,
     diffview,
     lineedit,
     memory,
     setup_wizard,
     telemetry,
     ui,
+)
+from hexcli import (
+    commands as custom_commands,
 )
 
 
@@ -323,11 +324,19 @@ def restart_backend(config: dict[str, Any]) -> bool:
     return False
 
 
+def _last_error_text(scope: dict[str, Any]) -> str:
+    """The exception bound in the enclosing except-block, as text (for the
+    chat log's turn_end); empty when there is none."""
+    exc = scope.get("exc")
+    return f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else ""
+
+
 def run_repl(config: dict[str, Any]) -> int:
     shell_exe = sa.detect_shell(str(config.get("shell_exe", "") or ""))
     sessions = sa.load_history_store(config)
     current_session = sa.create_session()
     tel = telemetry.SessionTelemetry(config)
+    clog = chatlog.ChatLog(config, version=sa.VERSION)
 
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
     if config.get("memory_dreaming", False):
@@ -360,10 +369,13 @@ def run_repl(config: dict[str, Any]) -> int:
             continue
 
         norm = sa.normalize_text(query)
+        if query.startswith("/"):
+            clog.command(query)
 
         # ── exit ──────────────────────────────────────────────────────────
         if norm in {"/exit", "/quit"}:
             sa.sync_session_store(sessions, current_session)
+            clog.event("session_end")
             return 0
 
         # ── help / tools ──────────────────────────────────────────────────
@@ -416,6 +428,9 @@ def run_repl(config: dict[str, Any]) -> int:
             sa.show_context(current_session, config,
                          budget=sa._history_budget_tokens(config),
                          system_prompt_tokens=_sys_tokens)
+            if clog.path:
+                sa.cprint(f"  Chat log: {clog.path}", sa.C.DIM)
+                print()
             continue
 
         # ── doctor: diagnose the installation without leaving the REPL ────
@@ -578,17 +593,28 @@ def run_repl(config: dict[str, Any]) -> int:
         # ── agent turn ────────────────────────────────────────────────────
         history: list[dict[str, str]] = current_session.get("messages", [])
         turn = tel.start_turn("autopilot", query)
+        probe = clog.turn_start(len(tel.turns), query, history,
+                                sa.context_fill_percent(current_session, config))
         try:
-            message = sa.run_autopilot(config, history, query, shell_exe, session=current_session, turn=turn)
+            message = sa.run_autopilot(config, history, query, shell_exe,
+                                       session=current_session, turn=turn, probe=probe)
             sa.render_result("Result", message)
             sa.append_session_message(current_session, "user", query)
             sa.append_session_message(current_session, "assistant", message)
             sa.sync_session_store(sessions, current_session)
             tel.record_turn(turn)
+            clog.turn_end(probe.turn, status="completed", message=message)
+            _before = current_session.get("messages", [])
+            _n_before, _c_before = len(_before), sum(len(m.get("content", "")) for m in _before)
             sa._maybe_auto_compact(config, current_session, sessions)
+            _after = current_session.get("messages", [])
+            if len(_after) != _n_before:
+                clog.compaction(_n_before, len(_after), _c_before,
+                                sum(len(m.get("content", "")) for m in _after))
         except (sa.UserCancelled, KeyboardInterrupt):
             print("\nCancelled.\n")
             tel.record_turn(turn, status="cancelled")
+            clog.turn_end(probe.turn, status="cancelled")
         except urllib.error.HTTPError as exc:
             # Measured 2026-07-30 (V2_PLAN §14.4): after 1-2h of traffic the
             # npurun/Genie dialog degrades into sticky ERROR_QUERY_FAILED and
@@ -601,21 +627,25 @@ def run_repl(config: dict[str, Any]) -> int:
             else:
                 ui.error_box(f"Backend rejected the request (HTTP {exc.code}).")
             tel.record_turn(turn, status="error")
+            clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
         except urllib.error.URLError:
             if not sa.ping_backend(config):
                 _handle_backend_failure(config, "the model server is not responding")
             else:
                 ui.error_box("Network error — backend returned an unexpected response.")
             tel.record_turn(turn, status="error")
+            clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
         except (ConnectionResetError, ConnectionAbortedError):
             ui.error_box(
                 "npurun dropped the stream connection.\n"
                 'Add  "use_streaming": false  to shellai.json to avoid this.'
             )
             tel.record_turn(turn, status="error")
+            clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
         except Exception as exc:  # noqa: BLE001
             ui.error_box(str(exc))
             tel.record_turn(turn, status="error")
+            clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
             if sa.DEBUG:
                 raise
 

@@ -69,6 +69,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Extra roots the agent may write to (absolute paths, ~ expanded).
     "workspace_write_allow": [],
     "telemetry_enabled": True,
+    "chat_log_enabled": True,
+    "chat_log_dir": "",
     "memory_enabled": True,
     # The dreaming consolidation daemon is OFF by default: measured 2026-08-16
     # writing the same five fabricated machine "facts" (wrong CPU, wrong RAM,
@@ -173,6 +175,8 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "input_history_file":             "str",
     "input_history_limit":            "int",
     "telemetry_enabled":              "bool",
+    "chat_log_enabled":               "bool",
+    "chat_log_dir":                   "str",
     "memory_enabled":                 "bool",
     "memory_dreaming":                "bool",
     "autopilot_confirm_destructive":  "bool",

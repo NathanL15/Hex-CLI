@@ -220,6 +220,25 @@ model resisting**, because at 4B it frequently doesn't.
 
 ---
 
+## Chat log
+
+Every session is written in full to `~/.shellai/chatlog/` (one JSONL file
+per session): the Hex CLI version and npurun build, the server's context
+budget, the config in force (secrets redacted), each request as you typed
+it, each message the model was sent, each raw reply with its latency, each
+tool call with its complete output, how every turn ended, compactions and
+errors. `/stats` prints the current file.
+
+```powershell
+python tools/chatlog_report.py          # all sessions: versions, tools, retries, empty replies, latencies, slowest and failed turns
+python tools/chatlog_report.py --last   # replay the most recent session as a transcript
+python tools/chatlog_report.py --session 1a2b   # replay one session by id prefix
+```
+
+Local only. `/config chat_log_enabled false` turns it off; `chat_log_dir`
+moves it. `.shellai/logs/` (telemetry) remains the redacted per-turn
+summary it always was.
+
 ## Memory
 
 Two on-device stores (project + global) over MiniLM embeddings with cosine
@@ -257,7 +276,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**24 offline suites (708 tests)** — no LLM required, all against a mock backend:
+**25 offline suites (714 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage

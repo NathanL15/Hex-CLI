@@ -63,6 +63,19 @@ prewarm, 10–12 s without. The client waits out the server's busy signal if
 you type faster than that (the eval runner always does, which is why the
 multiturn suite shows the prewarm as neutral: it has no think time).
 
+### Full chat log
+
+Every session now writes a complete transcript to `~/.shellai/chatlog/`
+(one JSONL file per session): the version and npurun build, the server's
+budget, the config in force (secrets redacted), every request as typed,
+every message the model was sent, every raw reply with its latency and
+retry index, every tool call with its full output, how each turn ended,
+compactions and errors. Telemetry stayed a redacted summary; this is the
+thing to read when a turn went wrong. `/stats` shows the current file;
+`python tools/chatlog_report.py` summarises all sessions (versions,
+tools, retries, empty replies, latencies, slowest and failed turns) and
+`--last` replays the most recent one. Off with `chat_log_enabled false`.
+
 ### Context gauge in the prompt
 
 The prompt header now ends with a small pie glyph and a percentage

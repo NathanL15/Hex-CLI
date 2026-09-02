@@ -156,7 +156,7 @@ HELP_TEXT = textwrap.dedent("""
       /compact                      summarise + compress history (saves context)
       /undo                         remove last exchange; restores files if the turn wrote any
       /diff                         show what the agent changed this turn
-      /stats                        turns, elapsed time, tokens, context usage
+      /stats                        turns, elapsed time, tokens, context usage, chat log path
       /cwd [path]                   show or change working directory
       /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
       /memory [status|list|search|clear|prune]  inspect or manage the memory store
