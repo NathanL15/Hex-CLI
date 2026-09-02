@@ -533,6 +533,28 @@ def test_classify_destructive_remove_item() -> None:
         assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
 
 
+def test_program_launch_by_absolute_path_is_sensitive() -> None:
+    """The run_code boundary refuses C:/Windows/System32/calc.exe; the same
+    launch through run_command must not be 'caution' (uc3-t9, 2026-09-02)."""
+    for cmd in [
+        r"C:\Windows\System32\calc.exe",
+        r'& "C:\Program Files\App\app.exe" --flag',
+        r"Start-Process calc",
+        r"cmd /c start notepad",
+        r"echo hi; C:\tools\x.bat",
+        r"Start-Process -FilePath 'C:\Windows\System32\calc.exe'",
+    ]:
+        assert safety.classify_command(cmd) == "sensitive", f"expected sensitive: {cmd!r}"
+    for cmd, want in [
+        (r"python script.py", "caution"),
+        (r".\build.bat", "caution"),
+        (r"python C:\Users\me\proj\script.py", "caution"),
+        (r"Get-ChildItem C:\Windows\System32", "safe"),
+        (r"git status", "safe"),
+    ]:
+        assert safety.classify_command(cmd) == want, f"expected {want}: {cmd!r}"
+
+
 def test_classify_destructive_rm() -> None:
     for cmd in ["rm -rf /", "rm file.txt", "rm -r dir"]:
         assert safety.classify_command(cmd) == "destructive", f"expected destructive: {cmd!r}"
@@ -1077,6 +1099,7 @@ def test_agent_and_sessions_agree_on_the_project_root() -> None:
 
 
 TESTS = [
+    test_program_launch_by_absolute_path_is_sensitive,
     test_history_path_patch_is_not_vacuous,
     test_agent_and_sessions_agree_on_the_project_root,
     test_distribution_module_imports,
