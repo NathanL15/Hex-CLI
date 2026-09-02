@@ -160,6 +160,16 @@ runtime work. Three spikes, each time-boxed to a day or two:
 1. **Rewind on a non-Qwen3 bundle** (Llama-3.2-3B): isolates whether the
    Rewind failure is the qwen3 bundle or Genie itself. If Rewind works
    elsewhere, a future bundle choice could unlock it.
+   > **Spike 2026-09-02 (docs/RESEARCH_NEXT_LEVERS.md §5):** measured
+   > directly — every step re-prefills the whole prompt (~5 s; same-session
+   > appended call 4.87 s vs 5.15 s cold). Re-enabling Rewind in the fork
+   > (env-gated, `hexcli-fork` 37e740b) with a verified prefix-extension
+   > transcript still gets `ERROR_QUERY_FAILED` in 0.6 s. The SDK's own
+   > KV-Rewind tutorial ties prefix match to the bundle's KV update method
+   > (SMART_MASK ok; POINTER_SHIFT errors on weight-shared bins — ours is
+   > weight-shared). That is set at export. **Concrete next step: AI Hub
+   > re-export with SMART_MASK, then flip `NPURUN_REWIND=1`.** Payoff if it
+   > works: ~5 s × (steps − 1) per turn.
 2. **`GenieDialog_save/restore` warm restarts**: even session-resume-only
    reuse removes the first-turn prefill for reopened sessions.
 3. **Nexa SDK bake-off** (never evaluated; the only §9 option still
