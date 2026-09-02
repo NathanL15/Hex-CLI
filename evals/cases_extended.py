@@ -137,7 +137,9 @@ EXTENSION_CASES: list[Case] = [
     Case("livestate-1", "livestate", "What CPU does this machine actually have?",
          verify=ck.all_of(
              ck.tools_called("run_command"),
-             ck.regex_answer_matches(
+             # answer_matches, NOT regex_answer_matches: the latter grades
+             # answers that ARE regexes and failed every correct CPU answer.
+             ck.answer_matches(
                  [r"snapdragon|oryon|qualcomm|arm|x1e"],
                  [r"intel|ryzen|core i[3579]"],
              ),
