@@ -867,6 +867,29 @@ compact_history = compaction.compact_history
 # Autopilot: multi-step agentic loop
 # ---------------------------------------------------------------------------
 
+# Per-step tool-output budget.
+#
+# The compiled window is 4,096 tokens. The server drops older MESSAGES to
+# fit and protects the system prompt, but it can never drop part of the
+# newest message: a single tool result larger than the remaining room
+# overflows the window outright and the generation comes back EMPTY
+# (measured 2026-09-01: empty replies from ~1,800 tokens of tool output,
+# while the configured limit allowed ~3,000). The loop then finished with a
+# blank message and handed the user the raw tool output. So each tool result
+# is sized to what is actually left, with the configured limit as a ceiling.
+_TOOL_OUTPUT_RESERVE_TOKENS = 700   # room for the model's next action
+_TOOL_OUTPUT_MIN_CHARS = 1_200      # never starve the model of the result
+
+
+def _step_tool_output_limit(config: dict[str, Any], messages: list[dict[str, str]]) -> int:
+    ceiling = int(config.get("tool_output_limit", 12000))
+    window = int(config.get("context_window_tokens", 4096))
+    used = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in messages))
+    room_tokens = window - used - _TOOL_OUTPUT_RESERVE_TOKENS
+    room_chars = int(room_tokens * _TOKEN_ESTIMATOR.ratio)
+    return max(_TOOL_OUTPUT_MIN_CHARS, min(ceiling, room_chars))
+
+
 def _loop_target(args: dict[str, Any]) -> str:
     """What a tool call is aimed at, for loop detection.
 
@@ -953,7 +976,6 @@ def run_autopilot(
     ]
     _probe(probe, "on_start", system_prompt, [dict(m) for m in messages])
 
-    output_limit = int(config.get("tool_output_limit", 12000))
     last_tool_output = ""
     total_eval = 0
     tools_used: list[str] = []
@@ -1028,9 +1050,15 @@ def run_autopilot(
             # feedback naming what was wrong; the failed attempt stays in
             # context so the model has the evidence to adapt.
             fallback = action.get("fallback")
+            # An EMPTY response is never a valid action. The measured cause is
+            # a context overflow (a tool result too big for the window); the
+            # per-step budget below prevents that, and this retry catches any
+            # other empty generation instead of finishing with a blank message
+            # — which used to surface the raw tool output as the "answer".
+            empty_reply = not strip_thinking(raw).strip()
             should_retry = attempt < 2 and action["action"] == "finish" and (
                 (fallback == "unknown-action" and action.get("bad_action"))
-                or (fallback == "prose" and _looks_like_botched_action(raw))
+                or (fallback == "prose" and (empty_reply or _looks_like_botched_action(raw)))
             )
             if should_retry:
                 if fallback == "unknown-action":
@@ -1039,6 +1067,11 @@ def run_autopilot(
                         "a valid tool. Valid actions are the tool names listed in the "
                         "system prompt, or \"finish\". Respond with exactly one JSON "
                         "object. No prose."
+                    )
+                elif empty_reply:
+                    feedback = (
+                        "Your response was empty. Respond with exactly one JSON "
+                        "object as specified. No prose."
                     )
                 elif parse_json_object(raw):
                     feedback = (
@@ -1148,8 +1181,12 @@ def run_autopilot(
         ui.tool_header(tool_name)
         tool_start = time.monotonic()
         tool_status = "ok"
+        # Size this tool's result to the room actually left in the window
+        # (see _step_tool_output_limit); the configured limit is a ceiling.
+        step_limit = _step_tool_output_limit(config, messages)
         try:
-            tool_output = execute_tool_call(config, action, shell_exe)
+            tool_output = execute_tool_call(
+                {**config, "tool_output_limit": step_limit}, action, shell_exe)
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
         except (UserCancelled, KeyboardInterrupt):
@@ -1235,7 +1272,7 @@ def run_autopilot(
             _probe(probe, "on_end", "loop_stop", last_tool_output or "Done.")
             return last_tool_output or "Done."
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
-        messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, output_limit)}"})
+        messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, step_limit)}"})
 
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
     if total_eval:

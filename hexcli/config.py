@@ -27,6 +27,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compact_max_output_tokens": 512,
     "max_agent_steps": 15,
     "tool_output_limit": 12000,
+    # Compiled Genie window. Per-step tool output is budgeted against it so a
+    # single tool result can never overflow the window (an overflow returns
+    # an EMPTY generation — measured 2026-09-01). Raise only with a bigger
+    # bundle.
+    "context_window_tokens": 4096,
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
@@ -147,6 +152,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "compact_max_output_tokens":      "int",
     "max_agent_steps":                "int",
     "tool_output_limit":              "int",
+    "context_window_tokens":          "int",
     "history_retention_days":         "int",
     "use_streaming":                  "bool",
     "live_streaming":                 "bool",

@@ -42,6 +42,8 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--out", default="evals/results/chunked_arm.json")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="Config override for this chunk (repeatable); recorded in the results.")
     args = ap.parse_args()
 
     ids = [c.id for c in EXTENDED_CASES]
@@ -63,6 +65,14 @@ def main() -> int:
         return 2
 
     config = load_live_config()
+    overrides: dict[str, Any] = {}
+    for item in args.set:
+        key, _, raw = item.partition("=")
+        raw = raw.strip()
+        value: Any = (raw.lower() == "true") if raw.lower() in ("true", "false") else (
+            int(raw) if raw.lstrip("-").isdigit() else raw)
+        config[key.strip()] = value
+        overrides[key.strip()] = value
     problem = backend_preflight(config)
     if problem:
         print(f"BACKEND PREFLIGHT FAILED: {problem}", file=sys.stderr)
@@ -83,6 +93,7 @@ def main() -> int:
     payload.setdefault("protocol", config.get("protocol", "v1"))
     payload.setdefault("runs_per_case", args.runs)
     payload.setdefault("model", config.get("model"))
+    payload.setdefault("overrides", overrides)
     payload["timestamp"] = time.time()
     payload.setdefault("cases", {}).update(results)
     out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
