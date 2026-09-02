@@ -81,7 +81,10 @@ tools, retries, empty replies, latencies, slowest and failed turns) and
 The prompt header now ends with a small pie glyph and a percentage
 (`[qwen3-4b | ~\proj (main) | ◔ 30%]`): how much of the history budget
 this session has used. 0% on a fresh session, yellow from 75%, 100% (red)
-means the next turn will auto-compact. `/stats` shows the same figure.
+means the next turn will auto-compact. `/stats` shows the same figure, and
+`/context` shows just the numbers that decide it: history against the
+budget, system prompt size, the server's per-call budget, compactions so
+far, and how many more tokens until the next one.
 
 Requires the 0.2.1 `npurun-arm64.exe` from this release (the budget, the
 empty-Rewind guard and the prewarm endpoint live there); an older server

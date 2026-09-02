@@ -108,6 +108,7 @@ HELP_TEXT = ui.HELP_TEXT
 TOOLS_HELP = ui.TOOLS_HELP
 render_history_list = ui.render_history_list
 show_context = ui.show_context
+show_context_brief = ui.show_context_brief
 repl_prompt = ui.repl_prompt
 render_result = ui.render_result
 

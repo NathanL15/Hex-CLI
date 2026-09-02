@@ -321,7 +321,37 @@ def test_context_gauge_tracks_the_history_budget() -> None:
         ui._COLOR_ON, ui._PIE_OK = orig_color, orig_pie
 
 
+def test_context_command_shows_the_deciding_numbers() -> None:
+    """/context prints history vs budget, the system prompt size, the server
+    budget and what happens next — nothing else."""
+    import contextlib
+    import io
+
+    from hexcli import ui
+    orig = ui._COLOR_ON
+    ui._COLOR_ON = False
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.show_context_brief({"messages": [{"role": "user", "content": "x" * 400}], "compact_count": 2},
+                                  {**_CFG, "context_window_tokens": 3_696},
+                                  budget=(850, 1062), system_prompt_tokens=2_340, history_tokens=100)
+        out = buf.getvalue()
+        assert "100 / 850 tokens" in out and "(1 messages)" in out, out
+        assert "2,340 tokens" in out and "3,696 tokens per call" in out, out
+        assert "compactions    2" in out and "after ~750 more tokens" in out, out
+        assert out.count("\n") <= 8, "just enough: one screenful, no more"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.show_context_brief({"messages": []}, _CFG, budget=(850, 1062),
+                                  system_prompt_tokens=2_340, history_tokens=900)
+        assert "runs after the next turn" in buf.getvalue()
+    finally:
+        ui._COLOR_ON = orig
+
+
 TESTS = [
+    test_context_command_shows_the_deciding_numbers,
     test_context_gauge_tracks_the_history_budget,
     test_budget_follows_the_server_window,
     test_context_window_adopted_from_server,

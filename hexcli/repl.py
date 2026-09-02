@@ -55,7 +55,7 @@ sa = _AgentProxy()
 REPL_COMMANDS = (
     "/help", "/exit", "/quit", "/clear", "/history", "/resume", "/new",
     "/compact", "/config", "/memory", "/tools", "/undo", "/stats", "/diff",
-    "/doctor", "/cwd", "/search", "/setup",
+    "/doctor", "/cwd", "/search", "/setup", "/context",
 )
 
 
@@ -420,7 +420,19 @@ def run_repl(config: dict[str, Any]) -> int:
                 print(diffview.render_turn_diffs(snaps, _read_now))
             continue
 
-        # ── stats: session summary + context usage (absorbed /context) ────
+        # ── context: just the numbers that decide the next turn ───────────
+        if norm == "/context":
+            _sys_tokens = sa.estimate_tokens(sa.build_autopilot_prompt(
+                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
+            _msgs = current_session.get("messages", [])
+            _hist_tokens = sa._TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in _msgs))
+            sa.show_context_brief(current_session, config,
+                                  budget=sa._history_budget_tokens(config),
+                                  system_prompt_tokens=_sys_tokens,
+                                  history_tokens=_hist_tokens)
+            continue
+
+        # ── stats: session summary + context usage ─────────────────────────
         if norm == "/stats" or norm.startswith("/stats "):
             _show_stats(config, tel, current_session)
             _sys_tokens = sa.estimate_tokens(sa.build_autopilot_prompt(

@@ -157,6 +157,7 @@ HELP_TEXT = textwrap.dedent("""
       /undo                         remove last exchange; restores files if the turn wrote any
       /diff                         show what the agent changed this turn
       /stats                        turns, elapsed time, tokens, context usage, chat log path
+      /context                      how full the context is and when it compacts
       /cwd [path]                   show or change working directory
       /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
       /memory [status|list|search|clear|prune]  inspect or manage the memory store
@@ -327,6 +328,35 @@ def show_context(
         cprint("  ✗ Past degradation threshold; auto-compact runs after the next turn.", C.BRED)
     elif est_tokens >= warn:
         cprint("  ⚠ At history budget; auto-compact runs after this turn.", C.BYELLOW)
+    print()
+
+
+def show_context_brief(
+    session: dict[str, Any],
+    config: dict[str, Any],
+    budget: tuple[int, int],
+    system_prompt_tokens: int,
+    history_tokens: int,
+) -> None:
+    """/context — just the numbers that decide what happens next."""
+    messages: list[dict[str, str]] = session.get("messages", [])
+    warn, _ = budget
+    pct = max(0, min(100, round(100 * history_tokens / max(warn, 1))))
+    window = int(config.get("context_window_tokens") or 0)
+    compact_count = int(session.get("compact_count", 0))
+    if history_tokens >= warn:
+        nxt = "auto-compact runs after the next turn"
+    else:
+        nxt = f"auto-compact after ~{warn - history_tokens:,} more tokens"
+    print()
+    cprint(f"Context  {context_gauge(pct)}", C.BOLD)
+    print(f"  history        {history_tokens:,} / {warn:,} tokens  ({len(messages)} messages)")
+    print(f"  system prompt  {system_prompt_tokens:,} tokens")
+    if window:
+        print(f"  server budget  {window:,} tokens per call")
+    if compact_count:
+        print(f"  compactions    {compact_count}")
+    print(f"  next           {nxt}")
     print()
 
 
