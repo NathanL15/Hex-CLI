@@ -10,6 +10,7 @@
   "max_agent_steps": 15,
   "tool_output_limit": 12000,
   "context_window_tokens": 3000,
+  "prewarm_after_turn": true,
   "history_retention_days": 30,
   "shell_exe": "",
   "use_streaming": true,

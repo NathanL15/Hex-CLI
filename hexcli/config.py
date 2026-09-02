@@ -32,6 +32,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # an EMPTY generation — measured 2026-09-01). Raise only with a bigger
     # bundle.
     "context_window_tokens": 3000,
+    "prewarm_after_turn": True,
     "history_retention_days": 30,
     "shell_exe": "",
     "use_streaming": True,
@@ -156,6 +157,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "max_agent_steps":                "int",
     "tool_output_limit":              "int",
     "context_window_tokens":          "int",
+    "prewarm_after_turn":             "bool",
     "history_retention_days":         "int",
     "use_streaming":                  "bool",
     "live_streaming":                 "bool",

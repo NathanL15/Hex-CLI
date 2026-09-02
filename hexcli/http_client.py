@@ -18,6 +18,7 @@ import http.client
 import io
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 from typing import Any
@@ -64,6 +65,38 @@ def _http_request(
     failure / non-2xx status, matching what urllib.request.urlopen() used to
     raise, so the existing top-level error handling keeps working unchanged.
     """
+    # The server holds one inference slot and answers 429 + Retry-After while
+    # it is busy — including the few seconds of an end-of-turn prewarm
+    # (_prewarm_backend). Wait it out instead of surfacing an error.
+    deadline = time.monotonic() + _BUSY_WAIT_MAX_S
+    while True:
+        resp = _http_request_once(method, url, headers, body, timeout_s)
+        if resp.status != 429 or time.monotonic() >= deadline:
+            break
+        try:
+            delay = float(resp.getheader("Retry-After") or 1.0)
+        except ValueError:
+            delay = 1.0
+        resp.read()
+        time.sleep(min(max(delay, 0.2), 3.0))
+    if resp.status >= 400:
+        body_bytes = resp.read()
+        raise urllib.error.HTTPError(
+            url, resp.status, resp.reason, dict(resp.getheaders()), io.BytesIO(body_bytes)
+        )
+    return resp
+
+
+_BUSY_WAIT_MAX_S = 25.0
+
+
+def _http_request_once(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout_s: float,
+) -> http.client.HTTPResponse:
     conn, path = _get_connection(url, timeout_s)
     try:
         conn.request(method, path, body=body, headers=headers)
@@ -89,12 +122,6 @@ def _http_request(
         # every later call inherits its half-sent state.
         conn.close()
         raise urllib.error.URLError(exc) from exc
-
-    if resp.status >= 400:
-        body_bytes = resp.read()
-        raise urllib.error.HTTPError(
-            url, resp.status, resp.reason, dict(resp.getheaders()), io.BytesIO(body_bytes)
-        )
     return resp
 
 
