@@ -234,3 +234,114 @@ both prerequisites are present (inert otherwise).
    a successor 4B bundle, and each QAIRT release (2.50 fixed Rewind; the
    next one may fix the reset-wedge and the early-divergence poison, which
    would let the server drop the rebuild path).
+
+## 8. The context question, re-opened (2026-09-02)
+
+Status before this pass: "closed — the 250-token history floor is a model
+property; no harness lever remains." That verdict was reached against a
+server that silently capped input at 3,000 tokens, so nothing above ~2.97K
+was ever measured. Re-reading every number with the Rewind runtime in place:
+
+### 8.1 What was tried, and what each result actually showed
+
+| lever | result | what it really established |
+|---|---|---|
+| prompt trimming (Jul) | bait resistance 5/8 -> 3/18, p=0.017 | the *rule text* cannot shrink; says nothing about the window |
+| continuation-stage prompt (Aug 31) | agentic-3 3/3 -> 1/3, anchors degenerate | same: no smaller prompt for agent-path calls |
+| 8K recompiled bundle (Jul 30) | 6 tok/s vs 15, 9/18 vs 10/18 | *that bundle* is too slow; and "window was not binding" was judged with a regex bug still collapsing turns |
+| "2,600 cliff" (`_DEGRADATION_CLIFF_TOKENS`) | uc1 failed at 2,477, uc2 passed at 2,911 | V2_PLAN §14.7: the collapse was the greedy-JSON bug, **never a length effect** |
+| cliff sweep (Aug 29, `cases_cliff.py`) | flat 2,370 -> 2,973, then inputs measure back at ~2.9K | the plateau was the **server's trim**, not the model |
+| Rewind runtime (Sep 2) | -41% wall, 97/117 | prefill is no longer a per-token cost for anything that stays in the prefix |
+
+So the two numbers that produce the 250-token floor are both arbitrary:
+
+- `_DEGRADATION_CLIFF_TOKENS = 2_600` in `hexcli/compaction.py` — a July
+  guess, contradicted by §14.7 the same week and by the sweep in August.
+  History budget = max(250, 2,600 - 2,340 prompt - 500) = **250**.
+- `DEFAULT_INPUT_TOKEN_BUDGET = 3000` in the fork's `openai.rs` — the
+  upstream author's generic client constant, not derived from the bundle's
+  `dialog.context.size` (4,096) or the request's `max_tokens`.
+
+The compiled window is 4,096. Genie reports status 4
+(`WARNING_CONTEXT_EXCEEDED`, partial reply, dialog stays healthy) when a
+generation reaches the end of the window; the "bricked dialog" that the
+3,000 constant was guarding against is the case where the *input alone*
+exceeds the window. In mode 2 the server recreates the dialog on any query
+failure anyway.
+
+### 8.2 A live defect found on the way (shipped in 2.4.0)
+
+`context_window_tokens` is 4,096 in the harness, so `_step_tool_output_limit`
+lets a tool result grow to ~4,096 - context - 700. The server then trims the
+*same* transcript to 3,000 by dropping the oldest non-system messages — which
+are the user's request and the model's own tool call. The A/B server log
+shows it: 12 `trimmed conversation history ... kept=2` / `kept=3` events in
+265 requests, all in the big-output cases. bigfile-1 passed 3/3 with the
+model seeing **only the system prompt and the file page** — no question. The
+lenient checker hid it. Every trim also diverges the transcript at the
+prefix, so it costs a rebuild on top (27 rebuilds in 265 requests; ~10%).
+
+Minimal fix today: `context_window_tokens` = the server's effective budget
+(3,000), not the compiled window. Better fix: raise the server budget (8.3).
+
+### 8.3 The lever: use the window the bundle already has
+
+Per turn, after the ~2,340-token stable prefix:
+
+| | today | proposed |
+|---|---|---|
+| server input budget | 3,000 (constant) | ctx 4,096 - output reserve ~400 = **~3,700** |
+| room for user + history + steps | ~650 tokens | **~1,350** |
+| harness history budget before auto-compact | 250 | window-derived: 3,700 - 2,340 - 500 = **~850** |
+| auto-compact cadence (short exchanges) | every ~2 | every ~6-7 |
+| server trim order when it does fire | drops user request first | keep system + first user, drop oldest tool results |
+
+The output reserve is small on purpose: final answers are rule-capped short,
+tool calls are ~60-120 tokens, and a reply that runs into the window ends
+as a partial (status 4) that the existing invalid-action retry already
+handles. `max_tokens` should be capped server-side at ctx - prompt_estimate
+so a runaway never reaches the wall.
+
+Under Rewind none of this costs prefill: history is append-only across steps
+and across turns (condensed pairs only rewrite the tail after the prefix),
+so the extra 700 tokens are prefilled once, not per step.
+
+### 8.4 What is genuinely unknown (the signal to measure next)
+
+1. **Quality above ~3K input.** Never measured, because it was unreachable.
+   Qwen3-4B is a 32K model and the bundle is compiled to 4,096, so a real
+   cliff between 3.0K and 3.7K would be surprising, but "surprising" is not
+   a measurement. Instrument: `cases_cliff.py` extended to targets
+   3,200 / 3,500 / 3,700 x 3 runs, fresh server, once the server admits them.
+2. **Decode speed vs live context length on this bundle.** The 8K bundle's
+   6 tok/s came from wider compiled buffers, not used length; whether decode
+   at 3,700 live tokens is slower than at 2,600 on the 4K bundle is unknown.
+   The same sweep records it (per-call latency at each size).
+3. **Partial-reply frequency** at a 400-token reserve (`length_hit` in the
+   server's usage block): should be ~0 on the extended suite.
+
+### 8.5 Plan (no regressions, each step gated)
+
+0. **Hotfix** (harness only, no eval needed): `context_window_tokens` 4,096
+   -> 3,000 so tool pages can no longer evict the user's request. Ship as
+   2.4.1 with the doctor line "input budget".
+1. **Fork**: input budget = `dialog.context.size` - reserve (env
+   `NPURUN_OUTPUT_RESERVE`, default 400; upstream behaviour when unset =
+   keep 3,000); cap `max_tokens` at what is left; trim policy keeps system +
+   first user; expose the effective budget on `/v1/models` so the harness
+   reads it instead of guessing.
+2. **Harness**: read the budget from the server at startup (fallback 3,000);
+   delete `_DEGRADATION_CLIFF_TOKENS`, derive the history budget from the
+   window; auto-compact keeps its dry-run gain guard.
+3. **Gate A — cliff sweep** at 3,200 / 3,500 / 3,700 x 3: quality flat and
+   latency within +10% -> proceed; a real cliff -> set the reserve to sit
+   below it and still ship (any headroom above 3,000 is a gain).
+4. **Gate B — multiturn x 3** (uc1-uc4): compaction events per session,
+   per-turn quality, latency slope; then **extended x 3** for parity.
+5. Only then: lift `_step_tool_output_limit` to the new budget, re-run
+   bigfile-1/2.
+
+Expected payoff: ~3x longer conversations before compaction, big-file reads
+that keep the question in context, fewer prefix rebuilds — with no prompt
+text touched, no model change, no LoRA. Cost: one fork build, two short
+sweeps, one full arm.
