@@ -880,13 +880,46 @@ compact_history = compaction.compact_history
 # while the configured limit allowed ~3,000). The loop then finished with a
 # blank message and handed the user the raw tool output. So each tool result
 # is sized to what is actually left, with the configured limit as a ceiling.
-_TOOL_OUTPUT_RESERVE_TOKENS = 700   # room for the model's next action
+# `context_window_tokens` is the server's INPUT budget — the reply reserve is
+# already taken out server-side — so this only has to cover the estimator
+# gap (the server counts chars/4 + 8 per message; ours is calibrated
+# tighter) and the retry feedback a step may append.
+_TOOL_OUTPUT_RESERVE_TOKENS = 150
 _TOOL_OUTPUT_MIN_CHARS = 1_200      # never starve the model of the result
+
+
+def _sync_context_window(config: dict[str, Any]) -> None:
+    """Adopt the server's advertised input budget.
+
+    npurun (fork 0.2.1+) reports `input_token_budget` on /v1/models: the
+    number of estimated tokens it accepts before dropping messages. History
+    and tool-output budgets are sized against `context_window_tokens`, so
+    the two must agree — when the harness assumed the compiled 4,096 while
+    the server enforced 3,000, a big tool page silently evicted the user's
+    request (docs/RESEARCH_NEXT_LEVERS.md §8.2). Runs once per config
+    object; a value the user pinned away from the default is left alone
+    (that is the A/B lever); any failure keeps the conservative default.
+    """
+    if config.get("_context_window_synced") or config.get("backend") != "openai":
+        return
+    config["_context_window_synced"] = True
+    if int(config.get("context_window_tokens") or 0) != _DEFAULT_INPUT_BUDGET_TOKENS:
+        return
+    try:
+        base = str(config["openai_compatible"]["base_url"]).rstrip("/")
+        data = http_json_get(f"{base}/models", timeout_s=3)
+        for model in data.get("data", []) or []:
+            budget = int(model.get("input_token_budget") or 0)
+            if budget > 0:
+                config["context_window_tokens"] = budget
+                return
+    except Exception:
+        return
 
 
 def _step_tool_output_limit(config: dict[str, Any], messages: list[dict[str, str]]) -> int:
     ceiling = int(config.get("tool_output_limit", 12000))
-    window = int(config.get("context_window_tokens", 4096))
+    window = int(config.get("context_window_tokens") or _DEFAULT_INPUT_BUDGET_TOKENS)
     used = _TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in messages))
     room_tokens = window - used - _TOOL_OUTPUT_RESERVE_TOKENS
     room_chars = int(room_tokens * _TOKEN_ESTIMATOR.ratio)
@@ -925,6 +958,8 @@ def run_autopilot(
         return meta
     if is_small_talk(query):
         return "Hi — what would you like me to do?"
+
+    _sync_context_window(config)
 
     if str(config.get("protocol", "v1")).lower() == "v2":
         from . import loop_v2
@@ -1381,7 +1416,7 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     return 0
 
 
-_DEGRADATION_CLIFF_TOKENS = compaction._DEGRADATION_CLIFF_TOKENS
+_DEFAULT_INPUT_BUDGET_TOKENS = compaction._DEFAULT_INPUT_BUDGET_TOKENS
 _TURN_OVERHEAD_TOKENS = compaction._TURN_OVERHEAD_TOKENS
 _MIN_HISTORY_BUDGET_TOKENS = compaction._MIN_HISTORY_BUDGET_TOKENS
 _AUTO_COMPACT_MIN_GAIN_TOKENS = compaction._AUTO_COMPACT_MIN_GAIN_TOKENS

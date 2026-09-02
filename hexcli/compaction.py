@@ -39,9 +39,15 @@ _CONDENSED_MARKER = "[Earlier turns, condensed:]"
 _CONDENSED_ACK = "Understood — continuing with that context in mind."
 _CONDENSED_DROP_RE = re.compile(r"^- \[…(\d+) earlier turn")
 
-# Total input tokens at which qwen3-4b-instruct-2507 starts dropping structure
-# (measured: multi-turn runs collapse from ~2,560 est. input tokens onward).
-_DEGRADATION_CLIFF_TOKENS = 2_600
+# The history budget is derived from the server's INPUT budget
+# (`context_window_tokens`: what npurun enforces before it starts dropping
+# messages; adopted from /v1/models at the first turn, 3,000 when the server
+# does not advertise one), not from a model "cliff". The 2,600-token cliff
+# that lived here from July to September was never a length effect —
+# V2_PLAN §14.7 records uc1 failing at 2,477 while uc2 passed at 2,911 (a
+# regex bug), and the August sweep (evals/cases_cliff.py) found quality flat
+# right up to the server's trim. See docs/RESEARCH_NEXT_LEVERS.md §8.
+_DEFAULT_INPUT_BUDGET_TOKENS = 3_000
 # Reserve for the parts of a turn that are neither system prompt nor history:
 # workspace snapshot, the user's query, and the first tool result coming back.
 _TURN_OVERHEAD_TOKENS = 500
@@ -216,7 +222,7 @@ def compact_history(
 
 def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
     """Return (warn, critical) history-token thresholds derived from the ACTUAL
-    system prompt size.
+    system prompt size and the server's input budget.
 
     v1.3–v1.7 hardcoded warn=1,300 on a comment claiming the base prompt was
     ~1,000 tokens. It is really ~2,100, so auto-compact fired ~900 tokens PAST
@@ -235,8 +241,8 @@ def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
         ))
     except Exception:
         base = 2_100
-    warn = max(_MIN_HISTORY_BUDGET_TOKENS,
-               _DEGRADATION_CLIFF_TOKENS - base - _TURN_OVERHEAD_TOKENS)
+    window = int(config.get("context_window_tokens") or _DEFAULT_INPUT_BUDGET_TOKENS)
+    warn = max(_MIN_HISTORY_BUDGET_TOKENS, window - base - _TURN_OVERHEAD_TOKENS)
     return warn, warn * 5 // 4
 
 
