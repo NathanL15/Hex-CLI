@@ -33,7 +33,9 @@ model never seeing the request).
 | multiturn ×3 (uc1–uc3, 16 turns) | 25/48 | **35/48** |
 | uc2 everyday session, 6 turns | 7/18 | **18/18** |
 | extended ×3 | 100/123 | 95/123 (parity, p=0.53) |
-| empty model replies in the multiturn run | 63 of 117 | 1 of 117 |
+| empty model replies in the multiturn run | 63 of 117 | 0 |
+| server trims (request evicted) per multiturn run | 141 at the old budget | 17 |
+| dialog rebuilds per multiturn run | 44 at the old budget | 14 |
 
 ### Two bugs the single-turn suites could not see
 
@@ -58,7 +60,8 @@ tells the server when a turn ends; if the cache is long, the server rebuilds
 and re-prefills the system prompt in the background while you read the
 answer. Next turn after a 3,400-token turn: 2.2 s to first token with the
 prewarm, 10–12 s without. The client waits out the server's busy signal if
-you type faster than that.
+you type faster than that (the eval runner always does, which is why the
+multiturn suite shows the prewarm as neutral: it has no think time).
 
 Requires the 0.2.1 `npurun-arm64.exe` from this release (the budget, the
 empty-Rewind guard and the prewarm endpoint live there); an older server

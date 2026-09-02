@@ -535,6 +535,26 @@ direct stage above is switched off in this configuration: a knowledge query
 is already decode-bound once the prefix is warm, and a second system prompt
 would only buy a rebuild.
 
+\medskip
+With the prefill tax gone, the context question could be re-read. The
+250-token history floor rested on two constants nobody had derived: the
+harness's 2,600-token ``degradation cliff'' (the collapse it described was,
+by the project's own record, a regex bug) and a 3,000-token input cap in the
+server, inherited from upstream. The bundle is compiled to 4,096. A sweep at
+controlled input sizes found quality flat from 2,370 to 3,697 tokens, the
+same three cases failing at every size, and decode about 12\% slower only
+with the window actually full. The server now derives its budget from the
+bundle's context size (3,696 after a reply reserve), keeps the user's
+request when it must trim, and advertises the budget; the harness sizes
+history and tool pages against it, lifting the history budget to about 850
+tokens. Two defects surfaced only in multi-turn measurement: a KV-cache
+rewind on a transcript that diverges mid-conversation can return success
+with zero tokens (63 of 117 calls in one run under the old floor --- now
+treated as a failed rewind), and a divergent rewind fails outright once the
+cached transcript exceeds roughly 3,200 tokens, which an end-of-turn prewarm
+absorbs in the background. Multi-turn: 25/48 $\to$ 34--35/48 turn-runs,
+server trims per run 141 $\to$ 17; extended suite at parity.
+
 % ═══════════════════════════════════════════════════════════════
 \section{Security: assume the model is 100\% injectable}
 
@@ -607,7 +627,10 @@ tool result is found to overflow the 4K window and is fixed with per-step
 budgeting and paged reads; the live-state grader bug is fixed. QAIRT~2.50
 accepts the KV rewind that 2.47 refused: the server keeps the dialog across
 calls and the prompt is made byte-stable, cutting whole-turn time by 41\%
-with no regression (91/117 $\to$ 97/117). \\
+with no regression (91/117 $\to$ 97/117). The context floor is then traced
+to two undocumented constants and removed: quality is flat to 3,697 input
+tokens, the server budget follows the compiled window, and multi-turn
+sessions go from 25/48 to 34/48 once silent empty rewinds are caught. \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}
