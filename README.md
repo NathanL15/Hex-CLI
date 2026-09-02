@@ -257,7 +257,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**24 offline suites (707 tests)** — no LLM required, all against a mock backend:
+**24 offline suites (708 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage
