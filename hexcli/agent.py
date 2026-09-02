@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -940,6 +941,44 @@ def _loop_target(args: dict[str, Any]) -> str:
     return str(args.get("command") or "").strip().lower()[:80]
 
 
+# The system prompt of the most recent turn — what the next turn's transcript
+# will start with, and therefore what the server should hold in its KV cache
+# between turns (see _prewarm_backend).
+_LAST_SYSTEM_PROMPT: str = ""
+
+
+def _prewarm_backend(config: dict[str, Any]) -> None:
+    """Tell the server the turn is over so it can rebuild a long KV cache now.
+
+    Genie 1.20 prefix-matches a DIVERGENT query (the next turn: history is
+    condensed, so it never extends the last request) only while the cached
+    transcript is short (~3,150 tokens); past that the next turn pays a ~10 s
+    rebuild in-line. The npurun fork (0.2.1+) exposes /v1/npurun/prewarm:
+    when the cache is long it rebuilds and re-prefills the system prompt in
+    the background while the user reads the answer. Fire-and-forget; an
+    older server answers 404 and nothing changes.
+    """
+    if config.get("backend") != "openai" or not config.get("prewarm_after_turn", True):
+        return
+    system_prompt = _LAST_SYSTEM_PROMPT
+    if not system_prompt:
+        return
+    try:
+        base = str(config["openai_compatible"]["base_url"]).rstrip("/")
+    except Exception:
+        return
+
+    def _post() -> None:
+        try:
+            http_json_request(f"{base}/npurun/prewarm",
+                              {"messages": [{"role": "system", "content": system_prompt}]},
+                              {}, 5)
+        except Exception:
+            pass
+
+    threading.Thread(target=_post, name="hex-prewarm", daemon=True).start()
+
+
 def run_autopilot(
     config: dict[str, Any],
     history: list[dict[str, str]],
@@ -949,7 +988,23 @@ def run_autopilot(
     turn: telemetry.TurnRecorder | None = None,
     probe: AutopilotProbe | None = None,
 ) -> str:
-    global _CURRENT_SESSION_ID
+    try:
+        return _run_autopilot_turn(config, history, query, shell_exe,
+                                   session=session, turn=turn, probe=probe)
+    finally:
+        _prewarm_backend(config)
+
+
+def _run_autopilot_turn(
+    config: dict[str, Any],
+    history: list[dict[str, str]],
+    query: str,
+    shell_exe: str,
+    session: dict[str, Any] | None = None,
+    turn: telemetry.TurnRecorder | None = None,
+    probe: AutopilotProbe | None = None,
+) -> str:
+    global _CURRENT_SESSION_ID, _LAST_SYSTEM_PROMPT
     _CURRENT_SESSION_ID = None  # clear before early-return paths
     if is_help_request(query):
         return HELP_TEXT
@@ -1015,6 +1070,7 @@ def run_autopilot(
         *history,
         {"role": "user", "content": user_content},
     ]
+    _LAST_SYSTEM_PROMPT = system_prompt
     _probe(probe, "on_start", system_prompt, [dict(m) for m in messages])
 
     last_tool_output = ""
