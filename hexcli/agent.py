@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from hexcli import (
     cancel,
+    chatlog,
     compaction,
     diffview,
     distribution,
@@ -412,6 +413,9 @@ class AutopilotProbe:
     """
 
     def on_start(self, system_prompt: str, messages: list[dict[str, str]]) -> None: ...
+
+    def on_request(self, step: int, attempt: int, messages: list[dict[str, str]]) -> None:
+        """The exact message list about to be sent to the model."""
 
     def on_llm(self, step: int, attempt: int, raw: str, latency_s: float) -> None: ...
 
@@ -1127,6 +1131,7 @@ def _run_autopilot_turn(
         raw = ""
         action: dict[str, Any] = {}
         for attempt in range(3):
+            _probe(probe, "on_request", step, attempt, [dict(m) for m in messages])
             llm_start = time.monotonic()
             raw, eval_count = call_llm(
                 config, messages, "autopilot_max_output_tokens", label=step_label, json_format=True
@@ -1464,7 +1469,14 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     append_session_message(session, "user", query)
     tel = telemetry.SessionTelemetry(config)
     turn = tel.start_turn("autopilot", query)
-    message = run_autopilot(config, [], query, shell_exe, session=session, turn=turn)
+    clog = chatlog.ChatLog(config, version=VERSION, kind="one-shot")
+    probe = clog.turn_start(0, query, [], 0)
+    try:
+        message = run_autopilot(config, [], query, shell_exe, session=session, turn=turn, probe=probe)
+    except BaseException as exc:
+        clog.turn_end(0, status="error", message=f"{type(exc).__name__}: {exc}")
+        raise
+    clog.turn_end(0, status="completed", message=message)
     tel.record_turn(turn)
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)

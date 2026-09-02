@@ -27,6 +27,8 @@
   "workspace_write_scope": true,
   "workspace_write_allow": [],
   "telemetry_enabled": true,
+  "chat_log_enabled": true,
+  "chat_log_dir": "",
   "memory_enabled": true,
   "memory_dreaming": false,
   "autopilot_confirm_destructive": true,
