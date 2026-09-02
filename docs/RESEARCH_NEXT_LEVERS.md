@@ -345,3 +345,39 @@ Expected payoff: ~3x longer conversations before compaction, big-file reads
 that keep the question in context, fewer prefix rebuilds — with no prompt
 text touched, no model change, no LoRA. Cost: one fork build, two short
 sweeps, one full arm.
+
+### 8.6 Measured (2026-09-02, fork 0.2.1 + harness window sync)
+
+**Gate A — cliff sweep**, `evals/cases_cliff.py --buckets 3000,3300,3600,3700
+--runs 3`, fresh server per bucket, server budget 3,696 (4,096 − 400):
+
+| target | actual input tokens | pass | failing cases |
+|---|---|---|---|
+| 2,400 (Aug 29) | 2,370 | 12/18 | agentic-3 2/3, trap-3 0/3, trap-1 1/3 |
+| 3,000 | 3,161 | 12/18 | same three |
+| 3,300 | 3,509 | 12/18 | same three (+ factual-2 2/3) |
+| 3,600 | 3,697 | 12/18 | same three |
+| 3,700 | 3,695 | 15/18 | trap-3 0/3 |
+
+Quality is flat from 2,370 to 3,697 input tokens; the three failures are
+the same cases at every size (trap-3 is the paper's 1-in-3 bait ceiling).
+There is no cliff inside the compiled window.
+
+**Decode vs live context** (direct probe, same transcript sent twice per
+size, streaming, 3 repeats at the extremes):
+
+| est. input | warm TTFT | decode tok/s | cold prefill of the appended part |
+|---|---|---|---|
+| 2,487 | 0.08–0.18 s | 8.3 / 9.1 / 9.2 | (system prompt cold: ~9 s) |
+| 3,067 | 0.10 s | 8.2 | 1.6 s |
+| 3,415 | 0.10 s | 8.3 | 1.2 s |
+| 3,647 | 0.10–0.14 s | 7.8 / 7.8 / 7.8 | 2.9 s |
+
+Prefix reuse holds to the top of the budget (warm TTFT ≤ 0.2 s). Decode is
+~12% slower with the window full than at 2,500 tokens, and only then; at
+3,100–3,400 it is within noise. Against that: at the old 3,000 ceiling the
+same transcript was trimmed, which diverged the prefix and cost a ~5 s
+rebuild per step. Gate A passes.
+
+The sweep's rising first-LLM latency (5.5 s → 12 s mean across buckets) is
+generation length at ~8 tok/s, not prefill — the probe separates the two.
