@@ -8,6 +8,7 @@ lists) rather than calling back into the data/backend layer.
 from __future__ import annotations
 
 import msvcrt
+import os
 import subprocess
 import sys
 import textwrap
@@ -313,7 +314,8 @@ def show_context(
     cprint("Context estimate", C.BOLD)
     print(f"  Messages:         {len(messages)}")
     print(f"  Chars (total):    {total_chars:,}")
-    print(f"  History (est.):   ~{est_tokens:,} tokens  (budget {warn:,})")
+    print(f"  History (est.):   ~{est_tokens:,} tokens  (budget {warn:,}, "
+          f"{context_gauge(min(100, round(100 * est_tokens / max(warn, 1))))})")
     if system_prompt_tokens:
         print(f"  System prompt:    ~{system_prompt_tokens:,} tokens")
         print(f"  Turn total:       ~{est_tokens + system_prompt_tokens:,} tokens")
@@ -355,18 +357,41 @@ def short_cwd() -> str:
         return str(cwd)
 
 
-def repl_prompt(config: dict[str, Any]) -> str:
+_GAUGE_GLYPHS = "○◔◑◕●"
+# The quarter-pie glyphs are in Cascadia (Windows Terminal) but not in
+# Consolas, and classic conhost does not fall back — the Start Menu
+# shortcut runs there. Percentage only in that case, not boxes.
+_PIE_OK = os.name != "nt" or bool(os.environ.get("WT_SESSION"))
+
+
+def context_gauge(percent: int, pie: bool | None = None) -> str:
+    """A five-step pie glyph plus the number: ○ 0%  ◔ 25%  ◑ 50%  ◕ 75%  ● 100%
+    (just the number where the console font cannot draw the pie)."""
+    pct = max(0, min(100, int(percent)))
+    if not (_PIE_OK if pie is None else pie):
+        return f"{pct}%"
+    glyph = _GAUGE_GLYPHS[min(4, (pct + 12) // 25)]
+    return f"{glyph} {pct}%"
+
+
+def repl_prompt(config: dict[str, Any], context_percent: int | None = None) -> str:
     model = str(config.get("model", "?"))
     cwd_str = short_cwd()
     branch = get_git_branch()
     branch_str = f" ({branch})" if branch else ""
+    gauge = context_gauge(context_percent) if context_percent is not None else ""
     if _COLOR_ON:
+        if gauge:
+            tone = C.BRED if context_percent >= 100 else C.BYELLOW if context_percent >= 75 else C.DIM
+            gauge = f"{C.DIM} | {tone}{gauge}"
         return (
             f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | "
-            f"{C.BYELLOW}{cwd_str}{branch_str}{C.DIM}]{C.RESET}\n"
+            f"{C.BYELLOW}{cwd_str}{branch_str}{gauge}{C.DIM}]{C.RESET}\n"
             f"{C.BOLD}you>{C.RESET} "
         )
-    return f"[{model} | {cwd_str}{branch_str}]\nyou> "
+    if gauge:
+        gauge = f" | {gauge}"
+    return f"[{model} | {cwd_str}{branch_str}{gauge}]\nyou> "
 
 
 # ---------------------------------------------------------------------------

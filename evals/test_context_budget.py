@@ -292,7 +292,37 @@ def test_mock_backend_never_feeds_the_estimator() -> None:
     assert sa._TOKEN_ESTIMATOR.observations == before
 
 
+def test_context_gauge_tracks_the_history_budget() -> None:
+    """The prompt gauge is the history budget, 0% fresh -> 100% at the point
+    auto-compact will fire, never past 100."""
+    from hexcli import ui
+    assert sa.context_fill_percent({"messages": []}, _CFG) == 0
+    assert sa.context_fill_percent(None, _CFG) == 0
+    warn, _ = sa._history_budget_tokens(_CFG)
+    chars = int(warn * sa._TOKEN_ESTIMATOR.ratio)
+    half = {"messages": [{"role": "user", "content": "x" * (chars // 2)}]}
+    full = {"messages": [{"role": "user", "content": "x" * (chars * 3)}]}
+    assert 45 <= sa.context_fill_percent(half, _CFG) <= 55, sa.context_fill_percent(half, _CFG)
+    assert sa.context_fill_percent(full, _CFG) == 100
+    assert ui.context_gauge(0, pie=True) == "○ 0%"
+    assert ui.context_gauge(30, pie=True).startswith("◔")
+    assert ui.context_gauge(50, pie=True).startswith("◑")
+    assert ui.context_gauge(80, pie=True).startswith("◕")
+    assert ui.context_gauge(100, pie=True) == "● 100%"
+    assert ui.context_gauge(50, pie=False) == "50%", "conhost gets the number, never boxes"
+    orig_color, orig_pie = ui._COLOR_ON, ui._PIE_OK
+    ui._COLOR_ON, ui._PIE_OK = False, True
+    try:
+        assert "| ◑ 50%]" in ui.repl_prompt(_CFG, 50)
+        assert "%" not in ui.repl_prompt(_CFG)
+        ui._PIE_OK = False
+        assert "| 50%]" in ui.repl_prompt(_CFG, 50)
+    finally:
+        ui._COLOR_ON, ui._PIE_OK = orig_color, orig_pie
+
+
 TESTS = [
+    test_context_gauge_tracks_the_history_budget,
     test_budget_follows_the_server_window,
     test_context_window_adopted_from_server,
     test_estimator_default_matches_chars_over_4,

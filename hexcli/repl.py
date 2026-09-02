@@ -343,7 +343,7 @@ def run_repl(config: dict[str, Any]) -> int:
     ) or (lambda p: input(p))
 
     while True:
-        prompt = sa.repl_prompt(config)
+        prompt = sa.repl_prompt(config, sa.context_fill_percent(current_session, config))
         try:
             query = read_line(prompt).strip()
         except EOFError:

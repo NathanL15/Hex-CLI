@@ -1478,6 +1478,7 @@ _MIN_HISTORY_BUDGET_TOKENS = compaction._MIN_HISTORY_BUDGET_TOKENS
 _AUTO_COMPACT_MIN_GAIN_TOKENS = compaction._AUTO_COMPACT_MIN_GAIN_TOKENS
 _history_budget_tokens = compaction._history_budget_tokens
 _maybe_auto_compact = compaction._maybe_auto_compact
+context_fill_percent = compaction.context_fill_percent
 
 
 
