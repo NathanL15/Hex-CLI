@@ -63,6 +63,13 @@ prewarm, 10–12 s without. The client waits out the server's busy signal if
 you type faster than that (the eval runner always does, which is why the
 multiturn suite shows the prewarm as neutral: it has no think time).
 
+### Context gauge in the prompt
+
+The prompt header now ends with a small pie glyph and a percentage
+(`[qwen3-4b | ~\proj (main) | ◔ 30%]`): how much of the history budget
+this session has used. 0% on a fresh session, yellow from 75%, 100% (red)
+means the next turn will auto-compact. `/stats` shows the same figure.
+
 Requires the 0.2.1 `npurun-arm64.exe` from this release (the budget, the
 empty-Rewind guard and the prewarm endpoint live there); an older server
 keeps 2.4.0's behaviour with a 3,000-token budget.

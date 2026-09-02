@@ -246,6 +246,18 @@ def _history_budget_tokens(config: dict[str, Any]) -> tuple[int, int]:
     return warn, warn * 5 // 4
 
 
+def context_fill_percent(session: dict[str, Any] | None, config: dict[str, Any]) -> int:
+    """How full the history budget is, 0-100: 0 on a fresh session, 100 when
+    the next turn will auto-compact. The prompt shows it as a small gauge."""
+    msgs = (session or {}).get("messages", []) or []
+    if not msgs:
+        return 0
+    ag = _agent()
+    est = ag._TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
+    warn, _ = _history_budget_tokens(config)
+    return max(0, min(100, round(100 * est / max(warn, 1))))
+
+
 def _maybe_auto_compact(
     config: dict[str, Any],
     session: dict[str, Any],
