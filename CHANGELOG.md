@@ -4,7 +4,7 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## 2.4.0 — unreleased
+## 2.4.0 — 2026-09-02
 
 ### Every turn ~40% faster: the KV cache finally survives between calls
 
@@ -73,8 +73,11 @@ vs 91/117, p=0.65).
   (with `--set` overrides for A/B), for environments that kill long runs.
 - `evals/cases_cliff.py`: the input-size sweep that closed the context
   question (quality flat to the runtime's ~2.9K input trim).
-- KV Rewind spike: negative with a precise lead (bundle KV update method);
-  see docs/RESEARCH_NEXT_LEVERS.md §5.
+- The Rewind runtime is opt-in by presence: QAIRT 2.50+ under
+  `C:\Qualcomm\AIStack` plus the 0.2.0 `npurun-arm64.exe` from this
+  release. `/doctor` shows a "KV prefix reuse" line saying which it found.
+  Full history of the spike (2.47 rejects Rewind, the SMART_MASK dead end,
+  the 2.50 unlock) in docs/RESEARCH_NEXT_LEVERS.md §5–7.
 
 ## 2.3.0 — 2026-08-31
 

@@ -515,6 +515,26 @@ prompt makes tool restraint structural and cut knowledge-query first-token
 latency by 40\% (10.1\,s $\to$ 6.0\,s median) with no regression in its
 routed subset.
 
+\medskip
+The larger lever turned out to be the runtime, not the prompt. A 2,355-token
+system prompt that is prefilled again on every agent step is a fixed tax of
+about five seconds per call, and the Genie runtime that ships with QAIRT~2.47
+rejects its own KV-cache rewind on this bundle. QAIRT~2.50 accepts it. The
+server fork was changed to keep one dialog alive for the life of the process
+and to send every warm query as a prefix-matching rewind, rebuilding the
+dialog in place only when the system prompt itself changes; two runtime
+behaviours dictated that shape (a reset after a large prefill wedges the
+dialog, and a transcript that diverges early poisons it). The prompt then had
+to become byte-identical across working directories and days, which moved the
+date and directory out of the system prompt and into the first user message.
+Measured on the extended suite with three runs per case against a fresh
+server per arm: run-level 91/117 $\to$ 97/117 (Fisher $p=0.41$, no
+regression), first-token median 6.8\,s $\to$ 3.7\,s, agent step $\geq 2$
+median 7.6\,s $\to$ 3.2\,s, whole-turn mean 16.0\,s $\to$ 9.5\,s. The
+direct stage above is switched off in this configuration: a knowledge query
+is already decode-bound once the prefix is warm, and a second system prompt
+would only buy a rebuild.
+
 % ═══════════════════════════════════════════════════════════════
 \section{Security: assume the model is 100\% injectable}
 
@@ -581,6 +601,13 @@ quality flat to the runtime's own $\sim$2.9K input ceiling, retiring
 threshold tuning; and a two-stage prompt-split A/B keeps the no-tools direct
 stage ($-40\%$ knowledge-query latency, structural tool restraint) while
 rejecting the leaner continuation prompt on the trimming fingerprint. \\
+Sep 1--2 & The main module is decomposed into seven verified stages
+(3,818 $\to$ 1,499 lines, full pass$^3$ arm at parity). A single oversized
+tool result is found to overflow the 4K window and is fixed with per-step
+budgeting and paged reads; the live-state grader bug is fixed. QAIRT~2.50
+accepts the KV rewind that 2.47 refused: the server keeps the dialog across
+calls and the prompt is made byte-stable, cutting whole-turn time by 41\%
+with no regression (91/117 $\to$ 97/117). \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}
@@ -630,9 +657,12 @@ that matters; the fix was to re-derive the invariants and mutation-test them.
 
 The context question is now closed by measurement rather than left open: the
 history budget is fully spent against the model's own ceilings, and the
-remaining levers all require a different model or runtime. The next steps are
-completing the decomposition of the main module and attacking the per-turn
-prefill cost, which is now the largest remaining latency lever. The model
+remaining levers all require a different model or runtime. Both of the next
+steps named in the previous revision are done: the main module is decomposed,
+and the per-turn prefill tax is gone wherever the runtime allows it, which
+took a runtime upgrade and a server change rather than any prompt work. What
+remains on the harness side is small and measurable: letting compaction share
+the warm prefix, and paging large files on the model's behalf. The model
 upgrade path stays a watch item rather than a work item: the moment a supported successor bundle appears for this NPU, the
 instrument that produced every number here can judge it in an
 afternoon.\footnote{All figures were measured on a Snapdragon X~Elite

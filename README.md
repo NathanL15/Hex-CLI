@@ -78,8 +78,8 @@ between calls — every turn ~40% faster). The launcher picks the newest
 valid install under that folder; to pin one, set both variables:
 
 ```powershell
-setx QNN_SDK_ROOT "C:\Qualcomm\AIStack\QAIRT_2.47.0"
-setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.47.0\lib\hexagon-v73\unsigned"
+setx QNN_SDK_ROOT "C:\Qualcomm\AIStack\QAIRT_2.50.0"
+setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.50.0\lib\hexagon-v73\unsigned"
 ```
 
 Without `ADSP_LIBRARY_PATH`, npurun dies with `STATUS_STACK_BUFFER_OVERRUN`.
@@ -257,7 +257,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**24 offline suites (699 tests)** — no LLM required, all against a mock backend:
+**24 offline suites (703 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage

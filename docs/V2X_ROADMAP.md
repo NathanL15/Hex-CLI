@@ -178,9 +178,9 @@ runtime work. Three spikes, each time-boxed to a day or two:
    > weight-shared). BUT QAIRT 2.46 removed every method except smart
    > mask, so this bundle already uses it and the exporter cannot choose
    > otherwise — the -6 is a Genie limitation with this bundle shape.
-   > **Concrete next step: try a newer QAIRT runtime side by side (2.47's
-   > notes list a rewind bugfix) with `NPURUN_REWIND=1`.** Payoff if it
-   > works: ~5 s × (steps − 1) per turn.
+   > **Done 2026-09-02: QAIRT 2.50 (Genie 1.20) accepts the Rewind; shipped
+   > as the Rewind runtime (banner at the top of this phase).** Measured
+   > payoff: step >= 2 median 7.6 s -> 3.2 s, whole turn -41%.
 2. **`GenieDialog_save/restore` warm restarts**: even session-resume-only
    reuse removes the first-turn prefill for reopened sessions.
 3. **Nexa SDK bake-off** (never evaluated; the only §9 option still
