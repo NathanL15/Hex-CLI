@@ -151,3 +151,44 @@ Hub Qwen3-4B; BFCL v4 / small-model tool-calling surveys (Aug 2026).
 | 2b KV Rewind | **Negative, with a precise lead.** The fork was patched (env-gated `NPURUN_REWIND=1`, commit 37e740b on `hexcli-fork`) to send a verified prefix-extension transcript with `SentenceCode::Rewind`. Genie aborts in ~0.6 s with status -6 (`ERROR_QUERY_FAILED`) before any prefill, so the "hidden CoT tokens" story was wrong — this Instruct model has none. QAIRT 2.47's own KV-Rewind tutorial says prefix match "works well with the KV update method SMART_MASK" but "with POINTER_SHIFT ... throws memory register-related errors for weight-shared bins"; this bundle is weight-shared (`htp_backend_ext_config.json`). The KV update method is fixed at bundle export, not a runtime switch. **Correction (same day): that lead is dead.** QAIRT 2.46's revision history: "Removed shift concat and pointer shift KV cache update methods in lieu of smart mask" — on 2.47 smart mask is the only method, this bundle already uses it (explicit attention-mask graph input), `qai_hub_models` 0.58 exposes no such option, and the local export needs 40 GB regardless. So the -6 is a Genie bug/limitation with this bundle shape (4-part split, multi-graph switching, weight-shared bins), not a fixable export choice. 2.47 also lists a rewind bugfix ("KV cache rewind did not correctly work with an embedding LUT"), so the remaining cheap experiment is a **newer QAIRT runtime**: install the next SDK side by side, point `QNN_SDK_ROOT` at it, run the env-gated fork, re-probe. Needs the owner's Qualcomm login for the download. Until then every agent step re-prefills (~5 s). |
 
 Also found: a second paging-header wording ("The file continues: call read_file again with offset=N") did not get the 4B to page on its own — narrow questions about a large file expose an attention gap (it describes the page instead of answering). Recorded as bigfile-2.
+
+## 6. The Rewind breakthrough (2026-09-02, autonomous session)
+
+### What got unlocked
+
+A newer runtime changed the answer. On **QAIRT 2.50 (libGenie 1.20.0)** the
+same 2.45-compiled bundle accepts `SentenceCode::Rewind`: Genie
+prefix-matches the cached transcript and prefills only the new tokens. Two
+Genie 1.20 behaviours then dictated the server design, each found by a
+probe and fixed in the fork (`hexcli-fork` 1be4694):
+
+| Genie 1.20 behaviour | consequence | fork response |
+|---|---|---|
+| `GenieDialog_reset()` after a large prefill wedges the dialog (every later query `-1`) | resets are unsafe | `NPURUN_REWIND=2`: never reset, on any path |
+| a Rewind whose transcript diverges *early* (different system prompt) returns `-1` and poisons the dialog | divergent prompts are expensive | rebuild the dialog in place (drop the old one first — building alongside failed with `err 1007`), retry as `Complete`; ~5 s, only on divergence |
+| divergence *late* in the transcript (same system prompt, new user turn) prefix-matches fine | a shared system prompt makes even turn 1 warm | keep the system prompt byte-identical (`prompt_stable_prefix`) |
+
+The last row is the roadmap's long-standing "prefix byte-stability" item
+finally paying out: the date and working directory moved from the system
+prompt's second line into the first user message, so the 2,355-token
+prompt is identical across directories and days.
+
+### What we learned
+
+- The 2.47 verdict ("Rewind is broken") was a runtime-version fact, not a
+  bundle fact. A side-by-side SDK install was a 15-minute experiment once
+  the fork had an env-gated switch. Cheap experiments beat theories: three
+  hypotheses (thinking tokens, KV update method, export options) were all
+  wrong, and the probe-log-patch loop found the truth in five rounds.
+- Prefix caching changes the economics that produced the direct stage: a
+  knowledge query on the agent path is now decode-dominated, so the
+  ~350-token no-tools prompt is a *cost* (a divergent prefix = rebuild),
+  not a saving. `prompt_split` is off in this configuration.
+- Any client-visible divergence (compaction's own system prompt, the eval
+  preflight's bare message) now costs ~5 s once; acceptable for rare
+  paths, wrong for hot ones. Watch new prompts for this.
+
+### Measurement (extended suite, 3 runs/case, one fresh 2.50 server,
+`prompt_split=false prompt_stable_prefix=true`)
+
+(filled in below as chunks complete)
