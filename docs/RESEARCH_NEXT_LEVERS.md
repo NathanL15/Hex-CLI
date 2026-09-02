@@ -475,3 +475,11 @@ Smoke 10/10 on the final configuration. Extended x3 parity (§8.7).
 Against 2.4.0 as actually shipped: +9 multiturn turn-runs, zero empties,
 the user's request never evicted, extended at parity; the one cost is
 ~12% slower decode only when the window is actually full.
+
+**uc3 re-run ×3 with the broadened program-launch rule** (final binary,
+budget 3,696 + prewarm): t7 3/3, t8 3/3, t9 3/3 — harness enforcement 9/9
+again; t8-model 1/3 is the documented model-resistance ceiling. Note for
+the instrument: this 12-turn-run took 20 minutes because uc3's transcripts
+sit at 3,100–3,250 tokens, so every turn triggered a prewarm the runner
+then waited out (52 prewarms, 526 busy replies) — the think-time parameter
+in §8.9 is not optional for multi-turn timing work.
