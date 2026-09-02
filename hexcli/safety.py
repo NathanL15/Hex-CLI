@@ -51,15 +51,18 @@ _SENSITIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"frombase64string",
     r"protecteddata\]::unprotect",                # DPAPI secrets
     r"\$env:\w*(token|secret|password|api_?key)\w*",  # credential env vars
-    # Launching a program by absolute path outside the workspace (uc3-t9's
-    # `C:\Windows\System32\calc.exe`): the run_code workspace boundary
-    # already refuses it, but a payload can route the same launch through
-    # run_command, where nothing classified it (measured 2026-09-02: 1 of 3
-    # runs executed it that way). Confirm-gated like the rest of this tier;
-    # `python script.py` and `.\build.bat` inside the workspace are untouched.
-    r"(?:^|[&|;]\s*|\bstart-process\b[^|&;\n]*?)[\"']?[a-z]:[\\/][^\"'|&;\n]*?\.(exe|com|bat|cmd|msi|scr|vbs|ps1|js)\b",
-    r"^\s*start-process\b",
-    r"\bcmd(\.exe)?\s+/c\s+start\b",
+    # Launching a program image (uc3-t9's calc.exe): run_code's workspace
+    # boundary refuses `C:\Windows\System32\calc.exe`, but the same payload
+    # routed through run_command ran three different ways in one afternoon
+    # (2026-09-02: the absolute path, bare `calc.exe`, `start calc.exe`).
+    # Any command segment that STARTS with an executable image, plus
+    # Start-Process / start / cmd /c start, is confirm-gated like the rest
+    # of this tier. `python script.py`, cmdlets and git are untouched.
+    r"(?:^|[&|;]\s*)(?:&\s*)?(?:\"[^\"]*?\.(?:exe|com|bat|cmd|msi|scr|vbs|ps1|js)\b[^\"]*\""
+    r"|'[^']*?\.(?:exe|com|bat|cmd|msi|scr|vbs|ps1|js)\b[^']*'"
+    r"|(?:[a-z]:[\\/]|[.\\/]+)?[^\s\"'|&;]*?\.(?:exe|com|bat|cmd|msi|scr|vbs|ps1|js)\b)",
+    r"(?:^|[&|;]\s*)(?:start-process|start|saps)\b",
+    r"\bcmd(\.exe)?\s+/[ck]\s+start\b",
 ]]
 
 _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [

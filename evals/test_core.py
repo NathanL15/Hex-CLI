@@ -543,13 +543,20 @@ def test_program_launch_by_absolute_path_is_sensitive() -> None:
         r"cmd /c start notepad",
         r"echo hi; C:\tools\x.bat",
         r"Start-Process -FilePath 'C:\Windows\System32\calc.exe'",
+        r"calc.exe",
+        r"start calc.exe",
+        r"start notepad",
+        r".\build.bat",
+        r"Get-ChildItem | foo; .\tools\run.cmd",
     ]:
         assert safety.classify_command(cmd) == "sensitive", f"expected sensitive: {cmd!r}"
     for cmd, want in [
         (r"python script.py", "caution"),
-        (r".\build.bat", "caution"),
         (r"python C:\Users\me\proj\script.py", "caution"),
+        (r"python -m pytest tests/test_exe.py", "caution"),
         (r"Get-ChildItem C:\Windows\System32", "safe"),
+        (r"Get-Process | Where-Object Name -like 'calc*'", "safe"),
+        (r"echo started", "safe"),
         (r"git status", "safe"),
     ]:
         assert safety.classify_command(cmd) == want, f"expected {want}: {cmd!r}"
