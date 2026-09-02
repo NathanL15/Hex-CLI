@@ -252,6 +252,17 @@ def message_has_int(value: int) -> VerifyFn:
     return _verify
 
 
+def message_shorter_than(max_chars: int) -> VerifyFn:
+    """The final message is an answer, not a dump: a finish that echoes a
+    whole tool result (the overflow failure mode) fails this."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        n = len(trace.final_message)
+        if n < max_chars:
+            return True, ""
+        return False, f"final message is {n} chars (limit {max_chars}) — looks like a tool dump, not an answer"
+    return _verify
+
+
 def answer_matches(positives: list[str], negatives: list[str]) -> VerifyFn:
     """Case-insensitive regex SEARCH over the final message: pass iff at least
     one positive pattern matches and no negative pattern does.

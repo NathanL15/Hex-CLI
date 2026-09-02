@@ -79,6 +79,20 @@ def _err_history(tool: str, args: dict[str, str], error: str) -> list[dict[str, 
 # Case matrix
 # ---------------------------------------------------------------------------
 
+def _make_big_module() -> str:
+    """~10K chars, 300 lines: `alpha` on line 2, `omega` near the end, filler
+    functions in between. Deterministic so every run reads the same file."""
+    out = ['"""Synthetic module for the large-read case."""', "def alpha():", "    return 1", ""]
+    for i in range(1, 60):
+        out += [f"def filler_{i:02d}(x):", f"    # step {i} of the pipeline, kept verbose on purpose",
+                f"    return x * {i} + {i * 7 % 13}", ""]
+    out += ["def omega():", "    return 999", ""]
+    return "\n".join(out)
+
+
+_BIG_MODULE = _make_big_module()
+
+
 EXTENSION_CASES: list[Case] = [
     # ---- Regression anchors — fresh phrasings of the 3 originally-fixed bugs ----
     Case("regression-knowledge-1", "factual",
@@ -274,6 +288,52 @@ EXTENSION_CASES: list[Case] = [
          setup={"a.txt": "a", "b.txt": "b", "c.md": "c"},
          verify=ck.all_of(ck.used_capability("list"), ck.message_has_int(2)),
          max_steps=4, expected_tools=("list_directory",)),
+
+    # ---- Large tool output — the coverage hole found 2026-09-01 ----
+    # Before this case the biggest tool result in the whole suite was 567
+    # chars, so nothing ever exercised a read that does not fit the window.
+    # ~10K chars: one unpaged read used to overflow the window, the model
+    # returned an empty reply, and the loop handed back the raw file as the
+    # answer (message_shorter_than catches exactly that dump). The first
+    # function is on line 2 and the last near the end, so a correct answer
+    # needs the head AND either paging or a smart read.
+    # bigfile-1 measures the overflow FIX. The budgeted read returns a first
+    # page whose header states the true line count, so a coherent model can
+    # answer from one read. Old behaviour (unbudgeted 10K-char read): the
+    # window overflowed, the reply came back empty, and the retry produced
+    # "I am ready to assist" babble — 0/3, never a number. (An earlier
+    # variant asked for the first function's name; the 4B summarised 43
+    # near-identical fillers and skipped `alpha` on line 2 — a model
+    # attention gap, not the harness bug this case exists to pin.)
+    # Graded on the mechanism, not on narrow-question accuracy: did the
+    # answer reference what is in the file at all? Under the overflow bug
+    # the reply was generic assistant babble ("I am ready to assist", "Done.")
+    # that names nothing from the file; a budgeted read yields a real
+    # description. (Narrow questions — first function, line count — exposed
+    # a separate 4B attention gap: handed a page of code it describes the
+    # code rather than answering the question. Not the harness bug.)
+    Case("bigfile-1", "agentic",
+         "Read big_module.py and describe in one sentence what it contains.",
+         setup={"big_module.py": _BIG_MODULE},
+         verify=ck.all_of(
+             ck.used_capability("read"),
+             ck.message_contains_any("filler", "function", "def ", "pipeline", "alpha"),
+             ck.message_shorter_than(1500),
+         ),
+         max_steps=6, expected_tools=("read_file",)),
+    # bigfile-2 tracks PAGING ability: the last function is past the first
+    # page, so the model must follow the page header and read on. Known gap
+    # at 4B as of 2026-09-02 — kept visible so any paging nudge is measurable.
+    Case("bigfile-2", "agentic",
+         "Read big_module.py all the way to the end and tell me the name of the "
+         "last function defined in it.",
+         setup={"big_module.py": _BIG_MODULE},
+         verify=ck.all_of(
+             ck.used_capability("read"),
+             ck.message_contains("omega"),
+             ck.message_shorter_than(1500),
+         ),
+         max_steps=8, expected_tools=("read_file",), tag="paging"),
 ]
 
 EXTENDED_CASES: list[Case] = [*SMOKE_CASES, *EXTENSION_CASES]

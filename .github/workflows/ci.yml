@@ -95,3 +95,6 @@ jobs:
 
       - name: Unit tests — prompt split (direct stage + router)
         run: python evals/test_prompt_split.py
+
+      - name: Unit tests — per-step tool-output budget + grader fixes
+        run: python evals/test_tool_budget.py

@@ -296,11 +296,42 @@ def read_file_tool(path_text: str, output_limit: int,
     if size > max_bytes:
         with path.open("rb") as fh:
             raw_bytes = fh.read(max_bytes)
-        content = raw_bytes.decode("utf-8", errors="replace")
+        # Byte reads skip universal-newline translation; normalise so CRLF
+        # files page on "\n" like the read_text path does.
+        content = raw_bytes.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        # Count the real line total by streaming — the header must not claim
+        # the file ends where our memory-safe pre-read happened to stop.
+        total = 1
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                total += chunk.count(b"\n")
     else:
         content = path.read_text(encoding="utf-8", errors="replace")
-    ui.tool_event("read", str(path))
-    return trim_text(content, output_limit)
+        total = content.count("\n") + 1
+    if len(content) <= output_limit and size <= max_bytes:
+        ui.tool_event("read", str(path))
+        return content
+    # Too big for this step's budget: return the FIRST PAGE, line-aligned,
+    # with a header that tells the model how to page — a mid-line head cut
+    # with "[truncated]" taught it nothing about how much it had not seen.
+    page: list[str] = []
+    used = 0
+    for ln in content.split("\n"):
+        if used + len(ln) + 1 > output_limit:
+            break
+        page.append(ln)
+        used += len(ln) + 1
+    if not page:
+        # A single line bigger than the whole budget (minified/binary-ish):
+        # fall back to a plain head cut so the model still sees something.
+        ui.tool_event("read", f"{path}  (first {output_limit} chars of a {total}-line file)")
+        return (f"[first {output_limit} chars of {total} lines; use offset/limit]\n"
+                + content[:output_limit])
+    end = len(page)
+    header = (f"[lines 1-{end} of {total}. The file continues: call read_file again "
+              f"with offset={end + 1} to read the next part.]\n")
+    ui.tool_event("read", f"{path}  (lines 1-{end} of {total})")
+    return header + "\n".join(page)
 
 
 def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
