@@ -167,8 +167,11 @@ runtime work. Three spikes, each time-boxed to a day or two:
    > transcript still gets `ERROR_QUERY_FAILED` in 0.6 s. The SDK's own
    > KV-Rewind tutorial ties prefix match to the bundle's KV update method
    > (SMART_MASK ok; POINTER_SHIFT errors on weight-shared bins — ours is
-   > weight-shared). That is set at export. **Concrete next step: AI Hub
-   > re-export with SMART_MASK, then flip `NPURUN_REWIND=1`.** Payoff if it
+   > weight-shared). BUT QAIRT 2.46 removed every method except smart
+   > mask, so this bundle already uses it and the exporter cannot choose
+   > otherwise — the -6 is a Genie limitation with this bundle shape.
+   > **Concrete next step: try a newer QAIRT runtime side by side (2.47's
+   > notes list a rewind bugfix) with `NPURUN_REWIND=1`.** Payoff if it
    > works: ~5 s × (steps − 1) per turn.
 2. **`GenieDialog_save/restore` warm restarts**: even session-resume-only
    reuse removes the first-turn prefill for reopened sessions.
