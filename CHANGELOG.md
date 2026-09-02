@@ -4,7 +4,7 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## 2.5.0 — unreleased
+## 2.5.0 — 2026-09-02
 
 ### The context question, answered: the window was never the model's
 
