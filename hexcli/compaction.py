@@ -258,8 +258,9 @@ def _maybe_auto_compact(
     system-prompt size (see _history_budget_tokens), not a hardcoded guess.
     The full summary is suppressed (quiet=True); only a one-line notice prints.
 
-    Thrash guard: with a 2,200-token prompt the history budget clamps to the
-    250-token floor, and the compacted tail itself usually still exceeds that —
+    Thrash guard: before 2.5.0's window-derived budget, a 2,200-token prompt
+    clamped the history budget to the 250-token floor (now ~850 against a
+    3,696-token server budget), and the compacted tail usually exceeded it —
     so v2.2 re-fired every single turn, shredding the condensed block a little
     further each time while freeing almost nothing (the user-reported "by the
     time it compacts, it autocompacts again by the next message"). The

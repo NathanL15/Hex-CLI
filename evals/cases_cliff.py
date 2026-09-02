@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """evals/cases_cliff.py — Where does quality actually collapse as input grows?
 
-`_DEGRADATION_CLIFF_TOKENS = 2_600` in agent.py was never measured by a
-dedicated sweep: it was inferred during the §14.5-14.7 multi-turn debugging,
+The harness's 2,600-token "cliff" (removed 2026-09-02; the history budget is
+now derived from the server's advertised input budget) was never measured by
+a dedicated sweep: it was inferred during the §14.5-14.7 multi-turn debugging,
 where two of the three "collapse" causes turned out to be harness bugs and
 uc2 PASSED at 2,911 tokens while uc1 failed at 2,477. Meanwhile the system
 prompt has grown to 2,355 exact tokens, which clamps the history budget to
 the 250-token floor — the floor only moves if the real cliff clears
 prompt + overhead + floor ≈ 3,100. This suite measures that directly.
+Run twice: 2026-08-29 (flat 2,370-2,973, then the old 3,000 server cap) and
+2026-09-02 (flat to 3,697 with the window-derived budget); see
+docs/RESEARCH_NEXT_LEVERS.md §8.6.
 
 Method: the same solid single-turn cases (factual content, agentic disk
 state, named-tool bait resistance — the metric that collapsed first in the
