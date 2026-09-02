@@ -483,3 +483,35 @@ the instrument: this 12-turn-run took 20 minutes because uc3's transcripts
 sit at 3,100–3,250 tokens, so every turn triggered a prewarm the runner
 then waited out (52 prewarms, 526 busy replies) — the think-time parameter
 in §8.9 is not optional for multi-turn timing work.
+
+### 8.10 Where this leaves the plan, and the knobs
+
+§7's list stands with one item done and one added:
+
+1. ~~Release~~ → **2.5.0** (this section) supersedes 2.4.0's plan item 1.
+2. Compaction sharing the prefix — still open, now less urgent: with an
+   ~850-token history budget, compaction fires a third as often.
+3. Harness-side auto-paging for big files (bigfile-2) — unchanged.
+4. Ambiguous-refusal grader/rule-12 example — unchanged.
+5. **New: think time in the multiturn runner** (a `--think-time` seconds
+   parameter between turns) so the prewarm and any future end-of-turn work
+   can be measured instead of penalised.
+6. **New, larger: append-only raw history across turns.** Every REPL turn
+   diverges today because history is condensed; keeping the previous turn's
+   raw transcript would make each turn a prefix extension (no rewind
+   distance at all, compaction as the only divergence). Changes what the
+   model reads, so it is a prompt-class change: full pass^5 A/B plus the
+   multiturn suite with think time.
+
+Runtime knobs (fork 0.2.1), all environment variables on the server process;
+the launcher sets only `NPURUN_REWIND=2`:
+
+| variable | default | meaning |
+|---|---|---|
+| `NPURUN_REWIND` | unset (launcher: `2`) | `1` Rewind only on verified prefix extension; `2` never reset, Rewind every warm query, rebuild on failure |
+| `NPURUN_INPUT_BUDGET` | derived | pin the input-token budget (A/B lever; `3000` reproduces 2.4.0) |
+| `NPURUN_OUTPUT_RESERVE` | `400` | tokens held back from the compiled window for the reply |
+| `NPURUN_REWIND_MAX_CACHED` | `3100` | cached-transcript size above which an end-of-turn prewarm rebuilds |
+
+Harness config keys: `context_window_tokens` (3000 default, adopted from
+the server unless pinned) and `prewarm_after_turn` (true).
