@@ -4,6 +4,53 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.4.0 — unreleased
+
+### Large tool results no longer break the step
+
+The compiled window is 4,096 tokens. The server drops older messages to
+fit but cannot drop part of the newest one, so a single tool result over
+~1,800 tokens overflowed the window, the model returned an empty reply,
+and the agent finished with the raw tool output — or generic babble — as
+its answer. The configured limit allowed ~3,000 tokens; no eval case had
+a tool output over 567 chars, so nothing ever saw it. Each tool result is
+now sized to the room actually left in the window (`context_window_tokens`,
+new config key), large reads come back as a line-aligned first page with
+the exact offset to continue from, and an empty reply is retried like any
+other invalid action.
+
+| Live A/B, mechanism case bigfile-1 (×3) | budget off | budget on |
+|---|---|---|
+| Answer references the file | 0/3 | **2/3** |
+| 16 other tool-using cases | — | no regression |
+
+### The instrument could not see the v2.2 live-state win
+
+`livestate-1` in the extended suite used the checker for "write me a
+regex" questions, so every correct CPU answer failed — in every extended
+run and both arms of every A/B since the case was added. Fixed
+(`answer_matches` is the shared checker); count checks accept spelled-out
+numbers. Re-graded live: livestate-1 0/3 → 3/3, agentic-5 2/3 → 3/3.
+
+### The Split — codebase health
+
+`agent.py` 3,818 → 1,499 lines across seven verified stages
+(`parsing`, `http_client`, `cancel`, `tools`, `compaction`, `config`,
+`repl`, `llm`); no module over 800 lines. Zero behaviour change by
+construction, checked three ways: 24 suites / 699 tests, sentinel or
+mutation probes on every moved-and-patched symbol, and a full pass^3
+extended arm at statistical parity with the pre-split baseline (87/117
+vs 91/117, p=0.65).
+
+### Also
+
+- `evals/run_chunk.py`: collect a suite arm in short chunks on one server
+  (with `--set` overrides for A/B), for environments that kill long runs.
+- `evals/cases_cliff.py`: the input-size sweep that closed the context
+  question (quality flat to the runtime's ~2.9K input trim).
+- KV Rewind spike: negative with a precise lead (bundle KV update method);
+  see docs/RESEARCH_NEXT_LEVERS.md §5.
+
 ## 2.3.0 — 2026-08-31
 
 ### One mode, 18 commands

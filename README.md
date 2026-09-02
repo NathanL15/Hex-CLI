@@ -5,7 +5,7 @@ Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
 cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
 LangChain.
 
-Current version: **2.3.0**
+Current version: **2.4.0**
 
 ```
 you ▸ the median calc in processor.py is wrong for even-length lists — fix it
@@ -254,7 +254,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**23 offline suites (687 tests)** — no LLM required, all against a mock backend:
+**24 offline suites (699 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage

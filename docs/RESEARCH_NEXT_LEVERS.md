@@ -141,3 +141,13 @@ refactor-only tag.
 Sources: npurun README (registry, Rewind claim); GenieX docs (MTP
 speculative decoding, supported models); GenieX issue #1266; Qualcomm AI
 Hub Qwen3-4B; BFCL v4 / small-model tool-calling surveys (Aug 2026).
+
+## 5. Outcomes (2026-09-02)
+
+| Lever | Result |
+|---|---|
+| 2c grader bug | **Fixed.** livestate-1 0/3 -> 3/3 and agentic-5 2/3 -> 3/3 on a fresh server with identical model behaviour; `answer_matches` is now the shared checker, `message_has_int` accepts number words. |
+| 2a tool-output overflow | **Fixed and measured.** Per-step budget (`context_window_tokens` - context - reserve, floor 1,200 chars), line-aligned first page for large reads with an explicit "continue with offset=N" header, empty-reply retry. Paired live A/B on the new mechanism case bigfile-1: budget OFF 0/3 (generic babble every run), budget ON 2/3. The 16 other tool-using cases: no regression. bigfile-2 (paging past page 1) is a known 4B gap, tagged. |
+| 2b KV Rewind | **Negative, with a precise lead.** The fork was patched (env-gated `NPURUN_REWIND=1`, commit 37e740b on `hexcli-fork`) to send a verified prefix-extension transcript with `SentenceCode::Rewind`. Genie aborts in ~0.6 s with status -6 (`ERROR_QUERY_FAILED`) before any prefill, so the "hidden CoT tokens" story was wrong — this Instruct model has none. QAIRT 2.47's own KV-Rewind tutorial says prefix match "works well with the KV update method SMART_MASK" but "with POINTER_SHIFT ... throws memory register-related errors for weight-shared bins"; this bundle is weight-shared (`htp_backend_ext_config.json`). The KV update method is fixed at bundle export, not a runtime switch. **Next step if pursued: an AI Hub re-export of qwen3-4b-instruct-2507 with SMART_MASK (cloud compile; local AIMET export is out per the 16 GB limit), then flip the env var.** Until then every agent step re-prefills (~5 s). |
+
+Also found: a second paging-header wording ("The file continues: call read_file again with offset=N") did not get the 4B to page on its own — narrow questions about a large file expose an attention gap (it describes the page instead of answering). Recorded as bigfile-2.
