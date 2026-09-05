@@ -40,6 +40,32 @@ token is generated — 47 s for a two-message turn on 2026-09-03 23:43. The
 prewarm only fires above 3,100 cached tokens, so a cache left just under the
 threshold still pays this on the next session's first turn.
 
+### Ask, don't give up — rule 12 now shows the question
+
+Rule 12 already said "call finish with ONLY a clarifying question", and the
+corrected grader showed the model mostly answering "Request was ambiguous.
+Unable to proceed." instead. The rule now carries a worked example of the
+finish call with the question in it, and states that saying the request is
+ambiguous or that it cannot proceed is not a question. Screen at 5 runs:
+ambiguous-1 1/3 → 5/5, ambiguous-3 1/3 → 5/5, ambiguous-2 ("Update the
+file.") 0/3 → 0/5 — the model reads "the file" as a real target and acts.
+Full suite at pass^5 on a fresh server (seed 20260905), gated against both
+baselines: 27-case gate PASS after the recheck rule re-ran three cases that
+missed once at five runs (error-recovery-2, factual-1, self-correct-1 — all
+6/6). Run level 158/205 vs 93/123 (Fisher p = 0.79); ceiling panel gained
+agentic-4, ambiguous-1, livestate-1, regression-knowledge-1 (all 5/5) and
+ambiguous-3 (3/5), lost lint-1 (3/3 → 3/5) and trap-4 (1/3 → 0/5).
+`ask_rule_r5_20260905.json` is the new first baseline for the gate.
+
+One of error-recovery-2's five runs failed with "backend returned no
+choices" — an empty reply, the Rewind artefact, surfacing as a model failure
+instead of an invalid run; watch item. (The server also vanished at 11:30
+during the run's final canary: a concurrent session had restarted it for a
+CPU-vs-NPU benchmark, and the six-run recheck at 11:36 then shared that
+server with the benchmark. The recheck cases were 6/6, so the verdict
+stands, but the recheck's latencies are not clean numbers — one server per
+arm is the rule for a reason.)
+
 ### Side padding, and Ctrl+Plus / Ctrl+Minus
 
 * `side_padding` (default 2): stdout and stderr are wrapped so every row —

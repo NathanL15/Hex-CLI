@@ -542,3 +542,19 @@ the page the model read. Re-run live: ambiguous-1/2/3 1/3, 0/3, 1/3 (was
 proceed." rather than asking; livestate-1 2/3 (one hallucinated Intel with
 no command); bigfile-1 3/3. The gate (cases 3/3 in both the v2.4 and v2.5
 arms) holds 27 of 41 cases; the rest is a tracked ceiling panel.
+
+### 8.13 Rule 12 with a worked example (2026-09-05)
+
+Wording only: the rule now shows the finish call carrying the question and
+names the give-up ("the request is ambiguous / cannot proceed") as not a
+question. Screen ×5: ambiguous-1 1/3 → 5/5, ambiguous-3 1/3 → 5/5,
+ambiguous-2 0/3 → 0/5 ("Update the file." reads as a real target). Full
+suite pass^5, fresh server, seed 20260905, gate against both baselines:
+PASS after the recheck rule (three gate cases at 4/5 re-ran 6/6). Run level
+158/205 vs 93/123, p = 0.79. Ceiling panel: +agentic-4, +livestate-1,
++regression-knowledge-1 (5/5), +ambiguous-3 (3/5); −lint-1 (3/5), −trap-4
+(0/5). `ask_rule_r5_20260905.json` is the new first baseline. Watch: one
+"backend returned no choices" run graded as a model failure rather than
+invalid. The server vanished at 11:30 because a concurrent session restarted
+it for a benchmark; the six-run recheck shared that server, so its latencies
+are not clean.

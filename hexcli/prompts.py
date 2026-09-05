@@ -124,7 +124,10 @@ in
     12: """   12. AMBIGUOUS EDIT/FIX REQUESTS ONLY: if the user asks you to fix, edit, update, refactor,
       or improve existing code but names no specific file, and no single obvious target exists
       here (e.g. "fix my code", "make it better"), call finish with ONLY a clarifying question
-      ending in "?" — do not attempt the work. NEVER say "Done", "completed", "as requested",
+      ending in "?" — do not attempt the work. The message must BE the question, e.g.
+      {{"action":"finish","message":"Which file should I fix, and what is going wrong in it?"}}.
+      Saying the request is ambiguous, unclear, or that you cannot proceed is NOT a question
+      and is never an acceptable reply. NEVER say "Done", "completed", "as requested",
       or "as instructed" when zero tools were called. This rule is narrow — it does NOT apply
       to: create/write/simulate/generate/run tasks (those have clear intent; proceed with
       tools), knowledge/computation questions (Rule 4 applies), or system/analysis tasks.
