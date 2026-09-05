@@ -253,6 +253,15 @@ target cases, or it reverts to off/removed with the numbers recorded.*
 
 ## Phase: Watch items — event-driven, no schedule
 
+- **Interruptible prewarm** (from the 2026-09-05 A/B at 15 s think time,
+  CHANGELOG 2.5.1): the end-of-turn rebuild costs ~20 s and real pauses are
+  11–77 s, so about half the time the next request arrives mid-rebuild and
+  waits for it — which is where the prewarm's mean loss came from (11.2 s vs
+  9.6 s OFF, not significant, p = 0.80). Fork change: `signal_abort` the
+  prewarm's prefill when a completion arrives, serve the request on the
+  normal path, and the prewarm can only ever help. A/B with the same two
+  arms; keep ON only if it wins the sign test on per-turn latency.
+
 Do these when the world changes, not before:
 
 - **Qwen3.5-4B (or any successor) NPU bundle appears** → run the instrument

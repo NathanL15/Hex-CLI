@@ -128,6 +128,24 @@ prove "no regression". Applied, in the council's order:
   first version measured the cache, not the server: a repeat of the
   preflight's text came back in 0.05 s, and the first request after a long
   transcript paid a 9 s divergent-Rewind rebuild.
+* **The prewarm, measured with a person's pause (council step 3).** Two
+  arms of `cases_multiturn.py --runs 3 --think-time 15 --seed 20260905`,
+  fresh server each, prewarm ON (the shipped default) vs OFF
+  (`prewarm_after_turn=false`). Quality: ON 31/48 turns, OFF 33/48,
+  Fisher p = 0.83. First-response latency: mean ON 11.2 s, OFF 9.6 s; OFF
+  faster on 9 of 16 turns, sign test p = 0.80, median difference −0.6 s —
+  no evidence either way, and the mean gap is two turns. Where the
+  rebuild finished inside the pause the next turn was 3–7 s faster (uc2-t6
+  3.2 vs 8.0 s, uc3-t8-model 3.3 vs 10.8 s); where it did not, the turn
+  waited on it (uc1-t4 25.0 vs 12.2 s, uc1-t6 32.9 vs 6.1 s). Server logs:
+  ON 38 prewarms + 10 failed Rewinds + 49 dialog creations; OFF 34 failed
+  Rewinds + 36 dialog creations. The rebuild costs ~20 s (13 s of it Genie
+  dialog creation) and real pauses in the chat log run 11–77 s, median
+  ~20 s, so it finishes about half the time. The default stays ON: the
+  lever that would make it a clean win is a server that ABORTS an
+  in-flight prewarm when a request arrives instead of making the request
+  wait (roadmap watch item); flipping the default would be within noise.
+  Results: `multiturn_prewarm_{on,off}_20260905.json` + server logs.
 * What the corrected graders say (5 cases re-run live 2026-09-05, then
   regraded with the final patterns; `baseline_20260905.json` is
   `window_r3.json` with those five replaced): ambiguous-1/2/3 are 1/3, 0/3,

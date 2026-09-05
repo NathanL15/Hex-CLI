@@ -515,3 +515,30 @@ the launcher sets only `NPURUN_REWIND=2`:
 
 Harness config keys: `context_window_tokens` (3000 default, adopted from
 the server unless pinned) and `prewarm_after_turn` (true).
+
+### 8.11 The prewarm at a realistic think time (2026-09-05)
+
+The v2.5.0 prewarm was verified by a direct probe (2.2 s vs 10–12 s next
+turn when the rebuild has finished) and never by the multiturn suite, whose
+turns fired with zero pause. With `--think-time 15`, two fresh-server arms,
+3 runs, seed 20260905: prewarm ON 31/48 turns, OFF 33/48 (Fisher p = 0.83);
+first-response latency mean ON 11.2 s, OFF 9.6 s, OFF faster on 9 of 16
+turns (sign test p = 0.80, median −0.6 s). Mechanism, from the server logs:
+the rebuild costs ~20 s (dialog creation ~13 s + prefill), so a 15 s pause
+hides it about half the time; when hidden the next turn is 3–7 s faster,
+when not the request waits behind it (uc1-t4 +12.9 s, uc1-t6 +26.7 s). ON:
+38 prewarms, 10 failed Rewinds, 49 dialog creations; OFF: 34 failed
+Rewinds, 36 dialog creations. Chat-log pauses run 11–77 s, median ~20 s.
+Verdict: no measurable benefit at realistic pauses; not a loss either.
+Next lever: an interruptible prewarm (abort the prefill when a request
+arrives) — then ON cannot lose. Files: `evals/results/multiturn_prewarm_{on,off}_20260905.json`.
+
+### 8.12 What the corrected graders changed (2026-09-05)
+
+Council review fixed the clarification grader (question shapes instead of a
+bare `?`), word-bounded the live-state patterns, and grounded bigfile-1 in
+the page the model read. Re-run live: ambiguous-1/2/3 1/3, 0/3, 1/3 (was
+2/3, 0/3, 2/3) — the model mostly replies "Request was ambiguous. Unable to
+proceed." rather than asking; livestate-1 2/3 (one hallucinated Intel with
+no command); bigfile-1 3/3. The gate (cases 3/3 in both the v2.4 and v2.5
+arms) holds 27 of 41 cases; the rest is a tracked ceiling panel.

@@ -89,25 +89,29 @@ def latency_canary(config: dict[str, Any]) -> float | None:
     with the earlier ones (or with another arm). Fixed case order used to
     hide exactly this.
 
-    Two details matter on the Rewind runtime. The prompt carries a nonce, or
-    a repeat of the preflight's identical request is answered from the
-    prefix cache in milliseconds. And it is sent twice with the faster kept:
-    the first request after a long transcript pays a divergent-Rewind rebuild
-    (measured 9 s, against 0.05 s cached, on 2026-09-05), the second extends
-    the first's prefix and times prefill + decode alone."""
+    Three details matter on the Rewind runtime (all measured 2026-09-05).
+    Each request carries its own nonce: an exact repeat of a cached
+    transcript came back in 0.05 s without generating. Two requests are sent
+    and the SECOND is kept: the first after a long transcript pays a
+    divergent-Rewind rebuild (15 s at the end of a multiturn arm), the second
+    diverges from the first's short transcript and times prefill + decode
+    alone. And the prompt forces a fixed amount of decoding (a count to 20,
+    capped at 32 tokens) so the number is decode speed, not "OK"."""
     if config.get("backend") == "mock":
         return None
-    prompt = f"Reply with OK. (canary {random.randrange(1_000_000)})"
-    best: float | None = None
+    canary_config = {**config, "max_output_tokens": 32}
+    last: float | None = None
     for _ in range(2):
+        prompt = f"Count from 1 to 20 separated by spaces. (canary {random.randrange(1_000_000)})"
         t0 = time.perf_counter()
         try:
-            sa.openai_chat(config, [{"role": "user", "content": prompt}], "max_output_tokens")
+            reply = sa.openai_chat(canary_config, [{"role": "user", "content": prompt}], "max_output_tokens")
         except Exception:
-            return best
-        dt = time.perf_counter() - t0
-        best = dt if best is None else min(best, dt)
-    return round(best, 3) if best is not None else None
+            return last
+        if not str(reply).strip():
+            continue  # an empty reply is a Rewind artefact, not a timing
+        last = time.perf_counter() - t0
+    return round(last, 3) if last is not None else None
 
 
 def count_llm_calls(results: dict[str, Any]) -> int:
