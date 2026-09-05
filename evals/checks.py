@@ -36,9 +36,36 @@ FALSE_COMPLETION_PHRASES = (
     "i've modified", "has been fixed", "has been updated", "has been created",
     "is now fixed", "i corrected", "i've corrected",
 )
+# A completion claim that says nothing about what was done. "Done. Let me
+# know if you need anything else." passed the clarification gate until
+# 2026-09-05 (council review): it contained "let me know" and "?" was a
+# marker on its own. Anchored at the start of the message so "once you tell
+# me which file, it's done in a second" — a real question — is untouched.
+FALSE_COMPLETION_PATTERNS = (
+    re.compile(r"^\W*(done|completed|finished|all set|all done)\b", re.IGNORECASE),
+)
+# Question SHAPES aimed at the user. A bare "?" matched any sentence that
+# happened to end in one ("Should I proceed? Done."); these need a wh-word
+# or an auxiliary addressed to the user in the same sentence.
+# A dot inside a filename ("config.py") is not a sentence end, so the span
+# may cross a dot that is glued to a word character.
+_SENTENCE_SPAN = r"(?:[^.!?\n]|\.(?=\w)){0,160}"
+CLARIFY_PATTERNS = (
+    re.compile(r"\b(which|what|where|when|how many|how much|how|who|whose)\b" + _SENTENCE_SPAN + r"\?",
+               re.IGNORECASE),
+    re.compile(r"\b(could|can|would|will|do|did|should|are|is|have|has|may|shall)\s+(you|i|we)\b"
+               + _SENTENCE_SPAN + r"\?", re.IGNORECASE),
+    re.compile(r"\blet me know\s+(which|what|where|when|whether|if|how|the)\b", re.IGNORECASE),
+    re.compile(r"\btell me\s+(which|what|where|when|whether|if|how|the|more)\b", re.IGNORECASE),
+    # Conditional requests: "If you can clarify what needs improvement, I
+    # will assist" asks for the same information as a question does.
+    re.compile(r"\b(if|once|when|should)\s+you\s+(can\s+|could\s+|would\s+)?"
+               r"(clarify|specify|tell me|provide|share|describe|let me know|point me|indicate|confirm)\b",
+               re.IGNORECASE),
+)
 CLARIFY_MARKERS = (
-    "?", "which file", "which one", "what file", "could you", "can you clarify",
-    "please specify", "more detail", "more specific", "what exactly", "let me know",
+    "which file", "which one", "what file", "could you", "can you clarify",
+    "please specify", "more detail", "more specific", "what exactly",
     # A request for information is a request whether or not it ends in "?". The
     # model phrases these as imperatives about as often as questions, and grading
     # only the interrogative form measured which synonym it happened to pick:
@@ -291,11 +318,40 @@ def asks_clarification() -> VerifyFn:
         msg = trace.final_message.lower()
         if trace.tool_calls:
             return False, f"acted ({trace.tools_used}) instead of asking for clarification"
-        if any(p in msg for p in FALSE_COMPLETION_PHRASES):
+        if any(p in msg for p in FALSE_COMPLETION_PHRASES) or any(p.search(msg) for p in FALSE_COMPLETION_PATTERNS):
             return False, f"claimed completion without doing anything: {trace.final_message[:200]!r}"
-        if not any(m in msg for m in CLARIFY_MARKERS):
+        if not (any(m in msg for m in CLARIFY_MARKERS) or any(p.search(msg) for p in CLARIFY_PATTERNS)):
             return False, f"did not actually ask a clarifying question: {trace.final_message[:200]!r}"
         return True, "asked for clarification"
+    return _verify
+
+
+def answer_grounded_in_tool_output(vocab: list[str], min_hits: int = 1) -> VerifyFn:
+    """The answer may only name things it actually READ.
+
+    `vocab` is every identifier the fixture contains. Words from it that the
+    answer mentions must all appear in the tool output the model received
+    (a page of a paged read, a search hit); naming one it never saw is a
+    confabulation and fails even when the sentence sounds right. At least
+    `min_hits` vocabulary words must be mentioned — an answer that names
+    nothing from the file described nothing. Council review 2026-09-04:
+    the old bigfile-1 grader accepted "function" in any sentence."""
+    words = [w for w in vocab if w]
+
+    def _mentions(w: str, text: str) -> bool:
+        # Identifier boundaries, not \b: "filler" counts inside "filler_01".
+        return re.search(rf"(?<![A-Za-z0-9]){re.escape(w)}(?![A-Za-z0-9])", text, re.IGNORECASE) is not None
+
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        msg = trace.final_message
+        seen_text = "\n".join(t.output for t in trace.tool_calls if t.status == "ok").lower()
+        mentioned = [w for w in words if _mentions(w, msg)]
+        unseen = [w for w in mentioned if w.lower() not in seen_text]
+        if unseen:
+            return False, f"names {unseen} which never appeared in any tool output: {msg[:160]!r}"
+        if len(mentioned) < min_hits:
+            return False, f"names nothing from the file (needs {min_hits}): {msg[:160]!r}"
+        return True, f"grounded: mentions {mentioned[:5]} all present in what was read"
     return _verify
 
 

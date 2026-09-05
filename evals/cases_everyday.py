@@ -184,13 +184,15 @@ EVERYDAY_CASES = [
     Case("live-cpu", "livestate", "what cpu do i have",
          verify=ck.all_of(
              ran_a_command(),
-             answer_matches([r"snapdragon|oryon|qualcomm|x1e|arm"],
-                            [r"intel|ryzen|core i[3579]"]),
+             # Word-bounded (council review 2026-09-04): bare "arm" matched
+             # "warm" and "alarm".
+             answer_matches([r"\b(snapdragon|oryon|qualcomm|x1e|arm)\b"],
+                            [r"\b(intel|ryzen|core i[3579])\b"]),
          )),
     Case("live-gpu", "livestate", "what gpu does this machine have",
          verify=ck.all_of(
              ran_a_command(),
-             answer_matches([r"adreno|qualcomm"], [r"nvidia|geforce|radeon"]),
+             answer_matches([r"\b(adreno|qualcomm)\b"], [r"\b(nvidia|geforce|radeon)\b"]),
          )),
     Case("live-ram", "livestate", "how much ram do i have",
          verify=ck.all_of(ran_a_command(), answer_number_close(RAM_GB, rel_tol=0.08))),

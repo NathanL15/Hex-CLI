@@ -82,11 +82,68 @@ threshold still pays this on the next session's first turn.
   submits until Enter. Verified by injecting `def f():\r\tpass\r` into the
   console input buffer: one `<paste>` token, `def f():\n    pass`.
 
+### Eval instrument: significance in the repo, shuffled order, a binary gate
+
+The eval council (2026-09-04, `/council` on "is the eval architecture
+correct?") found the harness structurally sound — it measures the shipped
+Rewind runtime — but its graders too lenient and its statistics too weak to
+prove "no regression". Applied, in the council's order:
+
+* `evals/stats.py`: Fisher exact (run level) and McNemar exact (paired
+  pass^k) moved out of a scratchpad into the repo; `compare.py` prints them,
+  with the reminder that p > 0.05 at 3 runs per case is absence of evidence.
+  Re-run on the prompt-split arms it reproduces the 2026-08-31 verdict
+  (91/117 vs 87/117, Fisher p = 0.646, McNemar p = 0.688).
+* Every results payload now records what it was measured on: git SHA and
+  dirty flag, npurun version, the server's advertised budget and window,
+  QAIRT root, Rewind mode, the case-order seed, the model-call count, and a
+  latency canary at the start and end of the run (`[SERVER-DRIFT]` finding
+  when the end is 2× the start). Case order is shuffled under the seed —
+  fixed order handed the last cases a tired server in every A/B.
+* Graders: a bare `?` and "let me know" no longer count as asking ("Done.
+  Let me know if you need anything else." passed); questions must be shaped
+  at the user (wh-word or auxiliary + you/I, filename dots allowed); a message
+  opening with "Done"/"Completed"/"All set" is a completion claim; the
+  live-state CPU/GPU patterns are word-bounded (bare `arm` matched "warm");
+  bigfile-1 must name something from the page it received and nothing it
+  never read (`answer_grounded_in_tool_output`).
+* `cases_multiturn.py --think-time SECONDS`: a pause between scenario turns
+  like a person reading the answer. Zero, the old and only behaviour, fires
+  the next turn instantly — the one situation the end-of-turn prewarm cannot
+  help with, so every earlier multiturn number measured the prewarm as a
+  cost.
+* `evals/gate.py`: the ship gate is BINARY on the cases at 3/3 in every
+  baseline given (27 of 41 across the v2.4 and v2.5 arms); one miss at 3
+  runs is a recheck (6 runs, one miss allowed), the flaky rest is a ceiling
+  panel that is tracked, never gated. `--scoreboard` writes
+  `evals/results/LATEST.md` so the current number is findable. Applied
+  retroactively with a single baseline, the v2.5.0 arm would have failed on
+  three cases that were 3/3 in v2.4.0 — which is how weak "3/3 once" is as
+  evidence of reliability, and why the gate wants two baselines.
+* `evals/regrade.py` re-applies the current graders to saved traces, so a
+  grader fix costs no NPU time — except where a grader reads tool output:
+  saved traces cap it at 2,000 chars, and it refuses those cases (bigfile-1
+  regraded 3/3 → 0/3 on a truncated page before that check existed).
+* The canary carries a nonce and is sent twice with the faster kept. The
+  first version measured the cache, not the server: a repeat of the
+  preflight's text came back in 0.05 s, and the first request after a long
+  transcript paid a 9 s divergent-Rewind rebuild.
+* What the corrected graders say (5 cases re-run live 2026-09-05, then
+  regraded with the final patterns; `baseline_20260905.json` is
+  `window_r3.json` with those five replaced): ambiguous-1/2/3 are 1/3, 0/3,
+  1/3 — the model answers "Request was ambiguous. Unable to proceed."
+  rather than asking, which the bare-`?` grader had scored as asking (2/3,
+  0/3, 2/3); livestate-1 2/3 (one run named an Intel i7 without running a
+  command); bigfile-1 3/3 under the grounded grader. "Ask, don't give up"
+  is now a roadmap item.
+
 Tests: 3 new in `evals/test_core.py` (busy-wait retry, deadline give-up,
 QuickEdit cleared) + 3 (margin stream, word-aware wrapping incl. streamed
 input, transcript redraw), 7 new in `evals/test_lineedit.py` (margin
 wrap, auto-wrap unchanged at margin 0, ANSI-aware wrap, zoom tokens,
-paste burst, short-burst replay, zoom anchor reset). 25 suites / 728
+paste burst, short-burst replay, zoom anchor reset), 6 new in
+`evals/test_runner.py` (clarification shapes, grounded answers, word-bounded
+live-state, exact tests, gate + recheck rule, think time). 25 suites / 734
 tests.
 
 ## 2.5.0 — 2026-09-02

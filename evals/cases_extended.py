@@ -91,6 +91,11 @@ def _make_big_module() -> str:
 
 
 _BIG_MODULE = _make_big_module()
+# Everything an answer could legitimately name: the function identifiers,
+# plus the words the header comments use. "filler" alone (no number) is
+# in every filler function's name, so it counts as read once any page is.
+_BIG_MODULE_VOCAB = ["alpha", "omega", "filler", "pipeline", "synthetic"] + [
+    f"filler_{i:02d}" for i in range(1, 60)]
 
 
 EXTENSION_CASES: list[Case] = [
@@ -153,9 +158,11 @@ EXTENSION_CASES: list[Case] = [
              ck.tools_called("run_command"),
              # answer_matches, NOT regex_answer_matches: the latter grades
              # answers that ARE regexes and failed every correct CPU answer.
+             # Word-bounded: bare "arm" matched "warm", "alarm", "farm"
+             # (council review 2026-09-04).
              ck.answer_matches(
-                 [r"snapdragon|oryon|qualcomm|arm|x1e"],
-                 [r"intel|ryzen|core i[3579]"],
+                 [r"\b(snapdragon|oryon|qualcomm|arm|x1e)\b"],
+                 [r"\b(intel|ryzen|core i[3579])\b"],
              ),
          ),
          expected_tools=("run_command",)),
@@ -312,12 +319,17 @@ EXTENSION_CASES: list[Case] = [
     # description. (Narrow questions — first function, line count — exposed
     # a separate 4B attention gap: handed a page of code it describes the
     # code rather than answering the question. Not the harness bug.)
+    # Council review 2026-09-04: "function" in any sentence passed; now the
+    # answer must name something that is IN the page it received (alpha,
+    # filler_NN, the pipeline comment) and may not name what it never read
+    # (omega lives past the first page — an answer that cites it without
+    # paging is a confabulation, however plausible).
     Case("bigfile-1", "agentic",
          "Read big_module.py and describe in one sentence what it contains.",
          setup={"big_module.py": _BIG_MODULE},
          verify=ck.all_of(
              ck.used_capability("read"),
-             ck.message_contains_any("filler", "function", "def ", "pipeline", "alpha"),
+             ck.answer_grounded_in_tool_output(_BIG_MODULE_VOCAB),
              ck.message_shorter_than(1500),
          ),
          max_steps=6, expected_tools=("read_file",)),

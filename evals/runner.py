@@ -27,6 +27,8 @@ import argparse
 import json
 import math
 import os
+import random
+import subprocess
 import sys
 import tempfile
 import time
@@ -51,6 +53,72 @@ CONFIG_PATH = APP_DIR / "shellai_npurun.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 _TRACE_TEXT_CAP = 2000  # chars kept per raw response / tool output in saved traces
+
+
+# ---------------------------------------------------------------------------
+# What the numbers were measured ON — recorded in every results payload
+# ---------------------------------------------------------------------------
+
+def run_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    """Build and server identity: git SHA (+ dirty flag), npurun version, the
+    budget and window the server advertises, QAIRT root, Rewind mode. Two
+    results files are only comparable when these agree; before this the
+    baseline's runtime had to be inferred from file dates."""
+    from hexcli import chatlog
+    meta: dict[str, Any] = {"python": sys.version.split()[0]}
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=APP_DIR,
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=APP_DIR,
+                               capture_output=True, text=True, timeout=5).stdout.strip()
+        meta["git_sha"] = sha
+        meta["git_dirty"] = bool(dirty)
+    except Exception:
+        pass
+    meta["npurun"] = chatlog._npurun_version()
+    meta["server"] = chatlog._server_info(config)
+    meta["qairt"] = os.environ.get("QNN_SDK_ROOT", "")
+    meta["rewind_mode"] = os.environ.get("NPURUN_REWIND", "")
+    return meta
+
+
+def latency_canary(config: dict[str, Any]) -> float | None:
+    """Seconds for a fixed tiny completion, measuring the SERVER, not the
+    cache. Taken at the start and the end of a run: a server that has slowed
+    2× between them has degraded, and the later cases are not comparable
+    with the earlier ones (or with another arm). Fixed case order used to
+    hide exactly this.
+
+    Two details matter on the Rewind runtime. The prompt carries a nonce, or
+    a repeat of the preflight's identical request is answered from the
+    prefix cache in milliseconds. And it is sent twice with the faster kept:
+    the first request after a long transcript pays a divergent-Rewind rebuild
+    (measured 9 s, against 0.05 s cached, on 2026-09-05), the second extends
+    the first's prefix and times prefill + decode alone."""
+    if config.get("backend") == "mock":
+        return None
+    prompt = f"Reply with OK. (canary {random.randrange(1_000_000)})"
+    best: float | None = None
+    for _ in range(2):
+        t0 = time.perf_counter()
+        try:
+            sa.openai_chat(config, [{"role": "user", "content": prompt}], "max_output_tokens")
+        except Exception:
+            return best
+        dt = time.perf_counter() - t0
+        best = dt if best is None else min(best, dt)
+    return round(best, 3) if best is not None else None
+
+
+def count_llm_calls(results: dict[str, Any]) -> int:
+    n = 0
+    for r in results.values():
+        for t in r.get("traces", []):
+            n += len(t.get("llm_calls", []))
+        for turn in (r.get("turns") or {}).values():
+            for t in turn.get("traces", []):
+                n += len(t.get("llm_calls", []))
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +467,16 @@ def is_backend_failure(exc: BaseException) -> str | None:
     return None
 
 
-def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, Any]:
+def run_scenario_once(config: dict[str, Any], scenario: Scenario,
+                      think_time_s: float = 0.0) -> dict[str, Any]:
     """Run all turns of a scenario in one sandbox with accumulated history.
-    Returns {turn_id: RunOutcome-like dict, ...} plus scenario-level info."""
+    Returns {turn_id: RunOutcome-like dict, ...} plus scenario-level info.
+
+    `think_time_s` is the pause between turns — the seconds a person spends
+    reading the answer and typing the next question. Zero fires the next
+    turn the instant the previous one returns, which is the one situation
+    the end-of-turn prewarm (hexcli.agent._prewarm_backend) cannot help
+    with, so a zero-think-time run measures the prewarm as a cost."""
     with tempfile.TemporaryDirectory(prefix="hexeval_mt_", ignore_cleanup_errors=True) as tmp:
         sandbox = Path(tmp).resolve()
         history: list[dict[str, str]] = []
@@ -459,6 +534,8 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario) -> dict[str, A
                     pass
                 history = _session["messages"]
                 traces.append(trace)
+                if think_time_s > 0 and spec is not sc.turns[-1]:
+                    time.sleep(think_time_s)
             return recs
 
         with _EvalEnv(sandbox):
@@ -554,14 +631,14 @@ def run_cases(config: dict[str, Any], cases: list[Case], runs: int,
 
 
 def run_scenarios(config: dict[str, Any], scenarios: list[Scenario], runs: int,
-                  progress: bool = True) -> dict[str, Any]:
+                  progress: bool = True, think_time_s: float = 0.0) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for sc in scenarios:
         all_runs: list[dict[str, Any]] = []
         for i in range(runs):
             if progress:
                 print(f"  scenario {sc.id} run {i + 1}/{runs}...", file=sys.stderr, flush=True)
-            all_runs.append(run_scenario_once(config, sc))
+            all_runs.append(run_scenario_once(config, sc, think_time_s=think_time_s))
         # Aggregate per turn across runs.
         per_turn: dict[str, Any] = {}
         for spec in sc.turns:
@@ -677,11 +754,19 @@ def run_suite_cli(
                              "recorded in the saved results so the two arms of an "
                              "A/B stay identifiable after the fact.")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Shuffle seed for case order (default: the clock, recorded). "
+                             "Fixed order handed the last cases a tired server every time.")
+    parser.add_argument("--think-time", type=float, default=0.0, metavar="SECONDS",
+                        help="Pause between scenario turns, like a person reading the answer "
+                             "(default 0: the next turn fires instantly).")
     args = parser.parse_args()
 
     config = load_live_config()
     if args.protocol:
         config["protocol"] = args.protocol
+    seed = args.seed if args.seed is not None else int(time.time()) % 1_000_000
+    order = random.Random(seed)
 
     overrides: dict[str, Any] = {}
     for item in args.set:
@@ -710,6 +795,7 @@ def run_suite_cli(
               "Restart the inference server before running a suite — a degraded "
               "server manufactures false regressions.", file=sys.stderr)
         return 2
+    canary_start = latency_canary(config)
     payload: dict[str, Any] = {
         "suite": suite_name,
         "timestamp": time.time(),
@@ -718,19 +804,28 @@ def run_suite_cli(
         "protocol": config.get("protocol", "v1"),
         "runs_per_case": args.runs,
         "overrides": overrides,
+        "metadata": run_metadata(config),
+        "seed": seed,
+        "think_time_s": args.think_time,
+        "canary_s": {"start": canary_start},
     }
     findings: list[str] = []
+    print(f"case order seed {seed}; canary {canary_start}s")
 
     if cases:
         selected = [c for c in cases if not args.case or c.id == args.case]
+        order.shuffle(selected)
+        payload["case_order"] = [c.id for c in selected]
         if selected:
             case_results = run_cases(config, selected, args.runs)
             findings += print_case_report(case_results, args.runs)
             payload["cases"] = case_results
     if scenarios:
         selected_sc = [s for s in scenarios if not args.case or s.id == args.case]
+        order.shuffle(selected_sc)
+        payload["scenario_order"] = [s.id for s in selected_sc]
         if selected_sc:
-            sc_results = run_scenarios(config, selected_sc, args.runs)
+            sc_results = run_scenarios(config, selected_sc, args.runs, think_time_s=args.think_time)
             findings += print_scenario_report(sc_results)
             if scaling_scenario:
                 latency_scaling(sc_results, scaling_scenario)
@@ -739,6 +834,13 @@ def run_suite_cli(
         print(f"No case with id '{args.case}'.")
         return 1
 
+    canary_end = latency_canary(config)
+    payload["canary_s"]["end"] = canary_end
+    payload["llm_calls"] = count_llm_calls(payload.get("cases", {})) + count_llm_calls(payload.get("scenarios", {}))
+    if canary_start and canary_end and canary_end > 2.0 * canary_start:
+        findings.append(f"[SERVER-DRIFT] canary {canary_start}s -> {canary_end}s: the server slowed "
+                        f"{canary_end / canary_start:.1f}x during the run; results are not comparable")
+        print(f"\nWARNING {findings[-1]}")
     payload["findings"] = findings
     if not args.no_save:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)

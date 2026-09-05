@@ -337,6 +337,127 @@ def test_clarification_grader_requires_a_question() -> None:
     assert ok
 
 
+def test_clarification_grader_rejects_empty_completions_and_bare_question_marks() -> None:
+    """Council review 2026-09-04: "Done. Let me know if you need anything
+    else." and "Should I proceed? Done." both passed. A question must be
+    aimed at the user (wh-word or auxiliary + you/I in the sentence), and a
+    message that opens with a completion claim is not a question."""
+    g = ck.asks_clarification()
+    for msg in ("Done. Let me know if you need anything else.",
+                "Done.",
+                "All set! Anything else?",
+                "Completed the task. Should I proceed?",
+                "No action could be taken.",
+                "Sure! Here is the improved version?"):
+        t = Trace()
+        t.final_message = msg
+        ok, why = g(Path("."), t)
+        assert not ok, f"{msg!r} must not count as asking: {why}"
+    for msg in ("Which file should I update?",
+                "Could you tell me what 'it' refers to?",
+                "Please describe the code you want fixed.",
+                "Let me know which file you mean.",
+                "What exactly should be improved — performance or readability?",
+                "Do you want me to change config.py or utils.py?",
+                "I am unable to proceed. If you can clarify what needs improvement (e.g., files), I will assist."):
+        t = Trace()
+        t.final_message = msg
+        ok, why = g(Path("."), t)
+        assert ok, f"{msg!r} is a real question: {why}"
+
+
+def test_grounded_answer_grader() -> None:
+    """bigfile-1 must name what it read and nothing it did not."""
+    from evals.runner import ToolCall
+    g = ck.answer_grounded_in_tool_output(["alpha", "omega", "filler", "filler_01", "pipeline"])
+    page = "def alpha():\n    return 1\n\ndef filler_01(x):\n    # step 1 of the pipeline\n"
+    t = Trace()
+    t.tool_calls = [ToolCall(0, "read_file", {"path": "big_module.py"}, page, 0.01, "ok")]
+    t.final_message = "It defines alpha and a series of filler functions forming a pipeline."
+    ok, why = g(Path("."), t)
+    assert ok, why
+    t.final_message = "It defines alpha, filler functions and finally omega."
+    ok, why = g(Path("."), t)
+    assert not ok and "omega" in why, "omega was never read: confabulation must fail"
+    t.final_message = "It is a Python module with several functions."
+    ok, why = g(Path("."), t)
+    assert not ok and "nothing" in why
+
+
+def test_live_state_patterns_are_word_bounded() -> None:
+    g = ck.answer_matches([r"\b(snapdragon|oryon|qualcomm|arm|x1e)\b"], [r"\b(intel|ryzen|core i[3579])\b"])
+    t = Trace()
+    t.final_message = "The room is warm and the alarm is off."
+    assert not g(Path("."), t)[0], "'warm'/'alarm' must not match 'arm'"
+    t.final_message = "This is a Snapdragon X Elite (ARM) machine."
+    assert g(Path("."), t)[0]
+
+
+def test_stats_exact_tests_known_values() -> None:
+    from evals.stats import compare_arms, fisher_exact_two_sided, mcnemar_exact
+    assert abs(fisher_exact_two_sided(3, 4, 1, 4) - 0.4857) < 1e-3, "2x2 [[3,1],[1,3]]"
+    assert fisher_exact_two_sided(4, 4, 4, 4) == 1.0
+    assert abs(fisher_exact_two_sided(10, 10, 0, 10) - 1.083e-5) < 1e-6, "10/10 vs 0/10"
+    assert mcnemar_exact(0, 0) == 1.0
+    assert abs(mcnemar_exact(5, 0) - 0.0625) < 1e-9
+    assert abs(mcnemar_exact(3, 3) - 1.0) < 1e-9
+    a = {"x": {"runs": 3, "passes": 3, "pass_all_k": True}, "y": {"runs": 3, "passes": 1, "pass_all_k": False},
+         "z": {"runs": 0, "passes": 0, "pass_all_k": None}}
+    b = {"x": {"runs": 3, "passes": 2, "pass_all_k": False}, "y": {"runs": 3, "passes": 3, "pass_all_k": True},
+         "z": {"runs": 3, "passes": 3, "pass_all_k": True}}
+    c = compare_arms(a, b)
+    assert c["valid_cases"] == 2 and c["run_level"]["a"] == [4, 6] and c["run_level"]["b"] == [5, 6]
+    assert c["pass_all_k"]["a_only"] == ["x"] and c["pass_all_k"]["b_only"] == ["y"]
+    assert set(c["per_case"]) == {"x", "y"}
+
+
+def test_gate_is_binary_on_reliable_cases_and_tracks_the_rest() -> None:
+    from evals.gate import case_status, evaluate, gate_sets
+    base = {"cases": {
+        "solid": {"runs": 3, "passes": 3, "pass_all_k": True},
+        "lucky": {"runs": 3, "passes": 3, "pass_all_k": True},
+        "flaky": {"runs": 3, "passes": 1, "pass_all_k": False},
+        "dead": {"runs": 3, "passes": 0, "pass_all_k": False},
+    }}
+    base2 = {"cases": {"solid": {"runs": 3, "passes": 3, "pass_all_k": True},
+                       "lucky": {"runs": 3, "passes": 2, "pass_all_k": False}}}
+    assert gate_sets(base["cases"]) == (["lucky", "solid"], ["dead", "flaky"])
+    assert gate_sets(base["cases"], base2["cases"]) == (["solid"], ["dead", "flaky", "lucky"]),         "two baselines: only cases 3/3 in BOTH are gate cases"
+    good = {"cases": {"solid": {"runs": 3, "passes": 3, "pass_all_k": True},
+                      "flaky": {"runs": 3, "passes": 0, "pass_all_k": False},
+                      "dead": {"runs": 3, "passes": 2, "pass_all_k": False}}}
+    rep = evaluate([base, base2], good)
+    assert rep["verdict"] == "PASS", "a flaky case getting worse is tracked, not gated"
+    assert rep["ceiling_lost"] == ["flaky"] and rep["ceiling_gained"] == ["dead"]
+    once = {"cases": {"solid": {"runs": 3, "passes": 2, "pass_all_k": False}},
+            "canary_s": {"start": 1.0, "end": 3.0}}
+    rep = evaluate([base, base2], once)
+    assert rep["verdict"] == "RECHECK" and rep["recheck"] == ["solid"], "one miss at 3 runs is a recheck"
+    assert rep["server_drift"] and "3.0" in rep["server_drift"]
+    assert case_status({"runs": 6, "passes": 5}) == "ok", "one miss in six is tolerated"
+    assert case_status({"runs": 6, "passes": 4}) == "broken"
+    rep = evaluate([base], {"cases": {"solid": {"runs": 6, "passes": 4, "pass_all_k": False}}})
+    assert rep["verdict"] == "FAIL" and rep["broken"] == ["solid"]
+
+
+def test_scenario_think_time_pauses_between_turns_only() -> None:
+    """--think-time sleeps between turns, never after the last one."""
+    import time as _time
+    from unittest import mock
+    sa.set_mock_responses([
+        '{"action":"finish","message":"one"}',
+        '{"action":"finish","message":"two"}',
+    ])
+    cfg = {**sa.DEFAULT_CONFIG, "backend": "mock", "memory_enabled": False, "telemetry_enabled": False}
+    sc = Scenario("tt", turns=[
+        TurnSpec("t1", "say one", lambda s, t, p: (True, "")),
+        TurnSpec("t2", "say two", lambda s, t, p: (True, "")),
+    ])
+    with mock.patch.object(_time, "sleep") as slept:
+        run_scenario_once(cfg, sc, think_time_s=7.5)
+    assert slept.call_args_list == [mock.call(7.5)], slept.call_args_list
+
+
 # ---------------------------------------------------------------------------
 # Scenario driver
 # ---------------------------------------------------------------------------
@@ -416,6 +537,12 @@ def test_suite_definitions_valid() -> None:
 
 
 TESTS = [
+    test_clarification_grader_rejects_empty_completions_and_bare_question_marks,
+    test_grounded_answer_grader,
+    test_live_state_patterns_are_word_bounded,
+    test_stats_exact_tests_known_values,
+    test_gate_is_binary_on_reliable_cases_and_tracks_the_rest,
+    test_scenario_think_time_pauses_between_turns_only,
     test_suite_definitions_valid,
     test_mock_e2e_records_tools_and_grades_state,
     test_state_verdict_fails_when_file_missing,

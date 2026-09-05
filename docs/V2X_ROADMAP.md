@@ -239,6 +239,14 @@ behind a config flag, A/B on the instrument, keep only winners.
 - **AST-based command classifier + deny>ask>allow policy files** — the last
   unimplemented layer of Safety v2; the sensitive tier covers today's known
   payloads, the AST layer covers the unknown ones.
+- **Ask, don't give up** (surfaced 2026-09-05 by the corrected clarification
+  grader): on "Fix my code." / "Update the file." / "Make it better." the
+  model mostly replies "Request was ambiguous. Unable to proceed." — a
+  refusal, not a question. Honest scores under the fixed grader: ambiguous-1
+  1/3, -2 0/3, -3 1/3 (the old bare-`?` marker had shown 2/3, 0/3, 2/3). A
+  one-line system-prompt rule ("if the request names no file or goal, ask
+  one question") is the cheapest lever; it is a prompt change, so pass^5 on
+  the full suite before it stays.
 
 *Exit gate per feature: pass^5 non-regression on the full suite, win on its
 target cases, or it reverts to off/removed with the numbers recorded.*

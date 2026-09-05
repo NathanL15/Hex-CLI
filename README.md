@@ -279,7 +279,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**25 offline suites (728 tests)** — no LLM required, all against a mock backend:
+**25 offline suites (734 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage
@@ -295,14 +295,29 @@ run with no terminal at all.
 
 ```powershell
 python evals/cases_smoke.py                    # fast gate
-python evals/cases_extended.py --runs 5        # pass^5 over 36 cases
-python evals/cases_multiturn.py --runs 3       # deep-context scenarios
-python evals/compare.py <before.json> <after.json>
+python evals/cases_extended.py --runs 3        # 41 cases, shuffled under a recorded seed
+python evals/cases_multiturn.py --runs 3 --think-time 15   # scenarios, with a person's pause between turns
+python evals/compare.py <before.json> <after.json>         # per-case table + Fisher / McNemar
+python evals/gate.py --baseline <base.json> [--baseline <base2.json>] <candidate.json>
+python evals/gate.py --scoreboard <results.json>           # writes evals/results/LATEST.md
 ```
 
 Cases are graded on **filesystem state and answer content**, not string
 matching, and run N times to report pass@k and pass^k — a 4B model is
-stochastic, so single runs mean very little.
+stochastic, so single runs mean very little. Every results file records what
+it was measured on (git SHA, npurun version, the server's advertised budget,
+the case-order seed) and a **latency canary** at the start and end of the
+run; a server that slowed 2× in between is flagged and the file is not
+comparable with anything.
+
+**The gate is binary.** With 3 runs per case a leaderboard cannot tell a
+regression from list position, so `gate.py` takes the cases that were 3/3 in
+every baseline given (27 of 41 across the v2.4 and v2.5 arms) and a
+candidate must keep each one. One miss at 3 runs is a **recheck** (re-run
+that case with 6 runs; it is broken when it misses twice), the rest of the
+cases are a **ceiling panel** that is tracked, never gated. A p-value above
+0.05 at this n is absence of evidence, not parity — `evals/stats.py` prints
+that reminder with every comparison.
 
 > **Restart the NPU server before each suite.** After 1–2 hours of continuous
 > traffic the Genie dialog degrades and returns errors for everything, which
