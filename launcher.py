@@ -137,6 +137,17 @@ def _dress_console_window() -> None:
         mode = ctypes.c_uint32()
         if k32.GetConsoleMode(handle, ctypes.byref(mode)):
             k32.SetConsoleMode(handle, mode.value | 0x0004)  # VT processing
+    # QuickEdit off. With it on (the conhost default), a click inside the
+    # window starts a selection and every console write blocks until a key
+    # is pressed — the answer streams into a frozen screen and Ctrl+C, which
+    # is "copy" while text is selected, is what releases it. Measured
+    # 2026-09-04: a click-drag froze the next write for as long as the
+    # selection lived, and the process never received an interrupt.
+    stdin = k32.GetStdHandle(-10)
+    mode = ctypes.c_uint32()
+    if k32.GetConsoleMode(stdin, ctypes.byref(mode)):
+        ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+        k32.SetConsoleMode(stdin, (mode.value & ~ENABLE_QUICK_EDIT) | ENABLE_EXTENDED_FLAGS)
     hwnd = k32.GetConsoleWindow()
     ico = APP_DIR / "assets" / "hexcli.ico"
     if not (hwnd and ico.exists()):

@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -1105,7 +1106,183 @@ def test_agent_and_sessions_agree_on_the_project_root() -> None:
     assert sa.HISTORY_PATH == session_store.HISTORY_PATH
 
 
+class _FakeStream:
+    """Minimal stand-in for the urlopen response the streaming path iterates."""
+
+    status = 200
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = lines
+
+    def __enter__(self) -> _FakeStream:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+    def __iter__(self) -> Any:
+        return iter(self._lines)
+
+
+def _http_429(retry_after: str = "0.2") -> Any:
+    import email.message
+    import io
+    import urllib.error
+    headers = email.message.Message()
+    headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError("http://x/v1/chat/completions", 429, "Too Many Requests",
+                                  headers, io.BytesIO(b""))
+
+
+def test_streaming_path_waits_out_a_busy_server() -> None:
+    """The end-of-turn prewarm holds the inference slot for ~20 s and the
+    server answers 429 meanwhile. The streaming request must wait and retry
+    like the keep-alive pool does — a query typed during the prewarm used to
+    fail outright with "HTTP Error 429" (seen in the chat log 2026-09-04)."""
+    import urllib.request
+
+    from hexcli import llm
+    calls: list[int] = []
+
+    def fake_urlopen(req: Any, timeout: Any = None) -> Any:
+        calls.append(1)
+        if len(calls) < 3:
+            raise _http_429()
+        return _FakeStream([
+            b'data: {"choices":[{"delta":{"content":"{\\"action\\":\\"finish\\","}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"\\"message\\":\\"ok\\"}"}}]}\n',
+            b"data: [DONE]\n",
+        ])
+
+    cfg = {**sa.DEFAULT_CONFIG, "backend": "openai", "live_streaming": False,
+           "openai_compatible": {"base_url": "http://127.0.0.1:1/v1", "api_key": "x"}}
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        text, _ = llm._openai_stream_chat(cfg, [{"role": "user", "content": "hi"}], "autopilot_max_output_tokens")
+    finally:
+        urllib.request.urlopen = orig
+    assert len(calls) == 3, f"two 429s then success expected, got {len(calls)} attempts"
+    assert '"message":"ok"' in text, text
+
+
+def test_streaming_path_gives_up_on_429_after_the_deadline() -> None:
+    import urllib.error
+    import urllib.request
+
+    from hexcli import llm
+
+    def always_busy(req: Any, timeout: Any = None) -> Any:
+        raise _http_429("0.2")
+
+    cfg = {**sa.DEFAULT_CONFIG, "backend": "openai", "live_streaming": False,
+           "openai_compatible": {"base_url": "http://127.0.0.1:1/v1", "api_key": "x"}}
+    orig, orig_max = urllib.request.urlopen, llm._BUSY_WAIT_MAX_S
+    urllib.request.urlopen, llm._BUSY_WAIT_MAX_S = always_busy, 0.5
+    try:
+        try:
+            llm._openai_stream_chat(cfg, [{"role": "user", "content": "hi"}], "autopilot_max_output_tokens")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 429
+        else:
+            raise AssertionError("a server busy past the deadline must surface the 429")
+    finally:
+        urllib.request.urlopen, llm._BUSY_WAIT_MAX_S = orig, orig_max
+
+
+def test_quick_edit_is_off_while_the_repl_runs() -> None:
+    """A click inside a QuickEdit console freezes every write until a key is
+    pressed (measured 2026-09-04). The REPL clears the flag at start; on a
+    non-console stdin it must be a silent no-op."""
+    from hexcli import ui
+    ui.disable_quick_edit()   # must never raise
+    if os.name != "nt":
+        return
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    mode = ctypes.c_uint32()
+    if k32.GetConsoleMode(k32.GetStdHandle(-10), ctypes.byref(mode)):
+        assert not (mode.value & 0x0040), f"QuickEdit still set: mode={mode.value:#x}"
+
+
+def test_margin_stream_pads_every_row_and_delegates_the_rest() -> None:
+    """ui.install_margin wraps stdout/stderr: `pad` spaces follow every
+    newline and carriage return so streamed tokens, spinner redraws and the
+    input line all start the same distance in; everything else (isatty,
+    encoding, flush...) falls through to the real stream."""
+    import io
+
+    from hexcli import ui
+    base = io.StringIO()
+    m = ui._MarginStream(base, ui._Margin(2, width=lambda: 80))
+    m.write("a\nb")
+    m.write("\rc\n")
+    m.writelines(["d", "\n"])
+    assert base.getvalue() == "a\n  b\r  c\n  d\n  ", repr(base.getvalue())
+    assert m.getvalue() == base.getvalue(), "attribute access must reach the wrapped stream"
+    assert m.pad == 2 and callable(m.isatty)
+
+
+def test_margin_wraps_long_rows_itself_at_word_boundaries() -> None:
+    """The first report: only the first row of a paragraph was indented —
+    the terminal wrapped the rest at the window edge, column 0. Rows are now
+    wrapped by the margin at width - 2*pad, on spaces where possible, and
+    identically whether the text arrives at once or token by token. A row
+    that fills mid-word erases the partial word and reprints it on the next
+    row; an over-long word breaks where it falls."""
+    import io
+
+    from hexcli import ui
+
+    def render(chunks: list[str]) -> str:
+        base = io.StringIO()
+        m = ui._MarginStream(base, ui._Margin(2, width=lambda: 20))   # usable 16
+        for c in chunks:
+            m.write(c)
+        return base.getvalue()
+
+    whole = render(["the quick brown fox jumps over\n"])
+    assert whole == "the quick brown \n  fox jumps over\n  ", repr(whole)
+    assert render(["the qui", "ck brown ", "fox ju", "mps over\n"]) == whole, "streaming must not change the layout"
+    reflow = render(["aaaa bbbbbbbbbbbbb"])
+    assert reflow == "aaaa bbbbbbbbbbb\033[11D\033[K\n  bbbbbbbbbbbbb", repr(reflow)
+    long_word = render(["x" * 20])
+    assert long_word == "x" * 16 + "\n  " + "x" * 4, repr(long_word)
+    styled = render(["\033[1mbold\033[0m " + "y" * 14])
+    assert styled == "\033[1mbold\033[0m " + "y" * 11 + "\033[11D\033[K\n  " + "y" * 14, repr(styled)
+    assert ui._Margin(2, width=lambda: 20).usable == 16
+
+
+def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
+    """After a zoom the column count changes and conhost's reflow of old
+    rows drops the margin; the REPL clears and reprints the session's
+    messages through the margin layer instead."""
+    import contextlib
+    import io
+
+    from hexcli import ui
+    orig = ui._COLOR_ON
+    ui._COLOR_ON = False
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.redraw_transcript({"messages": [{"role": "user", "content": "hi"},
+                                               {"role": "assistant", "content": "hello"},
+                                               {"role": "system", "content": "never shown"}]})
+        out = buf.getvalue()
+        assert out.startswith("\033[2J\033[3J\033[H\r"), repr(out[:20])
+        assert "you> hi" in out and "hello" in out and "never shown" not in out, out
+    finally:
+        ui._COLOR_ON = orig
+
+
 TESTS = [
+    test_redraw_transcript_clears_and_reprints_the_conversation,
+    test_margin_stream_pads_every_row_and_delegates_the_rest,
+    test_margin_wraps_long_rows_itself_at_word_boundaries,
+    test_streaming_path_waits_out_a_busy_server,
+    test_streaming_path_gives_up_on_429_after_the_deadline,
+    test_quick_edit_is_off_while_the_repl_runs,
     test_program_launch_by_absolute_path_is_sensitive,
     test_history_path_patch_is_not_vacuous,
     test_agent_and_sessions_agree_on_the_project_root,

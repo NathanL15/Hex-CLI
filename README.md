@@ -5,7 +5,7 @@ Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
 cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
 LangChain.
 
-Current version: **2.5.0**
+Current version: **2.5.1**
 
 ```
 you ▸ the median calc in processor.py is wrong for even-length lists — fix it
@@ -158,7 +158,8 @@ and CI are unaffected.
 | `Home` · `End` | start · end of the current line |
 | `Ctrl+W` · `Ctrl+U` · `Ctrl+K` | kill the word before · to line start · to line end |
 | `Esc` | clear the line |
-| paste | multi-line pastes stay one message instead of submitting line by line |
+| `Ctrl+Plus` · `Ctrl+Minus` | bigger · smaller text in the classic console window; the size is remembered (Windows Terminal has its own zoom) |
+| paste | `Ctrl+V` inserts the block whole, tabs as four spaces; nothing is sent until you press `Enter` |
 | `\` then `Enter` | continue on a new line deliberately |
 
 History lives in `~/.shellai/input_history`. `rich_input: false` turns all of
@@ -263,6 +264,7 @@ The ones most worth knowing:
 | `max_agent_steps` | `15` | tool calls per turn |
 | `live_streaming` | `true` | render answers as they arrive |
 | `rich_input` | `true` | history, Tab completion, multi-line paste |
+| `side_padding` | `2` | columns of left margin on everything printed; `0` for none |
 | `show_diffs` | `true` | print a diff after each mutation |
 | `workspace_write_scope` | `true` | confine writes to the working directory |
 | `autopilot_confirm_sensitive` | `true` | gate credential/key access |
@@ -277,7 +279,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**25 offline suites (715 tests)** — no LLM required, all against a mock backend:
+**25 offline suites (728 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage

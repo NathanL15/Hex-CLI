@@ -58,6 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Rich input line: persistent history, Tab completion, multi-line paste.
     # Falls back to bare input() automatically when stdin/stdout is not a tty.
     "rich_input": True,
+    "side_padding": 2,
     "input_history_file": "",
     "input_history_limit": 500,
     # After an unverified file mutation, deflect the first "done" once and ask
@@ -172,6 +173,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "prompt_stable_prefix":           "bool",
     "network_access":                 "str",
     "rich_input":                     "bool",
+    "side_padding":                   "int",
     "input_history_file":             "str",
     "input_history_limit":            "int",
     "telemetry_enabled":              "bool",

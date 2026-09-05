@@ -338,6 +338,10 @@ def run_repl(config: dict[str, Any]) -> int:
     tel = telemetry.SessionTelemetry(config)
     clog = chatlog.ChatLog(config, version=sa.VERSION)
 
+    ui.disable_quick_edit()
+    ui.enable_vt_processing()
+    ui.install_margin(int(config.get("side_padding", 0) or 0))
+    ui.apply_saved_console_font()
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
     if config.get("memory_dreaming", False):
         memory.start_dreaming(lambda: config, sa.llm_generate)
@@ -347,8 +351,16 @@ def run_repl(config: dict[str, Any]) -> int:
     # Custom commands are discovered once here for Tab completion; dispatch
     # below re-reads the file each use, so edits apply without a restart.
     custom_names = tuple(sorted(custom_commands.discover()))
+    def _zoom(delta: int) -> bool:
+        """Ctrl+Plus / Ctrl+Minus. Returns True when the screen was redrawn."""
+        if ui.console_zoom(delta) is None:
+            return False
+        ui.redraw_transcript(current_session)
+        return True
+
     read_line = lineedit.make_reader(
-        config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE)
+        config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE),
+        on_zoom=_zoom,
     ) or (lambda p: input(p))
 
     while True:

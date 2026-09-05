@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import msvcrt
 import os
+import re
 import subprocess
 import sys
 import textwrap
 import threading
 import time
+import unicodedata
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -94,8 +97,392 @@ class Spinner:
     def __exit__(self, *_: object) -> None:
         self._stop.set()
         self._thread.join(timeout=1)
-        sys.stderr.write("\r" + " " * (len(self.label) + 8) + "\r")
+        sys.stderr.write("\r\033[K")
         sys.stderr.flush()
+
+
+# ---------------------------------------------------------------------------
+# Console QuickEdit
+# ---------------------------------------------------------------------------
+
+def enable_vt_processing() -> None:
+    """Switch on ANSI/VT handling for stdout and stderr on a classic console.
+
+    The launcher does this for the shortcut window; a direct `python -m
+    hexcli` in a bare conhost would otherwise print the margin's reflow and
+    clear sequences (`ESC[K`, `ESC[nD`) as text. No-op under Windows
+    Terminal and on non-console streams.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        for std in (-11, -12):
+            handle = k32.GetStdHandle(std)
+            mode = ctypes.c_uint32()
+            if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+                k32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
+def disable_quick_edit() -> None:
+    """Turn off conhost QuickEdit for this console for the life of the REPL.
+
+    With QuickEdit on (the classic-console default) a click inside the window
+    starts a selection and EVERY console write blocks until a key is pressed:
+    the answer streams into a frozen screen and Ctrl+C — "copy" while text is
+    selected — is what releases it, without ever reaching Python. Measured
+    2026-09-04 in a window launched exactly like the Start Menu shortcut.
+    Windows Terminal ignores the flag; non-console stdin is left alone.
+    The original mode is restored at exit so a shared cmd window is not
+    changed permanently.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import atexit
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        stdin = k32.GetStdHandle(-10)
+        mode = ctypes.c_uint32()
+        if not k32.GetConsoleMode(stdin, ctypes.byref(mode)):
+            return
+        original = mode.value
+        ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+        if k32.SetConsoleMode(stdin, (original & ~ENABLE_QUICK_EDIT) | ENABLE_EXTENDED_FLAGS):
+            atexit.register(lambda: k32.SetConsoleMode(stdin, original))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Left margin
+# ---------------------------------------------------------------------------
+
+_ANSI_SEQ = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
+_REFLOW_MAX_WORD = 30   # longer "words" (URLs, hashes) break where they fall
+
+
+def _cell_width(ch: str) -> int:
+    if ch == "\t":
+        return 0  # handled by the caller (advance to the next tab stop)
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+class _Margin:
+    """Shared state for the two wrapped streams: one screen, one cursor.
+
+    Rows are wrapped HERE, at `width - 2*pad` visible cells, so the terminal
+    never wraps for us — its continuation rows would start at column 0 with
+    no margin (the first bug report: "only the first line is indented").
+    Wrapping is word-aware even for text that arrives token by token: when a
+    row fills mid-word, the partial word already on screen is erased (cursor
+    left + clear to end of line) and reprinted at the start of the next row.
+    """
+
+    def __init__(self, pad: int, width: Callable[[], int] | None = None) -> None:
+        self.pad = pad
+        self.fill = " " * pad
+        self._width = width
+        self.col = 0          # visible cells printed on the current row
+        self.word = ""        # raw text since the last break opportunity on this row
+        self.word_vis = 0
+
+    @property
+    def usable(self) -> int:
+        if self._width is not None:
+            width = self._width()
+        else:
+            try:
+                width = os.get_terminal_size().columns
+            except OSError:
+                width = 80
+        return max(10, width - 2 * self.pad)
+
+    def _newline(self, out: list[str], ctl: str = "\n") -> None:
+        out.append(ctl + self.fill)
+        self.col = 0
+        self.word, self.word_vis = "", 0
+
+    def render(self, s: str) -> str:
+        out: list[str] = []
+        usable = self.usable
+        i, n = 0, len(s)
+        while i < n:
+            ch = s[i]
+            if ch == "\033":
+                m = _ANSI_SEQ.match(s, i)
+                if m:
+                    seq = m.group()
+                    out.append(seq)
+                    self.word += seq
+                    i = m.end()
+                    continue
+            i += 1
+            if ch == "\n" or ch == "\r":
+                self._newline(out, ch)
+                continue
+            if ch == "\t":
+                step = 8 - self.col % 8
+                if self.col + step > usable:
+                    continue  # a tab past the edge is invisible anyway
+                out.append(ch)
+                self.col += step
+                self.word, self.word_vis = "", 0
+                continue
+            w = _cell_width(ch)
+            if self.col + w > usable:
+                if ch == " ":
+                    self.word, self.word_vis = "", 0
+                    continue  # the row ended on a space: nothing to show
+                # Row full mid-word. Reflow the partial word if it started
+                # after a space on this row and is short enough to bother.
+                if 0 < self.word_vis < self.col and self.word_vis <= _REFLOW_MAX_WORD:
+                    out.append(f"\033[{self.word_vis}D\033[K")
+                    word = self.word
+                    self._newline(out)
+                    out.append(word)
+                    self.word, self.word_vis = word, _visible_cells(word)
+                    self.col = self.word_vis
+                else:
+                    self._newline(out)
+            out.append(ch)
+            self.col += w
+            if ch == " ":
+                self.word, self.word_vis = "", 0
+            else:
+                self.word += ch
+                self.word_vis += w
+        return "".join(out)
+
+
+def _visible_cells(text: str) -> int:
+    return sum(_cell_width(c) for c in _ANSI_SEQ.sub("", text))
+
+
+class _MarginStream:
+    """A console stream with a left AND right margin (see _Margin).
+
+    Attribute access falls through to the wrapped stream (isatty, encoding,
+    buffer, reconfigure, ...). The line editor is told the same margin so its
+    wrap math and cursor moves agree (LineEditor.margin): its rows never
+    exceed the usable width, so this layer never wraps them.
+    """
+
+    def __init__(self, base: Any, margin: _Margin) -> None:
+        self._base = base
+        self._margin = margin
+
+    @property
+    def pad(self) -> int:
+        return self._margin.pad
+
+    def write(self, s: str) -> int:
+        if s:
+            self._base.write(self._margin.render(s))
+        return len(s)
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self.write(line)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
+
+
+def install_margin(pad: int) -> None:
+    """Wrap stdout and stderr with a `pad`-column margin on both sides (tty only)."""
+    pad = max(0, int(pad or 0))
+    if not pad or isinstance(sys.stdout, _MarginStream):
+        return
+    try:
+        if not sys.stdout.isatty():
+            return
+    except Exception:
+        return
+    margin = _Margin(pad)
+    base = sys.stdout
+    sys.stdout = _MarginStream(base, margin)
+    sys.stderr = _MarginStream(sys.stderr, margin)
+    base.write(margin.fill)   # the cursor is at column 0 right now
+
+
+# ---------------------------------------------------------------------------
+# Console font (classic conhost only; Windows Terminal zooms by itself)
+# ---------------------------------------------------------------------------
+
+_FONT_STATE_PATH = Path.home() / ".shellai" / "console_font"
+_FONT_MIN, _FONT_MAX, _FONT_STEP = 8, 40, 2
+_ZOOM_ANCHOR_PX: tuple[int, int] | None = None   # window size to keep across zooms
+
+
+def _console_font_api() -> tuple[Any, Any, Any] | None:
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _Coord(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+    class _FontInfo(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.ULONG), ("nFont", wintypes.DWORD),
+                    ("dwFontSize", _Coord), ("FontFamily", wintypes.UINT),
+                    ("FontWeight", wintypes.UINT), ("FaceName", wintypes.WCHAR * 32)]
+
+    k32 = ctypes.windll.kernel32
+    handle = k32.GetStdHandle(-11)
+    info = _FontInfo()
+    info.cbSize = ctypes.sizeof(_FontInfo)
+    if not k32.GetCurrentConsoleFontEx(handle, False, ctypes.byref(info)):
+        return None
+    return k32, handle, info
+
+
+def console_font_height() -> int | None:
+    """Current console font height in pixels, or None outside a console."""
+    api = _console_font_api()
+    return int(api[2].dwFontSize.Y) if api else None
+
+
+def set_console_font_height(height: int) -> bool:
+    api = _console_font_api()
+    if not api:
+        return False
+    import ctypes
+    k32, handle, info = api
+    info.dwFontSize.X = 0   # let the console pick the matching width
+    info.dwFontSize.Y = max(_FONT_MIN, min(_FONT_MAX, int(height)))
+    return bool(k32.SetCurrentConsoleFontEx(handle, False, ctypes.byref(info)))
+
+
+def _console_client_px() -> tuple[int, int] | None:
+    """Pixel size of the console window's client area (classic conhost)."""
+    if os.name != "nt" or os.environ.get("WT_SESSION"):
+        return None
+    import ctypes
+    from ctypes import wintypes
+    hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+    if not hwnd:
+        return None
+    rect = wintypes.RECT()
+    if not ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return None
+    return rect.right - rect.left, rect.bottom - rect.top
+
+
+def _refit_console_cells(client_px: tuple[int, int]) -> None:
+    """After a font change, pick the column/row count that fills the SAME
+    pixel area, so the window keeps its size and only the text scales.
+    Without this conhost keeps the cell count and grows the window instead."""
+    import ctypes
+    from ctypes import wintypes
+
+    class _Coord(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+    class _SmallRect(ctypes.Structure):
+        _fields_ = [("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
+                    ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT)]
+
+    class _BufferInfo(ctypes.Structure):
+        _fields_ = [("dwSize", _Coord), ("dwCursorPosition", _Coord), ("wAttributes", wintypes.WORD),
+                    ("srWindow", _SmallRect), ("dwMaximumWindowSize", _Coord)]
+
+    api = _console_font_api()
+    if not api:
+        return
+    k32, handle, info = api
+    k32.GetConsoleFontSize.restype = _Coord
+    cell = k32.GetConsoleFontSize(handle, info.nFont)
+    if cell.X <= 0 or cell.Y <= 0:
+        return
+    cols = max(40, client_px[0] // cell.X)
+    rows = max(10, client_px[1] // cell.Y)
+    buf = _BufferInfo()
+    if not k32.GetConsoleScreenBufferInfo(handle, ctypes.byref(buf)):
+        return
+    win = buf.srWindow
+    cur_cols, cur_rows = win.Right - win.Left + 1, win.Bottom - win.Top + 1
+    if (cols, rows) == (cur_cols, cur_rows):
+        return
+    height = max(buf.dwSize.Y, rows)          # keep the scrollback
+    bottom = min(max(win.Bottom, rows - 1), height - 1)
+    target = _SmallRect(0, bottom - rows + 1, cols - 1, bottom)
+    if cols < cur_cols or rows < cur_rows:
+        # Shrink the window first: a buffer narrower than the window is refused.
+        shrink = _SmallRect(0, win.Bottom - min(rows, cur_rows) + 1,
+                            min(cols, cur_cols) - 1, win.Bottom)
+        k32.SetConsoleWindowInfo(handle, True, ctypes.byref(shrink))
+    k32.SetConsoleScreenBufferSize(handle, _Coord(cols, height))
+    k32.SetConsoleWindowInfo(handle, True, ctypes.byref(target))
+
+
+def console_zoom(delta: int) -> int | None:
+    """Ctrl+Plus / Ctrl+Minus: grow or shrink the console font by one step,
+    keep the window the same size on screen, and remember the size for the
+    next launch. Returns the new height, or None where the font cannot be
+    changed (not a classic console)."""
+    global _ZOOM_ANCHOR_PX
+    current = console_font_height()
+    if current is None:
+        return None
+    new = max(_FONT_MIN, min(_FONT_MAX, current + _FONT_STEP * (1 if delta > 0 else -1)))
+    if new == current:
+        return current
+    client_px = _console_client_px()
+    # Anchor on the window size the user had before the FIRST zoom, so
+    # repeated zooms return to exactly the same cell count instead of
+    # drifting a column per round trip from integer rounding. A window the
+    # user resized by hand (off by more than a cell) re-anchors.
+    if client_px:
+        if _ZOOM_ANCHOR_PX is None or any(abs(a - b) > 2 * current for a, b in zip(_ZOOM_ANCHOR_PX, client_px)):
+            _ZOOM_ANCHOR_PX = client_px
+        client_px = _ZOOM_ANCHOR_PX
+    if not set_console_font_height(new):
+        return current
+    if client_px:
+        _refit_console_cells(client_px)
+    try:
+        _FONT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _FONT_STATE_PATH.write_text(str(new), encoding="utf-8")
+    except OSError:
+        pass
+    return new
+
+
+def redraw_transcript(session: dict[str, Any]) -> None:
+    """Clear the screen and reprint the conversation at the current width.
+
+    Used after a zoom: the column count changed, and conhost's own reflow
+    of what was already on screen starts continuation rows at column 0,
+    losing the margin. Reprinting through the margin layer lays every row
+    out fresh. Tool banners and spinner lines are not part of the session
+    and do not come back; the questions and answers do.
+    """
+    sys.stdout.write("\033[2J\033[3J\033[H\r")
+    sys.stdout.flush()
+    for msg in session.get("messages", []):
+        role, content = msg.get("role"), str(msg.get("content", ""))
+        if role == "user":
+            print()
+            cprint(f"you> {content}", C.DIM)
+        elif role == "assistant":
+            render_result("Result", content)
+
+
+def apply_saved_console_font() -> None:
+    """Restore the size chosen with Ctrl+Plus / Ctrl+Minus last time."""
+    try:
+        height = int(_FONT_STATE_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    if _FONT_MIN <= height <= _FONT_MAX and height != console_font_height():
+        set_console_font_height(height)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +565,7 @@ HELP_TEXT = textwrap.dedent("""
       Ctrl+Left / Ctrl+Right        move by word
       Ctrl+W / Ctrl+U / Ctrl+K      kill word back / to line start / to line end
       Esc                           clear the line — or cancel a running step
+      Ctrl+Plus / Ctrl+Minus        bigger / smaller text (remembered next time)
       \\ then Enter                  continue on a new line (pastes keep theirs)
 
     AGENT TOOLS:

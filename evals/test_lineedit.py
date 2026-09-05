@@ -583,7 +583,99 @@ def test_repl_commands_has_no_phantoms() -> None:
     assert not phantom, f"advertised by completion but never handled: {phantom}"
 
 
+def test_margin_wraps_rows_with_explicit_newlines() -> None:
+    """With a left margin every row starts `margin` columns in, so a wrap
+    must be an explicit newline (the margin stream pads after it) — a
+    terminal auto-wrap would put the continuation at column 0. Usable width
+    is the terminal width minus the margin on both sides."""
+    from hexcli import lineedit as le
+    ed, out = editor(typed("abcdefghijklmno") + [le.ENTER], width=14, margin=2)
+    assert ed.usable == 10
+    assert ed.read("you> ") == "abcdefghijklmno"
+    final = out[-1]
+    assert "you> abcde\nfghijklmno\n" in final, repr(final)
+    # 20 visible chars is an exact multiple of the usable width, so the
+    # deferred-wrap pad adds a third row and the cursor sits at its start.
+    text, rows, cursor_row, cursor_col = ed._layout("you> ")
+    assert rows == 3 and cursor_row == 2 and cursor_col == 0, (rows, cursor_row, cursor_col)
+    assert text == "you> abcde\nfghijklmno\n ", repr(text)
+
+
+def test_margin_zero_keeps_terminal_auto_wrap() -> None:
+    from hexcli import lineedit as le
+    ed, out = editor(typed("abcdefghijklmno") + [le.ENTER], width=12)
+    ed.read("you> ")
+    assert "you> abcdefghijklmno\n" in out[-1], repr(out[-1])
+
+
+def test_wrap_visible_skips_ansi_and_never_ends_on_newline() -> None:
+    from hexcli import lineedit as le
+    styled = "\033[1mabc\033[0mdefgh"
+    assert le._wrap_visible(styled, 4) == "\033[1mabc\033[0md\nefgh"
+    assert le._wrap_visible("abcd", 4) == "abcd"
+    assert le._wrap_visible("", 4) == ""
+
+
+def test_ctrl_plus_and_minus_call_on_zoom_and_leave_the_line_alone() -> None:
+    from hexcli import lineedit as le
+    calls: list[int] = []
+    ed, _ = editor([le.ZOOM_IN, "a", le.ZOOM_OUT, le.ZOOM_IN, le.ENTER], on_zoom=calls.append)
+    assert ed.read("> ") == "a"
+    assert calls == [1, -1, 1]
+    ed, _ = editor([le.ZOOM_IN, le.ENTER])   # no handler: silently ignored
+    assert ed.read("> ") == ""
+
+
+def test_paste_burst_is_inserted_whole_and_never_submits() -> None:
+    """Ctrl+V in a classic console arrives as queued keystrokes. A burst of
+    three or more is one PASTE token: inserted in one go (one redraw), CR
+    and CRLF become newlines, tabs become four spaces, extended-key pairs
+    and stray control characters vanish, one trailing newline is dropped —
+    and it never submits; Enter does that."""
+    from hexcli import lineedit as le
+    raw = list("def f():\r\n\tpass\r\n")
+    assert le._is_paste(raw)
+    assert le._paste_text(raw) == "def f():\n    pass"
+    assert le._paste_text(list("a\rb\r")) == "a\nb"
+    assert le._paste_text(["x", "\xe0", "H", "y", "\x07"]) == "xy", "extended pair and BEL dropped"
+    assert not le._is_paste(list("ab")), "two queued keys is rollover, not a paste"
+    ed, out = editor([le.PASTE + "line one\nline two", le.ENTER])
+    assert ed.read("> ") == "line one\nline two"
+    renders = [w for w in out if "line two" in w]
+    assert len(renders) == 2, f"one render for the paste, one for the finish: {len(renders)}"
+
+
+def test_short_burst_replays_as_ordinary_keys() -> None:
+    from hexcli import lineedit as le
+    assert le._burst_tokens(list("ab")) == ["a", "b"]
+    assert le._burst_tokens(["a", "\r"]) == ["a", le.ENTER], "a CR last in a short burst is Enter"
+    assert le._burst_tokens(["\r", "a"]) == [le.NEWLINE, "a"]
+    assert le._burst_tokens(["\xe0", "K", "b"]) == [le.LEFT, "b"]
+
+
+def test_zoom_redraw_resets_the_render_anchor() -> None:
+    from hexcli import lineedit as le
+    keys = ["a", le.NEWLINE, "b", le.ZOOM_IN, le.ENTER]
+    # Two-row buffer: the cursor is on row 1, so a normal redraw first climbs
+    # one row ("\033[1A"). A zoom whose handler redrew the screen must not.
+    ed, out = editor(keys, on_zoom=lambda d: True)
+    assert ed.read("> ") == "a\nb"
+    before_zoom, zoom_render, finish = out[-3], out[-2], out[-1]
+    assert "\033[1A" in before_zoom and "\033[1A" in finish
+    assert "\033[1A" not in zoom_render, repr(zoom_render)
+    ed, out = editor(keys, on_zoom=lambda d: False)   # nothing redrawn: keep the anchor
+    ed.read("> ")
+    assert "\033[1A" in out[-2], repr(out[-2])
+
+
 TESTS = [
+    test_paste_burst_is_inserted_whole_and_never_submits,
+    test_short_burst_replays_as_ordinary_keys,
+    test_zoom_redraw_resets_the_render_anchor,
+    test_margin_wraps_rows_with_explicit_newlines,
+    test_margin_zero_keeps_terminal_auto_wrap,
+    test_wrap_visible_skips_ansi_and_never_ends_on_newline,
+    test_ctrl_plus_and_minus_call_on_zoom_and_leave_the_line_alone,
     test_plain_line_returns_text,
     test_empty_line_returns_empty,
     test_backspace_deletes_before_cursor,

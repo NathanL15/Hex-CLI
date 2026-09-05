@@ -26,6 +26,7 @@ import json
 import queue
 import sys
 import threading
+import time
 import urllib.error
 from typing import Any
 
@@ -37,6 +38,31 @@ from hexcli.ui import C
 def _agent():
     from hexcli import agent
     return agent
+
+
+# The server holds one inference slot and answers 429 + Retry-After while it
+# is busy — including the end-of-turn prewarm, which rebuilds a long KV cache
+# for ~20 s. The streaming paths open their own connection (see
+# _ollama_stream_chat), so they must wait that out here the way
+# http_client._http_request does for the keep-alive pool; before this a query
+# typed during the prewarm failed outright with "HTTP Error 429".
+_BUSY_WAIT_MAX_S = 25.0
+
+
+def _urlopen_wait_busy(req: Any, timeout_s: int) -> Any:
+    import urllib.request
+    deadline = time.monotonic() + _BUSY_WAIT_MAX_S
+    while True:
+        try:
+            return urllib.request.urlopen(req, timeout=timeout_s)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or time.monotonic() >= deadline:
+                raise
+            try:
+                delay = float(exc.headers.get("Retry-After") or 1.0)
+            except ValueError:
+                delay = 1.0
+            time.sleep(min(max(delay, 0.2), 3.0))
 
 
 def __getattr__(name: str) -> Any:
@@ -156,7 +182,7 @@ def _ollama_stream_chat(
     # "done" line arriving before the socket reaches EOF), which would leave
     # a shared connection in an indeterminate state for the next reuse.
     try:
-        with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+        with _urlopen_wait_busy(req, int(config["timeout_seconds"])) as resp:
             reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
             with _agent().CancelMonitor() as monitor:
                 reader.start()
@@ -197,7 +223,7 @@ def _ollama_stream_chat(
 
         return "".join(parts), eval_count
     finally:
-        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
 
@@ -304,7 +330,7 @@ def _openai_stream_chat(
     # Dedicated per-call connection — see _ollama_stream_chat for why the
     # shared keep-alive pool isn't used here.
     try:
-        with urllib.request.urlopen(req, timeout=int(config["timeout_seconds"])) as resp:
+        with _urlopen_wait_busy(req, int(config["timeout_seconds"])) as resp:
             reader = threading.Thread(target=read_lines, args=(resp,), daemon=True)
             with _agent().CancelMonitor() as monitor:
                 reader.start()
@@ -360,7 +386,7 @@ def _openai_stream_chat(
         if renderer is not None:
             _end_live_render(renderer)
         else:
-            sys.stderr.write("\r" + " " * 60 + "\r")
+            sys.stderr.write("\r\033[K")
             sys.stderr.flush()
 
 
@@ -385,7 +411,7 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
 
     def emit(text: str) -> None:
         if not state["started"]:
-            sys.stderr.write("\r" + " " * 60 + "\r")
+            sys.stderr.write("\r\033[K")
             state["started"] = True
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -405,7 +431,7 @@ def _end_live_render(renderer: Any) -> None:
         sys.stdout.write("\n")
         sys.stdout.flush()
     else:
-        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
 

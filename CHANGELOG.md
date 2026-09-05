@@ -4,6 +4,91 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.5.1 — 2026-09-04
+
+### The "thinking… until Ctrl+C" freeze was the console, not the model
+
+Sometimes, most often on the first message of a session, the answer never
+appeared until Ctrl+C — and then it appeared all at once. Root cause, measured
+in a window launched exactly like the Start Menu shortcut (`conhost.exe
+cmd.exe /c "Hex CLI.cmd"`): classic conhost with QuickEdit on (the registry
+default). A click inside the window — the click that focuses a freshly
+opened window — starts a selection, the title turns to "Select …", and every
+console write blocks until a key is pressed. The model kept generating and
+the reader thread kept draining the socket; the main thread sat inside the
+first `stdout.write`. Ctrl+C is "copy" while text is selected, so conhost
+cleared the selection and released the writes without any interrupt
+reaching Python — which is why no "Cancelled." ever printed and why every
+one of those turns shows as `completed` in the chat log. The streaming client
+itself was measured clean: 0 ms between `data: [DONE]` and return.
+
+* The launcher's console setup and the REPL start both clear
+  `ENABLE_QUICK_EDIT_MODE` on stdin (0x1f7 → 0x1b7, verified in a
+  shortcut-launched window); the REPL restores the original mode at exit so
+  a shared cmd window is not changed permanently. Windows Terminal ignores
+  the flag.
+* The streaming request now waits out a 429 + Retry-After like the keep-alive
+  pool already did. The end-of-turn prewarm holds the inference slot for
+  ~20 s (rebuild + prefill, server log 03:52:31→03:52:51), and a query typed
+  inside that window failed outright with "HTTP Error 429" (chat log
+  2026-09-04 03:52:50).
+
+Also observed while diagnosing, not changed: the first request of a new
+session diverges from whatever the server cached last; when that cache is
+long the Rewind fails (4 s) and the dialog is recreated (12.7 s) before a
+token is generated — 47 s for a two-message turn on 2026-09-03 23:43. The
+prewarm only fires above 3,100 cached tokens, so a cache left just under the
+threshold still pays this on the next session's first turn.
+
+### Side padding, and Ctrl+Plus / Ctrl+Minus
+
+* `side_padding` (default 2): stdout and stderr are wrapped so every row —
+  printed, streamed token by token, spinner redraw, or the input line —
+  starts `pad` columns in and ends `pad` columns short of the right edge.
+  The wrapper does the wrapping itself at `width - 2*pad`: the first cut
+  left the terminal to wrap long paragraphs, and its continuation rows
+  came back at column 0 ("only the first sentence is indented"). Wrapping
+  is word-aware even for streamed text — a row that fills mid-word erases
+  the partial word (`ESC[nD ESC[K`) and reprints it on the next row; words
+  over 30 cells break where they fall. The line editor uses the same
+  usable width with explicit newlines, so the two never disagree. Verified
+  in a shortcut-launched conhost window by reading the screen buffer back:
+  120 columns, every row within 2–117, streamed and whole output identical.
+  Spinner and live-render clears moved from 60 spaces to `ESC[K`, and the
+  REPL enables VT processing itself (the launcher already did for the
+  shortcut window).
+* Ctrl+Plus / Ctrl+Minus at the prompt grow or shrink the classic console
+  font by 2 px (8–40) and the size is remembered in
+  `~/.shellai/console_font` for the next launch. Those chords produce no
+  character, so `getwch` never saw them; the key reader now peeks the
+  console input queue ahead of msvcrt, consumes the chord (and the bare
+  Ctrl key-down that precedes it), and hands everything else on unchanged.
+  Windows Terminal keeps its own zoom and never forwards the chord.
+  The window keeps its size on screen: conhost keeps the cell count and
+  grows the window when the font grows, so after the font change the
+  column and row counts are refitted to the pixel size the window had
+  before the first zoom (anchored once, so round trips land on the same
+  cells). Then the conversation is cleared and reprinted through the
+  margin layer — conhost's own reflow of old rows restarts continuation
+  rows at column 0, which is the "loses its formatting" report. Measured:
+  960×480 px stayed within a few pixels from font 16 through 20 and back.
+* Ctrl+V pastes as one block. A classic console injects the clipboard as
+  keystrokes; the reader used to take them one at a time, redrawing after
+  each (the visible "typing"), and a carriage return with nothing queued
+  behind it counted as Enter — a block ending in a newline sent itself.
+  Now a burst of three or more queued keys is drained (20 ms grace for the
+  console to finish injecting) and inserted whole: CR/CRLF become
+  newlines, tabs four spaces, one trailing newline is dropped, and nothing
+  submits until Enter. Verified by injecting `def f():\r\tpass\r` into the
+  console input buffer: one `<paste>` token, `def f():\n    pass`.
+
+Tests: 3 new in `evals/test_core.py` (busy-wait retry, deadline give-up,
+QuickEdit cleared) + 3 (margin stream, word-aware wrapping incl. streamed
+input, transcript redraw), 7 new in `evals/test_lineedit.py` (margin
+wrap, auto-wrap unchanged at margin 0, ANSI-aware wrap, zoom tokens,
+paste burst, short-burst replay, zoom anchor reset). 25 suites / 728
+tests.
+
 ## 2.5.0 — 2026-09-02
 
 ### The context question, answered: the window was never the model's

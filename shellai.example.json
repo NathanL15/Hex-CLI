@@ -21,6 +21,7 @@
   "prompt_split": true,
   "prompt_stable_prefix": false,
   "rich_input": true,
+  "side_padding": 2,
   "input_history_file": "",
   "input_history_limit": 500,
   "require_verification": true,

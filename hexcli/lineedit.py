@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,9 @@ CLEAR_SCREEN = "<clear-screen>"    # Ctrl+L
 INTERRUPT = "<interrupt>"    # Ctrl+C
 EOF_KEY = "<eof>"            # Ctrl+D on an empty buffer
 ESCAPE = "<escape>"
+ZOOM_IN = "<zoom-in>"        # Ctrl+Plus  (main row or numpad)
+ZOOM_OUT = "<zoom-out>"      # Ctrl+Minus
+PASTE = "<paste>"            # prefix: the rest of the token is pasted text
 EXHAUSTED = "<exhausted>"    # key source ran out (tests / closed stdin)
 
 _ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
@@ -84,7 +88,99 @@ def visible_len(text: str) -> int:
     return len(_ANSI_RE.sub("", text))
 
 
+def _wrap_visible(text: str, width: int) -> str:
+    """Insert a newline after every `width` visible characters, leaving ANSI
+    styling untouched and never ending on a newline."""
+    out: list[str] = []
+    col = 0
+    i = 0
+    while i < len(text):
+        m = _ANSI_RE.match(text, i)
+        if m:
+            out.append(m.group())
+            i = m.end()
+            continue
+        if col == width:
+            out.append("\n")
+            col = 0
+        out.append(text[i])
+        col += 1
+        i += 1
+    return "".join(out)
+
+
 # ── key source ──────────────────────────────────────────────────────────────
+
+_VK_ZOOM_IN = frozenset({0xBB, 0x6B})    # VK_OEM_PLUS, VK_ADD
+_VK_ZOOM_OUT = frozenset({0xBD, 0x6D})   # VK_OEM_MINUS, VK_SUBTRACT
+# Keys whose key-down carries no character and that msvcrt drops silently.
+_VK_MODIFIERS = frozenset({0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C, 0x90, 0x91,
+                           0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5})
+_CTRL_PRESSED = 0x0008 | 0x0004          # LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED
+
+
+def _console_peek() -> Callable[[], str | None] | None:
+    """A look at the head of the console input queue, ahead of ``msvcrt``.
+
+    Ctrl+Plus / Ctrl+Minus produce no character, so ``getwch`` never returns
+    them — it skips the event. The returned callable blocks until an event is
+    queued, then: returns a zoom token for those chords (consuming the event);
+    returns "" after consuming an event msvcrt would drop anyway (key-ups,
+    bare modifiers, mouse/focus events) so the Ctrl key-down that precedes
+    the chord cannot hide it; returns None to hand a real key to msvcrt.
+    The factory returns None where stdin is not a console (tests, pipes).
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _KeyEvent(ctypes.Structure):
+        _fields_ = [("bKeyDown", wintypes.BOOL), ("wRepeatCount", wintypes.WORD),
+                    ("wVirtualKeyCode", wintypes.WORD), ("wVirtualScanCode", wintypes.WORD),
+                    ("UnicodeChar", wintypes.WCHAR), ("dwControlKeyState", wintypes.DWORD)]
+
+    class _Event(ctypes.Union):
+        _fields_ = [("KeyEvent", _KeyEvent), ("_raw", ctypes.c_byte * 16)]
+
+    class _Record(ctypes.Structure):
+        _fields_ = [("EventType", wintypes.WORD), ("Event", _Event)]
+
+    k32 = ctypes.windll.kernel32
+    handle = k32.GetStdHandle(-10)
+    mode = wintypes.DWORD()
+    if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+        return None
+    rec = _Record()
+    count = wintypes.DWORD()
+
+    def consume() -> None:
+        k32.ReadConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count))
+
+    def peek() -> str | None:
+        # 100 ms slices, so a Ctrl+C at the prompt is still raised promptly.
+        while k32.WaitForSingleObject(handle, 100) != 0:
+            pass
+        if not k32.PeekConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count)) or not count.value:
+            return ""
+        if rec.EventType != 1:  # not a KEY_EVENT
+            consume()
+            return ""
+        key = rec.Event.KeyEvent
+        if key.bKeyDown and key.dwControlKeyState & _CTRL_PRESSED:
+            if key.wVirtualKeyCode in _VK_ZOOM_IN:
+                consume()
+                return ZOOM_IN
+            if key.wVirtualKeyCode in _VK_ZOOM_OUT:
+                consume()
+                return ZOOM_OUT
+        if not key.bKeyDown or (key.UnicodeChar == "\x00" and key.wVirtualKeyCode in _VK_MODIFIERS):
+            consume()
+            return ""
+        return None
+
+    return peek
+
 
 def windows_key_reader() -> Callable[[], str]:
     """Token stream over ``msvcrt``.
@@ -95,16 +191,101 @@ def windows_key_reader() -> Callable[[], str]:
     traceback submits the first line and leaves the rest as stray commands.
     """
     import msvcrt
+    peek = _console_peek()
+    pending: list[str] = []
 
     def read() -> str:
+        if pending:
+            return pending.pop(0)
+        while peek is not None:
+            token = peek()
+            if token is None:
+                break
+            if token:
+                return token
         ch = msvcrt.getwch()
-        if ch in ("\x00", "\xe0"):
-            return _EXTENDED.get(msvcrt.getwch(), "")
-        if ch == "\r":
-            return NEWLINE if msvcrt.kbhit() else ENTER
-        return _CONTROL.get(ch, ch)
+        if not msvcrt.kbhit():
+            # Ordinary typing: one key, nothing queued behind it.
+            if ch in ("\x00", "\xe0"):
+                return _EXTENDED.get(msvcrt.getwch(), "")
+            return _CONTROL.get(ch, ENTER if ch == "\r" else ch)
+        # A burst. Ctrl+V in a classic console injects the clipboard as
+        # keystrokes, so drain everything queued (with a short grace period
+        # for the console to finish injecting) and hand it over as ONE paste:
+        # one insert, one redraw, and never a submit — the old
+        # one-key-at-a-time path retyped the block visibly and treated a
+        # carriage return with an empty queue behind it as Enter, so a block
+        # that ended in a newline sent itself.
+        raw = [ch]
+        while True:
+            while msvcrt.kbhit():
+                raw.append(msvcrt.getwch())
+            time.sleep(_BURST_GRACE_S)
+            if not msvcrt.kbhit():
+                break
+        if _is_paste(raw):
+            return PASTE + _paste_text(raw)
+        tokens = _burst_tokens(raw)
+        pending.extend(tokens[1:])
+        return tokens[0] if tokens else ""
 
     return read
+
+
+_BURST_GRACE_S = 0.02
+_PASTE_MIN_CHARS = 3
+
+
+def _is_paste(raw: list[str]) -> bool:
+    """Three or more queued characters is a paste, not key rollover."""
+    return len(raw) >= _PASTE_MIN_CHARS
+
+
+def _burst_tokens(raw: list[str]) -> list[str]:
+    """A short burst (fast typing) replayed as ordinary tokens."""
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        i += 1
+        if ch in ("\x00", "\xe0"):
+            if i < len(raw):
+                out.append(_EXTENDED.get(raw[i], ""))
+                i += 1
+            continue
+        if ch == "\r":
+            out.append(ENTER if i == len(raw) else NEWLINE)
+            continue
+        out.append(_CONTROL.get(ch, ch))
+    return [t for t in out if t]
+
+
+def _paste_text(raw: list[str]) -> str:
+    """Clipboard keystrokes as text: CR and CRLF become newlines, tabs become
+    four spaces (the editor measures a tab as one cell), extended-key pairs
+    and other control characters are dropped, and one trailing newline is
+    removed so the cursor lands at the end of the last pasted line."""
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        i += 1
+        if ch in ("\x00", "\xe0"):
+            i += 1
+            continue
+        if ch == "\r":
+            out.append("\n")
+            if i < len(raw) and raw[i] == "\n":
+                i += 1
+            continue
+        if ch == "\n":
+            out.append("\n")
+        elif ch == "\t":
+            out.append("    ")
+        elif ch >= " " and ch != "\x7f":
+            out.append(ch)
+    text = "".join(out)
+    return text[:-1] if text.endswith("\n") else text
 
 
 # ── history ─────────────────────────────────────────────────────────────────
@@ -234,12 +415,20 @@ class LineEditor:
         write: Callable[[str], None] | None = None,
         width: int | None = None,
         styled: bool | None = None,
+        margin: int = 0,
+        on_zoom: Callable[[int], Any] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
         self._read_key = read_key or windows_key_reader()
         self._write = write or (lambda s: (sys.stdout.write(s), sys.stdout.flush()) and None)
         self._forced_width = width
+        # Left margin the output stream adds after every "\n" and "\r"
+        # (ui.install_margin). Rows then start `margin` columns in, so the
+        # usable width shrinks by that much and wraps must be explicit
+        # newlines — a terminal auto-wrap would start the next row at column 0.
+        self.margin = max(0, int(margin or 0))
+        self.on_zoom = on_zoom
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
@@ -260,13 +449,23 @@ class LineEditor:
         except OSError:
             return 80
 
+    @property
+    def usable(self) -> int:
+        """Columns a row can hold inside the margins — the same figure the
+        output stream wraps at (ui._Margin.usable), so it never wraps us."""
+        return max(10, self.width - 2 * self.margin)
+
     def _pad(self, visible: int) -> str:
         """See module docstring: kill the exact-multiple wrap ambiguity."""
-        w = self.width
+        w = self.usable
         return " " if visible and visible % w == 0 else ""
 
     def _rows(self, visible: int) -> int:
-        return visible // self.width + 1
+        return visible // self.usable + 1
+
+    def _fit(self, text: str) -> str:
+        """With a margin, break rows with explicit newlines (see __init__)."""
+        return _wrap_visible(text, self.usable) if self.margin else text
 
     # -- rendering ----------------------------------------------------------
 
@@ -298,10 +497,10 @@ class LineEditor:
         cursor_row = 0
         for i, (text, vis) in enumerate(logical):
             if i == cursor_logical:
-                cursor_row = total_rows + cursor_vis // self.width
-            pieces.append(text + self._pad(vis))
+                cursor_row = total_rows + cursor_vis // self.usable
+            pieces.append(self._fit(text + self._pad(vis)))
             total_rows += self._rows(vis)
-        return "\n".join(pieces), total_rows, cursor_row, cursor_vis % self.width
+        return "\n".join(pieces), total_rows, cursor_row, cursor_vis % self.usable
 
     def _move_to_anchor(self) -> str:
         """Cursor → column 0 of the first rendered row."""
@@ -545,6 +744,16 @@ class LineEditor:
             self.buffer, self.pos = "", 0
             self._hist_index = None
             return None
+        if key in (ZOOM_IN, ZOOM_OUT):
+            if self.on_zoom is not None and self.on_zoom(1 if key == ZOOM_IN else -1):
+                # The handler redrew the screen: the prompt is gone and the
+                # cursor sits on a fresh row, so the next render starts there.
+                self._cursor_row = 0
+                self._rendered_rows = 0
+            return None
+        if key.startswith(PASTE):
+            self.insert(key[len(PASTE):])
+            return None
         if len(key) == 1 and (key.isprintable() or key == " "):
             self.insert(key)
         return None
@@ -556,11 +765,14 @@ def make_reader(
     config: dict[str, Any],
     commands: Sequence[str],
     config_keys: Callable[[], Iterable[str]] | None = None,
+    on_zoom: Callable[[int], Any] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
     Callers fall back to ``input()`` on None, so a non-tty (piped stdin, CI,
-    ``--raw``) keeps working exactly as before.
+    ``--raw``) keeps working exactly as before. ``on_zoom`` receives +1 / -1
+    for Ctrl+Plus / Ctrl+Minus; the margin follows config["side_padding"],
+    the same value the REPL hands ui.install_margin.
     """
     if not bool(config.get("rich_input", True)):
         return None
@@ -577,5 +789,7 @@ def make_reader(
     editor = LineEditor(
         history=History(path, int(config.get("input_history_limit", 500))),
         completer=default_completer(commands, config_keys),
+        margin=int(config.get("side_padding", 0) or 0),
+        on_zoom=on_zoom,
     )
     return editor.read
