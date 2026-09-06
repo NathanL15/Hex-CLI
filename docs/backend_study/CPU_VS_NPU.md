@@ -380,14 +380,24 @@ the 60 s watchdog's abort has no effect. Counts, four-turn conversations on batt
 | polling off + `sustained_high_performance` | 1 / 7 |
 | polling off + one CPU core kept busy | 1 / 19 |
 | polling on, 1 host thread | 1 / 5 |
-| polling off + `hmx_timeout_us` 5,000,000 (default 300,000) | **0 / 12** — the only clean run; a lead, not a fix (37 % chance of 0/12 at the observed rate) |
+| polling off + `hmx_timeout_us` 5,000,000 (default 300,000) | 1 / ~55 (48 clean, then a 740 s stall) — lowers the rate, does not remove it |
 
 On AC the same request shapes ran ~1,500 times with one hang. So the hang is a property of
 the NPU on DC power, present in the shipped 0.2.1 configuration too; the polling flag, the
 HTP profile, RPC latency and CPU idle states do not change it. Raising the accelerator's HMX
-timeout from 0.3 s to 5 s is the one variant that ran clean (0 in 12) and deserves a longer run. Modern Standby entries in the
+timeout from 0.3 s to 5 s ran 48 requests clean and then stalled for 740 s: a lower rate, not a fix. Modern Standby entries in the
 System log do not coincide with the stalls. It is not a 2.6 regression, but it is the most
 important open defect for battery users, and the right fixes are outside the config: npurun
 should answer the client with an error the moment its watchdog fires (today the stream
 stays open until the client's own timeout), and the driver-level cause needs a Qualcomm
 report with the 1011 signature.
+
+**Bounding the stall (fork 0.2.3).** The watchdog now ends the client's request when it fires:
+the SSE stream closes with an `inference_error` event (and ends on its first terminal item
+instead of waiting for a next item a wedged query never sends), the blocking endpoint answers
+504. Measured on battery with the same conversation pattern: the stalled turn cost the client
+97 s instead of 400 s. The inference permit stays held until Genie finally returns, so for the
+next few minutes requests get an immediate 429 ("busy") rather than a second wedged query;
+Hex surfaces that as a backend-busy error after its 25 s wait. The remaining gap is a server
+self-restart when the query has not returned a minute after the watchdog, which needs a
+supervisor on the Hex side.

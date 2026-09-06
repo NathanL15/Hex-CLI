@@ -4,6 +4,17 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.6.1 — 2026-09-06
+
+### A stalled NPU request now fails in a minute instead of six
+
+On battery power the NPU occasionally fails a long-context request (see 2.6.0)
+and the query did not return until Hex's own 300 s timeout. npurun 0.2.3 ends the
+request when its 60 s watchdog fires: Hex sees an error and can retry, and the
+stalled turn costs ~97 s instead of ~400 s. Requests that arrive while the
+wedged query still holds the NPU get "busy" immediately. Requires the 0.2.3
+`npurun-arm64.exe`.
+
 ## 2.6.0 — 2026-09-06
 
 Requires the 0.2.2 `npurun-arm64.exe` from this release (the runtime overrides,
