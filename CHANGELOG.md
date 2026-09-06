@@ -4,6 +4,51 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.6.0 — 2026-09-06
+
+Requires the 0.2.2 `npurun-arm64.exe` from this release (the runtime overrides,
+the forced prewarm and the async dialog init are all in the binary; the 0.2.1
+binary ignores the new variables and simply behaves as before).
+
+### The NPU server no longer spins three cores while idle
+
+The Genie bundle ships `poll: true`, which makes npurun's host threads
+busy-poll the NPU around the clock: 2.7 cores and +11 W with nobody typing,
++11 W while decoding, and the SoC at ~70 °C. hexcli-fork npurun 0.2.2 turns
+host polling off by default (`NPURUN_HTP_POLL=0`, set explicitly by the
+launcher). Measured on the X Elite, 2026-09-05, same bundle: idle 4.4 W
+instead of 14.4 W, decode 19 tok/s instead of 15.5 at 9.8 W instead of
+21 W (0.55 J per token instead of 1.44), SoC ~40 °C, and no loss under a
+saturated CPU. Cost: first-token latency +0.1–0.3 s. Quality gate: extended
+suite 62/82 with polling off vs 61/82 with it on, same seed, same evening;
+smoke 19/20 twice. Set `NPURUN_HTP_POLL=1` before launching to get the old
+behaviour back. Full study: `docs/backend_study/`.
+
+### The first turn no longer pays the 2,300-token prefill
+
+While the banner prints, Hex now hands the server its system prompt
+(`/v1/npurun/prewarm` with `force`, npurun 0.2.2), so the first request
+extends a warm cache: 0.85 s to first token instead of 4.2 s (or ~9 s when
+the server still held another conversation). Measured on the way: Genie's
+Rewind reuses a shared prefix and can drop at most ~600 cached tokens of
+tail; the cache tops out near 3.3K tokens (extension fails at ~3.5K); with
+`allow-async-init` a dialog rebuild costs 2.9 s instead of 4.3 s, which the
+fork now turns on by default. A second, spare Genie dialog to hide rebuilds
+entirely is not possible on 16 GB: the second context binary fails to load
+(error 1007) once the first holds its 5.8 GB. Decode speed falls from 19 to
+13.5 tok/s between an empty context and 2K tokens, so the length of the
+system prompt itself is now the largest remaining latency lever.
+
+### On battery: two hours back, and a hang that was always there
+
+Unplugged, the resident server now idles at the machine's own 7.4 W (6.9 h)
+instead of 10.5 W (4.8 h), and a four-turn conversation costs 190 mWh instead
+of 242. The same session found that on battery, long-context requests
+occasionally block for ~380 s with an NPU graph error; the untouched 0.2.1
+configuration does it too (1 in 31 requests), so it is a platform issue on DC
+power, not a 2.6 regression. Details and counts in
+`docs/backend_study/CPU_VS_NPU.md` §13.
+
 ## 2.5.1 — 2026-09-04
 
 ### The "thinking… until Ctrl+C" freeze was the console, not the model
