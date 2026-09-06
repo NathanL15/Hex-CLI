@@ -30,3 +30,11 @@ __pycache__/
 # Editor/OS cruft
 .DS_Store
 Thumbs.db
+
+# Backend study raw measurements (hundreds of counter CSVs); the paper, runbook,
+# summaries and harness are tracked, the raw data is not.
+docs/backend_study/data/
+docs/backend_study/data_npu_ab/
+docs/backend_study/_pre_restart/
+tools/backend_bench/.tok_*.txt
+tools/backend_bench/.battery_probe.ps1

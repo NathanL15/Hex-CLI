@@ -1,0 +1,497 @@
+{
+ "unit_of_value": "one solved task",
+ "configs": {
+  "v251": "Hex v2.5.1, npurun 0.2.1 (polling on)",
+  "v26": "Hex 2.6 candidate: npurun 0.2.2 polling off + async init + start-up prime",
+  "lcpp": "CPU reference: upstream llama.cpp Q4_0 (-t 6 -tb 12)",
+  "ceiling": "best achievable per axis from levers that exist"
+ },
+ "axes": [
+  {
+   "axis": "task pass rate, extended suite",
+   "direction": "higher",
+   "target": 0.83,
+   "unit": "fraction",
+   "values": {
+    "v251": 0.793,
+    "v26": 0.756,
+    "lcpp": null,
+    "ceiling": 0.83
+   },
+   "note": "v2.5.1: 165/208 (5 runs/case, Wilson (0.733, 0.843)); 2.6: 62/82 (Wilson (0.653, 0.836)); paired polling-on control 61/82. Target = project baseline 97/117. llama.cpp: not run on the extended suite; smoke 14/14 valid with 6 client timeouts.",
+   "scores": {
+    "v251": 95.5,
+    "v26": 91.1,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "wall per task, extended suite",
+   "direction": "lower",
+   "target": 20.0,
+   "unit": "s",
+   "values": {
+    "v251": 7.16,
+    "v26": 8.0,
+    "lcpp": null,
+    "ceiling": 12.0
+   },
+   "note": "median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: \u221240 % from a 1,200-token prompt (30 % decode tax) and fewer rebuilds.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 100.0,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "energy per solved task, extended suite",
+   "direction": "lower",
+   "target": 200.0,
+   "unit": "J",
+   "values": {
+    "v251": 453.6,
+    "v26": 215.4,
+    "lcpp": 662.3,
+    "ceiling": 150.0
+   },
+   "note": "system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: 2.6 minus prompt-length savings.",
+   "scores": {
+    "v251": 44.1,
+    "v26": 92.9,
+    "lcpp": 30.2,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "first LLM call, whole latency",
+   "direction": "lower",
+   "target": 4.0,
+   "unit": "s",
+   "values": {
+    "v251": 5.53,
+    "v26": 6.19,
+    "lcpp": null,
+    "ceiling": 3.0
+   },
+   "note": "median first LLM call per run (prefill + generation of the first step) from eval traces, paired same-evening runs; the earlier 5-run baseline measured 3.41 s. Polling off adds wake-up latency to every call.",
+   "scores": {
+    "v251": 72.3,
+    "v26": 64.6,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "first turn after server start",
+   "direction": "lower",
+   "target": 1.0,
+   "unit": "s",
+   "values": {
+    "v251": 4.2,
+    "v26": 0.85,
+    "lcpp": 1.3,
+    "ceiling": 0.85
+   },
+   "note": "fresh server each rep, A/B with and without the start-up prime; llama.cpp = warm prefix.",
+   "scores": {
+    "v251": 23.8,
+    "v26": 100.0,
+    "lcpp": 76.9,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "follow-up turn, first token",
+   "direction": "lower",
+   "target": 1.0,
+   "unit": "s",
+   "values": {
+    "v251": 0.989,
+    "v26": 1.151,
+    "lcpp": 3.565,
+    "ceiling": 0.7
+   },
+   "note": "four-turn Hex conversation, turn 2 (+350 tokens); ceiling = measured pure extension cost.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 86.9,
+    "lcpp": 28.1,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "prompt tokens per task (input effectiveness)",
+   "direction": "lower",
+   "target": 1500.0,
+   "unit": "tokens",
+   "values": {
+    "v251": 2409.0,
+    "v26": 2409.0,
+    "lcpp": null,
+    "ceiling": 1300.0
+   },
+   "note": "median estimated input tokens per run; the 2,331-token system prompt is most of it. Ceiling: V2 plan's \u2264 800-token core + tools.",
+   "scores": {
+    "v251": 62.3,
+    "v26": 62.3,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "LLM calls per task (flow)",
+   "direction": "lower",
+   "target": 2.0,
+   "unit": "calls",
+   "values": {
+    "v251": 1.0,
+    "v26": 1.0,
+    "lcpp": null,
+    "ceiling": 2.0
+   },
+   "note": "median LLM calls per run; every extra step re-sends the transcript.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 100.0,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "in-line rebuilds per turn (flow)",
+   "direction": "lower",
+   "target": 0.0,
+   "unit": "rebuilds/turn",
+   "values": {
+    "v251": 0.0,
+    "v26": 0.0,
+    "lcpp": 0.0,
+    "ceiling": 0.0
+   },
+   "note": "six-turn real Hex scenario with 10 s think time: 0 in-line rebuilds on 2.6 (prewarm hid all); 2.5.1 has the same prewarm and is assumed equal (not re-measured). Score: 100 at 0, 50 at 1/turn.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 100.0,
+    "lcpp": 100.0,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "decode at Hex context",
+   "direction": "higher",
+   "target": 15.0,
+   "unit": "tok/s",
+   "values": {
+    "v251": 10.391,
+    "v26": 11.771,
+    "lcpp": 11.911,
+    "ceiling": 13.5
+   },
+   "note": "turn-2 decode rate at ~2.7K tokens. Ceiling: decode-vs-context curve at a 1,300-token prompt.",
+   "scores": {
+    "v251": 69.3,
+    "v26": 78.5,
+    "lcpp": 79.4,
+    "ceiling": 90.0
+   }
+  },
+  {
+   "axis": "idle power, server loaded",
+   "direction": "lower",
+   "target": 4.4,
+   "unit": "W",
+   "values": {
+    "v251": 14.351,
+    "v26": 4.4,
+    "lcpp": 4.916,
+    "ceiling": 4.4
+   },
+   "note": "machine floor 3.4 W; target = floor + 1 W.",
+   "scores": {
+    "v251": 30.7,
+    "v26": 100.0,
+    "lcpp": 89.5,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "SoC temperature, sustained decode",
+   "direction": "lower",
+   "target": 60.0,
+   "unit": "\u00b0C",
+   "values": {
+    "v251": 69.841,
+    "v26": 41.95,
+    "lcpp": 95.017,
+    "ceiling": 43.0
+   },
+   "note": "TZ2 at the end of a 240 s decode run.",
+   "scores": {
+    "v251": 85.9,
+    "v26": 100.0,
+    "lcpp": 63.1,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "foreground work slowdown (components)",
+   "direction": "lower",
+   "target": 5.0,
+   "unit": "%",
+   "values": {
+    "v251": 0.7,
+    "v26": 2.6,
+    "lcpp": 54.1,
+    "ceiling": 0.0
+   },
+   "note": "worst of three foreground jobs while the backend decodes. Score: 100 at \u2264 5 %.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 100.0,
+    "lcpp": 9.2,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "memory footprint",
+   "direction": "lower",
+   "target": 4.0,
+   "unit": "GB",
+   "values": {
+    "v251": 5.8,
+    "v26": 5.8,
+    "lcpp": 2.85,
+    "ceiling": 5.8
+   },
+   "note": "NPU shared memory for the 4-part W4A16 bundle; no known lever on this runtime, so the ceiling equals today.",
+   "scores": {
+    "v251": 69.0,
+    "v26": 69.0,
+    "lcpp": 100.0,
+    "ceiling": 69.0
+   }
+  },
+  {
+   "axis": "robustness on AC: hangs per 100 requests",
+   "direction": "lower",
+   "target": 0.0,
+   "unit": "hangs/100",
+   "values": {
+    "v251": 0.0,
+    "v26": 0.133,
+    "lcpp": null,
+    "ceiling": 0.0
+   },
+   "note": "v2.5.1: 0 hangs in ~735 requests on record today; 2.6: 1 hang (unreproduced) in ~753 requests (eval LLM calls + bench + 310 stall-hunt requests). Score: 100 \u2212 20 \u00d7 hangs per 100.",
+   "scores": {
+    "v251": 100.0,
+    "v26": 97.3,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "robustness on battery: hangs per 100 requests (platform)",
+   "direction": "lower",
+   "target": 0.0,
+   "unit": "hangs/100",
+   "values": {
+    "v251": 3.2,
+    "v26": 8.3,
+    "lcpp": null,
+    "ceiling": 3.2
+   },
+   "note": "unplugged, four-turn conversations at 3\u20133.5K tokens: polling on 1 hang in 31 requests; polling off 5 in ~60 across four variants (default, rpc_control_latency 10, sustained profile, one busy CPU core). Same signature every time: HTP 'Failed to execute graph. Error 1011', query blocked ~380 s until the client timeout, watchdog abort ineffective. Present in the untouched 0.2.1 configuration, so a platform/driver issue on DC power, not a 2.6 regression. Score: 100 \u2212 20 \u00d7 hangs per 100.",
+   "scores": {
+    "v251": 36.0,
+    "v26": 0.0,
+    "lcpp": null,
+    "ceiling": 36.0
+   }
+  },
+  {
+   "axis": "robustness: invalid eval runs",
+   "direction": "lower",
+   "target": 0.0,
+   "unit": "runs",
+   "values": {
+    "v251": 0,
+    "v26": 0,
+    "lcpp": 3,
+    "ceiling": 0.0
+   },
+   "note": "backend-unreachable/timeouts across the paired extended suites (82 runs each) and llama.cpp's smoke (20 runs).",
+   "scores": {
+    "v251": 100,
+    "v26": 100,
+    "lcpp": 70,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "battery: hours with the server idle",
+   "direction": "higher",
+   "target": 6.5,
+   "unit": "h",
+   "values": {
+    "v251": 4.8,
+    "v26": 6.9,
+    "lcpp": null,
+    "ceiling": 6.9
+   },
+   "note": "unplugged, discharge rate from the battery itself (WMI) over 60 s with the server loaded and idle; machine idle alone 7.5 W \u2248 6.8 h. Target: within 0.3 h of the machine's own idle.",
+   "scores": {
+    "v251": 73.8,
+    "v26": 100.0,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "battery: mWh per 4-turn conversation",
+   "direction": "lower",
+   "target": 200.0,
+   "unit": "mWh",
+   "values": {
+    "v251": 241.8,
+    "v26": 189.9,
+    "lcpp": null,
+    "ceiling": 150.0
+   },
+   "note": "unplugged; median of the non-hung four-turn conversations with 5 s think time. Ceiling: shorter prompt.",
+   "scores": {
+    "v251": 82.7,
+    "v26": 100.0,
+    "lcpp": null,
+    "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "fan / acoustic",
+   "direction": "lower",
+   "target": null,
+   "unit": "dB",
+   "values": {
+    "v251": null,
+    "v26": null,
+    "lcpp": null,
+    "ceiling": null
+   },
+   "note": "NOT MEASURED. Drawn as a gap.",
+   "scores": {
+    "v251": null,
+    "v26": null,
+    "lcpp": null,
+    "ceiling": null
+   }
+  }
+ ],
+ "sources": {
+  "ext_off": {
+   "passes": 62,
+   "runs": 82,
+   "invalid": 0,
+   "pass_rate": 0.756,
+   "wilson95": [
+    0.653,
+    0.836
+   ],
+   "wall_s_med": 8.0,
+   "in_tok_med": 2409.0,
+   "first_llm_s_med": 6.19,
+   "total_llm_s_med": 7.72,
+   "llm_calls_med": 1.0,
+   "llm_calls_total": 159,
+   "n_traces": 82
+  },
+  "ext_on": {
+   "passes": 61,
+   "runs": 82,
+   "invalid": 0,
+   "pass_rate": 0.744,
+   "wilson95": [
+    0.64,
+    0.826
+   ],
+   "wall_s_med": 7.16,
+   "in_tok_med": 2409.0,
+   "first_llm_s_med": 5.53,
+   "total_llm_s_med": 7.12,
+   "llm_calls_med": 1.0,
+   "llm_calls_total": 155,
+   "n_traces": 82
+  },
+  "baseline_251": {
+   "passes": 165,
+   "runs": 208,
+   "pass_rate": 0.793,
+   "wilson95": [
+    0.733,
+    0.843
+   ],
+   "wall_s_med": 6.9,
+   "in_tok_med": 2409.0,
+   "first_llm_s_med": 3.41,
+   "total_llm_s_med": 6.78,
+   "llm_calls_med": 1.0,
+   "llm_calls_total": 406,
+   "n_traces": 208
+  },
+  "energy_ext_off": {
+   "cases": 41,
+   "joined": 41,
+   "passes": 62,
+   "runs": 82,
+   "invalid": 0,
+   "j_per_pass": 215.4,
+   "wall_per_pass_s": 26.4,
+   "total_j": 13353.0
+  },
+  "energy_ext_on": {
+   "cases": 41,
+   "joined": 41,
+   "passes": 61,
+   "runs": 82,
+   "invalid": 0,
+   "j_per_pass": 453.6,
+   "wall_per_pass_s": 23.6,
+   "total_j": 27671.4
+  },
+  "smoke_26": {
+   "cases": 20,
+   "joined": 20,
+   "passes": 38,
+   "runs": 40,
+   "invalid": 0,
+   "j_per_pass": 161.0,
+   "wall_per_pass_s": 16.5,
+   "total_j": 6119.1
+  },
+  "smoke_251": {
+   "cases": 10,
+   "joined": 10,
+   "passes": 20,
+   "runs": 20,
+   "invalid": 0,
+   "j_per_pass": 317.7,
+   "wall_per_pass_s": 16.4,
+   "total_j": 6354.1
+  },
+  "smoke_lcpp": {
+   "cases": 10,
+   "joined": 10,
+   "passes": 14,
+   "runs": 14,
+   "invalid": 3,
+   "j_per_pass": 662.3,
+   "wall_per_pass_s": 14.3,
+   "total_j": 9272.0
+  },
+  "request_denominators": {
+   "v251": 735,
+   "v26": 753
+  }
+ }
+}
