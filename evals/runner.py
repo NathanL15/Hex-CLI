@@ -79,6 +79,7 @@ def run_metadata(config: dict[str, Any]) -> dict[str, Any]:
     meta["server"] = chatlog._server_info(config)
     meta["qairt"] = os.environ.get("QNN_SDK_ROOT", "")
     meta["rewind_mode"] = os.environ.get("NPURUN_REWIND", "")
+    meta["htp_poll"] = os.environ.get("NPURUN_HTP_POLL", "")
     return meta
 
 

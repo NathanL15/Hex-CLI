@@ -343,6 +343,7 @@ def run_repl(config: dict[str, Any]) -> int:
     ui.install_margin(int(config.get("side_padding", 0) or 0))
     ui.apply_saved_console_font()
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
+    sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
     if config.get("memory_dreaming", False):
         memory.start_dreaming(lambda: config, sa.llm_generate)
 

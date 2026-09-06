@@ -318,6 +318,13 @@ def _npurun_env() -> dict:
         env["NPURUN_REWIND"] = "2"   # never reset; prefix-match every warm query
     else:
         env.pop("NPURUN_REWIND", None)
+    # Host polling of the NPU (hexcli-fork >= 0.2.2, NPURUN_HTP_POLL). The
+    # bundle ships poll=true, which spins ~3 cores even while idle (+11 W,
+    # SoC ~70 C) and costs decode speed; measured 2026-09-05 with it off:
+    # idle at the machine floor, 19 tok/s instead of 15.5 at half the power.
+    # 0.2.2 defaults to off; set it explicitly so the log records intent and
+    # a user can flip it back with NPURUN_HTP_POLL=1 in their environment.
+    env.setdefault("NPURUN_HTP_POLL", "0")
     return env
 
 

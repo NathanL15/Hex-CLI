@@ -984,6 +984,40 @@ def _prewarm_backend(config: dict[str, Any]) -> None:
     threading.Thread(target=_post, name="hex-prewarm", daemon=True).start()
 
 
+def prime_backend(config: dict[str, Any]) -> None:
+    """Hand the server this session's system prompt before the first turn.
+
+    The first request after a server start otherwise pays the full 2.3K-token
+    prefill (~4 s), or a dialog rebuild on top (~9 s) when the cache holds an
+    older conversation. npurun 0.2.2's `/v1/npurun/prewarm` with `force`
+    prefills the prefix now, while the banner is on screen; the first turn
+    then extends a warm cache (measured 2026-09-05: 0.7–0.8 s to first token
+    instead of 4.2 s). The prompt built here differs from the first turn's
+    only in the query-dependent tail, which is well inside the runtime's
+    ~600-token Rewind discard limit. Fire-and-forget; older servers 404.
+    """
+    if config.get("backend") != "openai" or not config.get("prewarm_after_turn", True):
+        return
+    if config.get("autopilot_system_prompt", "").strip():
+        return
+    try:
+        base = str(config["openai_compatible"]["base_url"]).rstrip("/")
+        system_prompt = build_autopilot_prompt(cwd=str(Path.cwd()),
+                                               max_steps=int(config.get("max_agent_steps", 15)))
+    except Exception:
+        return
+
+    def _post() -> None:
+        try:
+            http_json_request(f"{base}/npurun/prewarm",
+                              {"messages": [{"role": "system", "content": system_prompt}], "force": True},
+                              {}, 5)
+        except Exception:
+            pass
+
+    threading.Thread(target=_post, name="hex-prime", daemon=True).start()
+
+
 def run_autopilot(
     config: dict[str, Any],
     history: list[dict[str, str]],
