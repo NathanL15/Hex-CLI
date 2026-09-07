@@ -401,3 +401,19 @@ next few minutes requests get an immediate 429 ("busy") rather than a second wed
 Hex surfaces that as a backend-busy error after its 25 s wait. The remaining gap is a server
 self-restart when the query has not returned a minute after the watchdog, which needs a
 supervisor on the Hex side.
+
+## 14. Third round: the prompt-length lever, and the hang re-diagnosed
+
+Written up separately in `PROMPT_LEVER.md`. In one paragraph: the decode rate against context
+is stepped (~20 tok/s under 500 tokens, ~17 to 1,750, ~15 from 2,000 up, flat to 2,750), Hex
+sits in the top step at every stage of every task, and with the prefix cached a shorter
+system prompt buys no time at any size that keeps the rules — production, dedented and
+no-delegate prompts answered the same queries in the same time. What tokens still buy is
+history room. On the way the hang described in §13 turned out to be a long-context failure
+present on AC power: at ~3,065 input tokens the 2.6.1 default hung 9 of 20 requests, async
+dialog init off 1 of 25 and 0 of 20 under the launcher's environment, at 2.5K 0 of 20. The
+launcher now disables `allow-async-init`; the remaining rate at the top of the window is the
+platform issue proper. Two more runtime rules: the Rewind discard limit is exactly 600
+tokens, and a Rewind after a length-truncated reply fails (Genie −1) until the dialog is
+rebuilt.
+

@@ -325,6 +325,13 @@ def _npurun_env() -> dict:
     # 0.2.2 defaults to off; set it explicitly so the log records intent and
     # a user can flip it back with NPURUN_HTP_POLL=1 in their environment.
     env.setdefault("NPURUN_HTP_POLL", "0")
+    # Async dialog init (hexcli-fork >= 0.2.2, NPURUN_HTP_ASYNC_INIT). The
+    # fork turns Genie's `allow-async-init` on for a 1.4 s faster dialog
+    # rebuild. Measured 2026-09-06 (docs/backend_study/PROMPT_LEVER.md §5):
+    # at ~3K tokens of context it multiplies the NPU hang rate about tenfold
+    # (7 of 14 requests hung with it on, 1 of 25 with it off, AC power, host
+    # polling irrelevant). Off by default; NPURUN_HTP_ASYNC_INIT=1 restores it.
+    env.setdefault("NPURUN_HTP_ASYNC_INIT", "0")
     return env
 
 

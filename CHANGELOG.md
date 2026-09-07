@@ -4,6 +4,34 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.6.2 — 2026-09-07
+
+### NPU hangs at long context: async dialog init off by default
+
+2.6.0 turned Genie's `allow-async-init` on for a 1.4 s faster dialog rebuild. A
+dedicated probe (`tools/backend_bench/stall_rate.py`: Hex's prompt plus an
+800-token tool result, about 3,065 input tokens, on AC power) hung 9 of 20
+requests with it on and 1 of 25 with it off, 0 of 20 under the launcher's new
+environment. The hang the 2.6.0/2.6.1 notes attributed to battery power is a
+long-context failure that async init multiplies; host polling does not affect
+it. The launcher now sets `NPURUN_HTP_ASYNC_INIT=0`; a dialog rebuild costs
+4.3 s again instead of 2.9 s, cold start 5 s instead of 3.6 s. Smoke suite
+20/20. `NPURUN_HTP_ASYNC_INIT=1` in the environment restores the old behaviour.
+
+### The prompt-length lever, measured and closed
+
+`docs/backend_study/PROMPT_LEVER.md`. The decode rate is stepped, not linear,
+against context (~17 tok/s from 500 to 1,750 tokens, ~15 from 2,000 up), and
+the prefix is cached, so a shorter system prompt buys no time at any size that
+keeps the rules: the production prompt, a dedented copy (−124 tokens) and a
+copy without the never-used delegate schema (−240) answered the same queries in
+the same time to the hundredth of a second. Removing the delegate schema
+degraded outputs. The radar's prompt-token and wall-time ceilings are corrected
+and a "hangs per 100 requests at 3K context" axis added. New probes:
+`decode_vs_context.py`, `prompt_latency_probe.py`, `stall_rate.py`,
+`rewind_probe.py --ks` (the Rewind discard limit is exactly 600 tokens; 700
+rebuilds).
+
 ## 2.6.1 — 2026-09-06
 
 ### A stalled NPU request now fails in a minute instead of six

@@ -49,6 +49,7 @@ def main() -> int:
     ap.add_argument("--tag", required=True)
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--ks", default="100,300,600,1000,1500", help="discard sizes for --mode distance")
     ap.add_argument("--mode", default="shapes", choices=["shapes", "distance", "distance2", "extend"])
     ap.add_argument("--out", default=str(REPO / "docs/backend_study/data_npu_ab"))
     args = ap.parse_args()
@@ -80,7 +81,7 @@ def main() -> int:
     if args.mode == "distance":
         # cache = S + U_k + A; then S + short  → rewind distance ≈ k + |A|
         for rep in range(args.reps):
-            for k in (100, 300, 600, 1000, 1500):
+            for k in [int(x) for x in args.ks.split(',')]:
                 u = uuid.uuid4().hex[:6]
                 filler = bench.make_text(k, gguf, seed=k * 7 + rep)
                 step(f"D{k:4d}a S+U{k} (set cache)", [{"role": "system", "content": S}, {"role": "user", "content": filler + "\n\nSay OK. (" + u + ")"}], uuid.uuid4().hex, rep)

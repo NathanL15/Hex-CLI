@@ -37,7 +37,7 @@
     "lcpp": null,
     "ceiling": 12.0
    },
-   "note": "median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: \u221240 % from a 1,200-token prompt (30 % decode tax) and fewer rebuilds.",
+   "note": "median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: the 20 % of first calls that pay an in-line rebuild (PROMPT_LEVER.md \u00a73.3) moved to a background prewarm; prompt length is not a lever (\u00a73.2).",
    "scores": {
     "v251": 100.0,
     "v26": 100.0,
@@ -51,12 +51,12 @@
    "target": 200.0,
    "unit": "J",
    "values": {
-    "v251": 453.6,
+    "v251": 453.8,
     "v26": 215.4,
     "lcpp": 662.3,
-    "ceiling": 150.0
+    "ceiling": 180.0
    },
-   "note": "system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: 2.6 minus prompt-length savings.",
+   "note": "system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: 2.6 minus the in-line rebuild share (~20 % of LLM time); prompt-length savings measured at zero (PROMPT_LEVER.md).",
    "scores": {
     "v251": 44.1,
     "v26": 92.9,
@@ -130,14 +130,14 @@
     "v251": 2409.0,
     "v26": 2409.0,
     "lcpp": null,
-    "ceiling": 1300.0
+    "ceiling": 2280.0
    },
-   "note": "median estimated input tokens per run; the 2,331-token system prompt is most of it. Ceiling: V2 plan's \u2264 800-token core + tools.",
+   "note": "median estimated input tokens per run; the 2,331-token system prompt is most of it. Ceiling: the dedented prompt (\u2212124 tokens), the only cut that changes no words and no outputs; every rule cut regressed and buys no speed (PROMPT_LEVER.md \u00a72\u20134).",
    "scores": {
     "v251": 62.3,
     "v26": 62.3,
     "lcpp": null,
-    "ceiling": 100.0
+    "ceiling": 65.8
    }
   },
   {
@@ -187,14 +187,14 @@
     "v251": 10.391,
     "v26": 11.771,
     "lcpp": 11.911,
-    "ceiling": 13.5
+    "ceiling": 14.8
    },
-   "note": "turn-2 decode rate at ~2.7K tokens. Ceiling: decode-vs-context curve at a 1,300-token prompt.",
+   "note": "turn-2 decode rate at ~2.7K tokens. Ceiling: today's rate \u2014 the decode curve is flat from 2,000 to 2,750 tokens and no safe prompt leaves that step (PROMPT_LEVER.md \u00a73.1).",
    "scores": {
     "v251": 69.3,
     "v26": 78.5,
     "lcpp": 79.4,
-    "ceiling": 90.0
+    "ceiling": 98.7
    }
   },
   {
@@ -290,6 +290,25 @@
     "v26": 97.3,
     "lcpp": null,
     "ceiling": 100.0
+   }
+  },
+  {
+   "axis": "robustness on AC at 3K context: hangs per 100 requests",
+   "direction": "lower",
+   "target": 0.0,
+   "unit": "hangs/100",
+   "values": {
+    "v251": null,
+    "v26": 45.0,
+    "lcpp": null,
+    "ceiling": 4.0
+   },
+   "note": "stall_rate.py, AC, Hex prompt + 800-token tool result (~3,065 tokens), natural stops, 2026-09-06: 2.6.1 default (async init on) 9 hangs in 20; async init off 1 in 25 (the 2.6.2 default). v2.5.1 not run on this probe (its 0.2.1 binary had no async init; 406 baseline calls incl. ten at 3.3K hung 0 times). Score: 100 \u2212 2 \u00d7 hangs per 100.",
+   "scores": {
+    "v251": null,
+    "v26": 0.0,
+    "lcpp": null,
+    "ceiling": 20.0
    }
   },
   {
@@ -447,7 +466,7 @@
    "invalid": 0,
    "j_per_pass": 215.4,
    "wall_per_pass_s": 26.4,
-   "total_j": 13353.0
+   "total_j": 13357.0
   },
   "energy_ext_on": {
    "cases": 41,
@@ -455,9 +474,9 @@
    "passes": 61,
    "runs": 82,
    "invalid": 0,
-   "j_per_pass": 453.6,
+   "j_per_pass": 453.8,
    "wall_per_pass_s": 23.6,
-   "total_j": 27671.4
+   "total_j": 27679.6
   },
   "smoke_26": {
    "cases": 20,
@@ -465,9 +484,9 @@
    "passes": 38,
    "runs": 40,
    "invalid": 0,
-   "j_per_pass": 161.0,
+   "j_per_pass": 161.1,
    "wall_per_pass_s": 16.5,
-   "total_j": 6119.1
+   "total_j": 6122.6
   },
   "smoke_251": {
    "cases": 10,
