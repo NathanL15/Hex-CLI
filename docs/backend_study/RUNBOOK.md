@@ -51,6 +51,17 @@ Thermal Zone TZ0/TZ2/TZ98, Memory Available MBytes.)
 `python tools/backend_bench/analyze.py --data docs/backend_study/data --out docs/backend_study/summary`
 then charts + paper (`docs/backend_study/CPU_VS_NPU.md`, artifact).
 
+## Third-round probes (2026-09-06/07, `tools/backend_bench/`)
+- `decode_vs_context.py --tag <t> --reps 2` — decode rate vs live context, 250–3,500 tokens.
+- `prompt_latency_probe.py --tag <t> --reps 2 --only A_prod,B_dedent` — Hex-shaped calls per
+  prompt variant, prefix warm; step-0 and step-1 (after a 400-token tool result).
+- `stall_rate.py --tag <t> --user-tokens 800 --n 20 --max-tokens 400 [--env NPURUN_HTP_ASYNC_INIT=0]`
+  — hang rate at ~3K context; restarts the server after each hang. Use natural stops
+  (`--max-tokens 400`): a Rewind after a length-truncated reply fails with Genie −1.
+- `prewarm_tail_probe.py --tag <t> --reps 4 --tail 900 --think 15 [--history 1000]` — the
+  end-of-turn prewarm policy on a real turn shape.
+- `rewind_probe.py --mode distance --ks 600,700,800` — the divergent-Rewind discard limit.
+
 ## Known pitfalls (all hit on 2026-09-05)
 - Peer sessions launching evals on :11435 → coordinate first.
 - multiprocessing children outlive a killed parent → load.py `spin` per-process, killed by pid.
@@ -59,3 +70,9 @@ then charts + paper (`docs/backend_study/CPU_VS_NPU.md`, artifact).
 - npurun Rewind answers a divergent prefix with an empty stream, then rebuilds (~5 s) on retry.
 - Ollama's bundled llama-server prefills at ~27–40 tok/s vs 114–212 tok/s upstream (build flags).
 - Ollama's `ollama serve` leaves its runner alive when killed.
+- (2026-09-07) `bench.BASES["npu"]` has no `/v1`; a prewarm posted to `<base>/npurun/prewarm`
+  answers 404 silently. Build the URL with `/v1` (the three probes above do).
+- (2026-09-07) Background eval runs are killed by the low-memory watchdog; run suites as
+  foreground chunks (`evals/run_chunk.py`, or one scenario-run per call for multiturn). The
+  eval runner's single-message latency canaries diverge the KV cache at every chunk boundary,
+  so per-turn first-call latencies in chunked runs include rebuilds the REPL never pays.

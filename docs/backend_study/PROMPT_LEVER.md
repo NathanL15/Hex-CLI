@@ -162,18 +162,17 @@ Two smaller runtime rules, both reproducible:
    cost seconds. Benefit: the hang at long context goes from one in two to
    one in twenty-five. Gate: smoke suite + the 3K stall arm under the
    launcher's own environment, then release as 2.6.2.
-2. **Rebuild avoidance instead of prompt cutting** (the 20 % of first calls):
-   at end of turn, when the turn's tail exceeds the 600-token discard limit,
-   prewarm with `force` so the next conversation starts warm; that turns a
-   ~10 s in-line rebuild into a background one during think time.
-3. **Server:** after `finish_reason = length`, mark the cache stale and
-   rebuild on the next request instead of failing the Rewind, resetting, and
-   retrying (three round trips today).
-4. **Radar:** prompt-tokens axis target and the wall/energy ceilings corrected
-   (this document is the evidence); add a "hang rate at 3K" robustness axis
-   so the next runtime change is gated on it.
-5. **Optional, low value:** the dedent, through the full 5-run gate, only for
-   the history room.
+2. ~~**Rebuild avoidance instead of prompt cutting**~~ — **withdrawn, see §7**:
+   built and measured 2026-09-07, no gain at any tail length; the 20 % figure
+   was a harness artefact.
+3. **Server (still open, minor):** after `finish_reason = length`, mark the
+   cache stale and rebuild on the next request instead of failing the Rewind,
+   resetting, and retrying (three round trips today). Hex only hits this on a
+   reply that runs into the window.
+4. **Radar (done):** prompt-tokens ceiling and the wall/energy ceilings
+   corrected; "hangs per 100 requests at 3K context" axis added.
+5. **Optional, low value, not scheduled:** the dedent, through the full
+   5-run gate, only for the history room.
 
 ## 7. Follow-up (2026-09-07): the "rebuild avoidance" lever, measured and withdrawn
 

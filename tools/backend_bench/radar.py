@@ -272,7 +272,7 @@ def main() -> int:
          {"v251": round(100 * 1 / 31, 1), "v26": round(100 * 5 / 60, 1), "lcpp": None, "ceiling": round(100 * 1 / 31, 1)},
          "unplugged, four-turn conversations at 3–3.5K tokens: polling on 1 hang in 31 requests; polling off 5 in ~60 across four variants "
          "(default, rpc_control_latency 10, sustained profile, one busy CPU core). Same signature every time: HTP 'Failed to execute graph. Error 1011', "
-         "query blocked ~380 s until the client timeout, watchdog abort ineffective. Present in the untouched 0.2.1 configuration, so a platform/driver issue on DC power, not a 2.6 regression. Score: 100 − 20 × hangs per 100."),
+         "query blocked ~380 s until the client timeout, watchdog abort ineffective. Present in the untouched 0.2.1 configuration too — but the 2026-09-06 AC probe (next axis) showed it is a long-context failure whose rate 2.6.0's async init multiplied ~10×; 2.6.2 turns async init off. Battery rates here predate that fix. Score: 100 − 20 × hangs per 100."),
         ("robustness: invalid eval runs", "lower", 0.0, "runs",
          {"v251": ext_on["invalid"], "v26": ext_off["invalid"], "lcpp": sm_lcpp["invalid"], "ceiling": 0.0},
          "backend-unreachable/timeouts across the paired extended suites (82 runs each) and llama.cpp's smoke (20 runs)."),

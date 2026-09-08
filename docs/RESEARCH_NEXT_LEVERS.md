@@ -531,7 +531,10 @@ when not the request waits behind it (uc1-t4 +12.9 s, uc1-t6 +26.7 s). ON:
 Rewinds, 36 dialog creations. Chat-log pauses run 11–77 s, median ~20 s.
 Verdict: no measurable benefit at realistic pauses; not a loss either.
 Next lever: an interruptible prewarm (abort the prefill when a request
-arrives) — then ON cannot lose. Files: `evals/results/multiturn_prewarm_{on,off}_20260905.json`.
+arrives) — then ON cannot lose. *(Retired 2026-09-07, roadmap watch items:
+past the divergence ceiling the request needs the rebuilt dialog and the
+prefilled prompt anyway, so aborting the prewarm only moves that work into
+the request.)* Files: `evals/results/multiturn_prewarm_{on,off}_20260905.json`.
 
 ### 8.12 What the corrected graders changed (2026-09-05)
 

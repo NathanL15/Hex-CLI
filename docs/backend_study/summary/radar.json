@@ -322,7 +322,7 @@
     "lcpp": null,
     "ceiling": 3.2
    },
-   "note": "unplugged, four-turn conversations at 3\u20133.5K tokens: polling on 1 hang in 31 requests; polling off 5 in ~60 across four variants (default, rpc_control_latency 10, sustained profile, one busy CPU core). Same signature every time: HTP 'Failed to execute graph. Error 1011', query blocked ~380 s until the client timeout, watchdog abort ineffective. Present in the untouched 0.2.1 configuration, so a platform/driver issue on DC power, not a 2.6 regression. Score: 100 \u2212 20 \u00d7 hangs per 100.",
+   "note": "unplugged, four-turn conversations at 3\u20133.5K tokens: polling on 1 hang in 31 requests; polling off 5 in ~60 across four variants (default, rpc_control_latency 10, sustained profile, one busy CPU core). Same signature every time: HTP 'Failed to execute graph. Error 1011', query blocked ~380 s until the client timeout, watchdog abort ineffective. Present in the untouched 0.2.1 configuration too \u2014 but the 2026-09-06 AC probe (next axis) showed it is a long-context failure whose rate 2.6.0's async init multiplied ~10\u00d7; 2.6.2 turns async init off. Battery rates here predate that fix. Score: 100 \u2212 20 \u00d7 hangs per 100.",
    "scores": {
     "v251": 36.0,
     "v26": 0.0,

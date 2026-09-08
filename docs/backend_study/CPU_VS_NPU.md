@@ -262,7 +262,8 @@ dialog creation (`NPURUN_HTP_POLL`, default off; `NPURUN_HTP_THREADS`,
 are never modified. Hex's launcher sets `NPURUN_HTP_POLL=0` explicitly and the eval
 metadata records it. The remaining levers, in order: prefix reuse across new conversations
 (9 s), the Rewind cliff near 3,200 tokens (turn 4), and a watchdog that can actually wake a
-non-polling Genie wait.
+non-polling Genie wait. *(Superseded: §12 showed the 9 s was a benchmark artefact, §13 bounded
+the watchdog case, and §14 / PROMPT_LEVER.md closed the prompt and cache-policy levers.)*
 
 ## 12. Second round: the runtime's rules, and what they leave on the table
 
@@ -289,7 +290,8 @@ call's own generation at 2.4–3.1K context.
 Decode speed against context (polling off, 128-token stories): 19.1 tok/s at 44 tokens, 17 at
 490, 15.3 at 990, 15.7 at 1,500, 13.5 at 2,000, 13.6 at 2,550. The 2.3K system prompt costs
 about 30 % of decode speed on every step, which makes prompt length the largest remaining
-latency lever, and it is a Hex-side one.
+latency lever, and it is a Hex-side one. *(Withdrawn 2026-09-06: the curve is stepped and a
+Hex call never leaves its top step; see §14 and PROMPT_LEVER.md §3.)*
 
 Shipped in this round (fork 0.2.2, same binary):
 - `allow-async-init` on by default: dialog creation 4.3 → 2.9 s, so in-line rebuilds cost
@@ -386,8 +388,9 @@ On AC the same request shapes ran ~1,500 times with one hang. So the hang is a p
 the NPU on DC power, present in the shipped 0.2.1 configuration too; the polling flag, the
 HTP profile, RPC latency and CPU idle states do not change it. Raising the accelerator's HMX
 timeout from 0.3 s to 5 s ran 48 requests clean and then stalled for 740 s: a lower rate, not a fix. Modern Standby entries in the
-System log do not coincide with the stalls. It is not a 2.6 regression, but it is the most
-important open defect for battery users, and the right fixes are outside the config: npurun
+System log do not coincide with the stalls. It is not a 2.6 regression *(corrected in §14: it
+is a long-context failure present on AC, and 2.6.0's async dialog init multiplied its rate
+tenfold — 2.6.2 turns that off)*, but it is the most important open defect for battery users, and the right fixes are outside the config: npurun
 should answer the client with an error the moment its watchdog fires (today the stream
 stays open until the client's own timeout), and the driver-level cause needs a Qualcomm
 report with the 1011 signature.
