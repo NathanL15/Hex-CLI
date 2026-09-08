@@ -252,14 +252,20 @@ target cases, or it reverts to off/removed with the numbers recorded.*
 
 ## Phase: Watch items — event-driven, no schedule
 
-- **Interruptible prewarm** (from the 2026-09-05 A/B at 15 s think time,
-  CHANGELOG 2.5.1): the end-of-turn rebuild costs ~20 s and real pauses are
-  11–77 s, so about half the time the next request arrives mid-rebuild and
-  waits for it — which is where the prewarm's mean loss came from (11.2 s vs
-  9.6 s OFF, not significant, p = 0.80). Fork change: `signal_abort` the
-  prewarm's prefill when a completion arrives, serve the request on the
-  normal path, and the prewarm can only ever help. A/B with the same two
-  arms; keep ON only if it wins the sign test on per-turn latency.
+- ~~**Interruptible prewarm**~~ — **RETIRED 2026-09-07.** The 2026-09-05 A/B
+  (15 s think time) found the end-of-turn rebuild costs ~20 s against real
+  pauses of 11–77 s, so about half the time the next request waited on it,
+  and proposed aborting the prewarm's prefill when a request arrives. It
+  cannot win as designed: once the cache is past the ~3,100-token divergence
+  ceiling the next request needs the rebuilt dialog and the prefilled prompt
+  regardless. Dialog creation cannot be aborted (a graph load), and aborting
+  the prefill leaves a partial prompt the request must finish itself — the
+  work moves from the prewarm into the request. The 09-05 wash (ON 11.2 s vs
+  OFF 9.6 s, p = 0.80) is both arms paying the same rebuild in different
+  places; the 2026-09-07 probe (`tools/backend_bench/prewarm_tail_probe.py`,
+  PROMPT_LEVER.md §7) shows the finished prewarm warms every turn shape. The
+  only lever underneath is rebuild speed (now 5–8 s create + 4.7 s prefill
+  with async init off), which 2.6.2 spent on purpose for the hang fix.
 
 Do these when the world changes, not before:
 
