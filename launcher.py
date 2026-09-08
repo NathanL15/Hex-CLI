@@ -42,18 +42,60 @@ SHELLAI_SCRIPT = APP_DIR / "shellai.py"
 # Discovery mirrors install.ps1: a source build wins, then the prebuilt
 # binary the installer downloads next to this script, then PATH.
 
-def find_npurun_exe(home: Path | None = None, app_dir: Path | None = None) -> Path | None:
+# The fork build this version of Hex CLI is written for. An older build runs,
+# but without whatever the newer fork added (2.6.x: host polling off, the
+# start-up prime, the request-ending watchdog, the async-init override), and
+# nothing used to say so. Now --doctor fails on it, the launcher warns, and
+# install.ps1 / hexcli --update replace it. install.ps1 reads this line by
+# regex, so keep the shape `REQUIRED_NPURUN = (a, b, c)`.
+REQUIRED_NPURUN = (0, 2, 3)
+NPURUN_RELEASES = "https://github.com/NathanL15/npurun/releases"
+
+
+def version_str(version: tuple[int, ...]) -> str:
+    return ".".join(str(n) for n in version)
+
+
+def _npurun_version(exe: Path) -> tuple[int, ...]:
+    """(major, minor, patch) from `npurun --version`; () if unknown."""
+    try:
+        out = subprocess.run([str(exe), "--version"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ()
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+    return tuple(int(x) for x in m.groups()) if m else ()
+
+
+def find_npurun_exe(home: Path | None = None, app_dir: Path | None = None,
+                    required: tuple[int, ...] | None = None) -> Path | None:
+    """A source build wins, then the downloaded binary, then PATH — except
+    that a candidate older than `required` yields to a later one that is not,
+    so a stale cargo build cannot shadow the binary --update just fetched."""
     home = home or Path.home()
     app_dir = app_dir or APP_DIR
-    for candidate in (
-        home / ".cargo" / "bin" / "npurun.exe",
-        app_dir / "npurun-arm64.exe",
-    ):
-        if candidate.exists():
+    required = REQUIRED_NPURUN if required is None else required
+    candidates = [c for c in (home / ".cargo" / "bin" / "npurun.exe",
+                              app_dir / "npurun-arm64.exe") if c.exists()]
+    if not candidates:
+        import shutil
+        found = shutil.which("npurun")
+        return Path(found) if found else None
+    for candidate in candidates:
+        version = _npurun_version(candidate)
+        if version and tuple(version) >= tuple(required):
             return candidate
-    import shutil
-    found = shutil.which("npurun")
-    return Path(found) if found else None
+    return candidates[0]
+
+
+def npurun_outdated(exe: Path | None = None,
+                    version: tuple[int, ...] | None = None) -> tuple[int, ...] | None:
+    """The installed build's version when it is known and older than
+    REQUIRED_NPURUN; None when it is current or unknown."""
+    if version is None:
+        version = _npurun_version(exe or NPURUN_EXE)
+    if version and tuple(version) < tuple(REQUIRED_NPURUN):
+        return tuple(version)
+    return None
 
 
 def _qairt_valid(root: Path) -> bool:
@@ -205,16 +247,6 @@ QNN_SDK_ROOT = find_qairt_root() or Path("C:/Qualcomm/AIStack/QAIRT_2.47.0")
 # prefill. When both are present the newest SDK wins over QNN_SDK_ROOT.
 MIN_REWIND_QAIRT = (2, 50)
 MIN_REWIND_NPURUN = (0, 2, 0)
-
-
-def _npurun_version(exe: Path) -> tuple[int, ...]:
-    """(major, minor, patch) from `npurun --version`; () if unknown."""
-    try:
-        out = subprocess.run([str(exe), "--version"], capture_output=True, text=True, timeout=10).stdout
-    except Exception:
-        return ()
-    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
-    return tuple(int(x) for x in m.groups()) if m else ()
 
 
 def rewind_runtime_root(stack_dir: Path | None = None,
@@ -427,6 +459,12 @@ def run_npurun_path(conda: Path | None) -> int:
     print(f"  Model:  {bold('Qwen3-4B-Instruct-2507')}  w4a16  (~2.5 GB, ~15 tok/s)")
     print(f"  Engine: {bold('npurun')}  (Genie SDK / Hexagon HTP)")
     print()
+
+    outdated = npurun_outdated()
+    if outdated:
+        warn(f"npurun {version_str(outdated)} found; this Hex CLI is written for "
+             f"{version_str(REQUIRED_NPURUN)}. Run  hexcli --update  to replace it.")
+        print()
 
     if not _npurun_model_ok():
         print(f"  Downloading {NPURUN_MODEL} …", flush=True)

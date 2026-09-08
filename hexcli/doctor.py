@@ -26,6 +26,7 @@ from typing import Any
 from .ui import C, cprint
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+_NPURUN_RELEASES = "https://github.com/NathanL15/npurun/releases"
 
 
 @dataclass
@@ -125,17 +126,28 @@ def check_qairt() -> list[Check]:
 
 
 def check_npurun() -> list[Check]:
-    exe = shutil.which("npurun") or shutil.which("npurun.exe")
-    local = Path.home() / ".cargo" / "bin" / "npurun.exe"
-    path = Path(exe) if exe else (local if local.exists() else None)
+    ln = _launcher()
+    # The launcher's candidate order, so the doctor diagnoses the binary
+    # that will actually run.
+    path = ln.find_npurun_exe() if ln is not None else None
+    if path is None:
+        exe = shutil.which("npurun") or shutil.which("npurun.exe")
+        local = Path.home() / ".cargo" / "bin" / "npurun.exe"
+        path = Path(exe) if exe else (local if local.exists() else None)
     if path is None:
         return [Check("npurun", FAIL, "binary not found",
-                      "Build it: cd npurun && scripts\\dev-shell-local.bat "
-                      "cargo install --path crates\\npurun-cli")]
+                      f"hexcli --update   (downloads npurun-arm64.exe from {_NPURUN_RELEASES})")]
     checks = [Check("npurun", PASS, str(path))]
-    ln = _launcher()
     if ln is not None:
-        ver = ".".join(str(n) for n in ln._npurun_version(path)) or "unknown"
+        version = ln._npurun_version(path)
+        ver = ".".join(str(n) for n in version) or "unknown"
+        need = ".".join(str(n) for n in ln.REQUIRED_NPURUN)
+        if ln.npurun_outdated(version=version) is not None:
+            checks.append(Check("npurun version", FAIL,
+                                f"{ver} — this Hex CLI is written for {need}",
+                                f"hexcli --update   (or {need} from {ln.NPURUN_RELEASES})"))
+        else:
+            checks.append(Check("npurun version", PASS, ver))
         if ln.REWIND_ROOT is not None:
             checks.append(Check("KV prefix reuse", PASS,
                                 f"on — npurun {ver}, {ln.REWIND_ROOT.name}"))

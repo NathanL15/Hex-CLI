@@ -22,6 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from hexcli import (
+    __version__,
     cancel,
     chatlog,
     compaction,
@@ -81,7 +82,7 @@ APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one
 DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
 HISTORY_PATH = sessions.HISTORY_PATH  # canonical definition: hexcli/sessions.py
 DEFAULT_TIMEOUT_SECONDS = tools.DEFAULT_TIMEOUT_SECONDS
-VERSION = "2.5.1"
+VERSION = __version__  # written in hexcli/__init__.py and nowhere else
 
 # Session ID for KV-cache Rewind on the npurun backend. Set to a fresh UUID at
 # the start of each run_autopilot call so the server can detect intra-loop

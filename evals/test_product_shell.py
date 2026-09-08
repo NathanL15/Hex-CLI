@@ -644,6 +644,39 @@ def test_piped_stdin_end_to_end_one_shot() -> None:
     assert "Mock queue exhausted" in r.stdout, r.stdout[-500:]
 
 
+def test_doctor_fails_on_an_older_npurun_build() -> None:
+    """The changelog says "requires the 0.2.x binary"; the doctor is what
+    makes that true for an existing install."""
+    import unittest.mock
+
+    import launcher
+    with tempfile.TemporaryDirectory() as tmp, \
+         unittest.mock.patch.object(launcher, "find_npurun_exe", return_value=Path(tmp) / "npurun.exe"), \
+         unittest.mock.patch.object(launcher, "_npurun_version", return_value=(0, 2, 0)), \
+         unittest.mock.patch.object(launcher, "REQUIRED_NPURUN", (0, 2, 3)):
+        checks = doctor.check_npurun()
+    bad = [c for c in checks if c.name == "npurun version"]
+    assert bad and bad[0].status == doctor.FAIL, [(c.name, c.status) for c in checks]
+    assert "--update" in bad[0].fix and "0.2.3" in bad[0].fix
+
+
+def test_version_is_written_in_one_place() -> None:
+    """agent.py once carried its own copy and stayed at 2.5.1 through three
+    releases: --version and every chat log said 2.5.1 on a 2.6.2 tree."""
+    import re
+
+    import hexcli
+    repo = Path(__file__).resolve().parent.parent
+    assert sa.VERSION == hexcli.__version__
+    pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'dynamic = ["version"]' in pyproject
+    assert not re.search(r"^version = ", pyproject, re.M), "pyproject.toml carries a second version"
+    readme = (repo / "README.md").read_text(encoding="utf-8")
+    assert "Current version" not in readme, "README restates the version and will drift"
+    ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert 'tags: ["v*"]' in ci and "hexcli.__version__" in ci, "CI no longer checks release tags"
+
+
 TESTS = [
     test_memory_dreaming_is_off_by_default,
     test_repl_gates_dreaming_on_the_config_flag,
@@ -692,6 +725,8 @@ TESTS = [
     test_doctor_python_check_passes_here,
     test_doctor_reports_exit_code_on_failure,
     test_doctor_every_failing_check_offers_a_fix,
+    test_doctor_fails_on_an_older_npurun_build,
+    test_version_is_written_in_one_place,
 ]
 
 

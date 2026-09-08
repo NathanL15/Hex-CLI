@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hexcli"
-version = "2.6.2"
+dynamic = ["version"]
 description = "Local Hexagon NPU terminal agent for Snapdragon X Elite Windows ARM64"
 readme = "README.md"
 license = { text = "MIT" }
@@ -37,6 +37,9 @@ hexcli = "hexcli.agent:main"
 Homepage = "https://github.com/NathanL15/Hex-CLI"
 Repository = "https://github.com/NathanL15/Hex-CLI"
 "Bug Tracker" = "https://github.com/NathanL15/Hex-CLI/issues"
+
+[tool.hatch.version]
+path = "hexcli/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hexcli"]

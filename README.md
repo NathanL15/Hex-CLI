@@ -5,8 +5,6 @@ Snapdragon Hexagon NPU via [npurun](https://github.com/bpbonker/npurun), no
 cloud, no API key, nothing leaving the box. Python stdlib + NumPy/ONNX; no
 LangChain.
 
-Current version: **2.5.1**
-
 ```
 you ▸ the median calc in processor.py is wrong for even-length lists — fix it
   → read_file
@@ -84,14 +82,18 @@ setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.50.0\lib\hexagon-v73\unsigne
 
 Without `ADSP_LIBRARY_PATH`, npurun dies with `STATUS_STACK_BUFFER_OVERRUN`.
 
-**3. npurun + a model** — a prebuilt ARM64 binary of our npurun fork ships as
-`npurun-arm64.exe` on the [GitHub Releases](https://github.com/NathanL15/Hex-CLI/releases)
-page (MIT/Apache-2.0), and `install.ps1` downloads it automatically. To build
-from source instead: the fork carries fixes the tooling depends on (usage
-reporting, token-precise `max_tokens`, mid-stream stop sequences, a UTF-8
-crash fix), so build from `npurun/` here, not upstream:
+**3. npurun + a model** — the NPU server is our fork of npurun, published at
+[NathanL15/npurun](https://github.com/NathanL15/npurun) (branch `hexcli-fork`,
+MIT/Apache-2.0) with a prebuilt ARM64 `npurun-arm64.exe` on every release.
+`install.ps1` downloads the build this version of Hex CLI is written for
+(`REQUIRED_NPURUN` in `launcher.py`); `--doctor` fails on an older build and
+`hexcli --update` replaces it. To build from source instead — the fork
+carries what the tooling depends on (KV-cache Rewind, usage reporting,
+token-precise `max_tokens`, the request-ending watchdog), so build the fork,
+not upstream:
 
 ```powershell
+git clone -b hexcli-fork https://github.com/NathanL15/npurun
 cd npurun
 cmd /c "scripts\dev-shell-local.bat cargo install --path crates\npurun-cli"
 npurun pull qwen3-4b-instruct-2507      # ~2.5 GB
@@ -279,7 +281,7 @@ The ones most worth knowing:
 ## Testing
 
 CI (windows-latest) runs the compile gate, `ruff check hexcli/ evals/`, and
-**25 offline suites (734 tests)** — no LLM required, all against a mock backend:
+**25 offline suites (740 tests)** — no LLM required, all against a mock backend:
 
 ```powershell
 python evals/test_core.py           # core coverage

@@ -11,5 +11,8 @@ dependencies without a strong reason.
   or file tools usually need to land in BOTH.
 - Live evals need the NPU server up and a FRESH restart per suite; a server
   left running for hours degrades and fakes regressions.
+- Releases follow RELEASING.md: one version source (`hexcli/__init__.py`),
+  the fork build pin (`REQUIRED_NPURUN` in launcher.py), and the gate a
+  runtime or prompt change must pass before it is tagged.
 - Never weaken a test to make it pass. If a test is wrong, fix the test and say
   why in the commit.

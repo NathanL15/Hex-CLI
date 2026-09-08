@@ -6,6 +6,40 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+### Releases, re-organised
+
+Ten releases in 38 days, and the last five were set by the npurun fork's
+binary and by same-day fixes: 2.5.0 fixed 2.4.0's silent empty replies seven
+hours later, 2.6.1 changed 24 lines to carry fork 0.2.3, and 2.6.2 reverted
+2.6.0's async init. Three structural causes, each fixed:
+
+* **The fork has its own repository and releases.** Its source lived in one
+  local clone, and the README's "build from `npurun/` here" could not be
+  followed from a checkout. It is now
+  [NathanL15/npurun](https://github.com/NathanL15/npurun), branch
+  `hexcli-fork`, tagged v0.2.0–v0.2.3 with each version's binary on its
+  release and a changelog that finally lists the July fork work. Hex CLI
+  releases carry no asset from here on; `install.ps1` and `hexcli --update`
+  download from the fork.
+* **The required fork build is enforced.** `REQUIRED_NPURUN` in
+  `launcher.py` (0.2.3). `--doctor` fails on an older build, the launcher
+  warns at start-up, the installer replaces an older build instead of
+  keeping it, `--update` skips the download when the binary is already
+  current, and discovery prefers whichever candidate meets the version, so
+  a stale cargo build cannot shadow a fresh download. Before this, a machine
+  on 0.2.1 running 2.6.2 had polling on, no prime, no watchdog and the
+  async-init override ignored, and nothing said so.
+* **One version source.** `hexcli/__init__.py` holds `__version__`;
+  `pyproject.toml` reads it and the README no longer restates it. The
+  hand-edited copy in `agent.py` had stayed at 2.5.1 through 2.6.0–2.6.2:
+  `--version` printed 2.5.1 and every chat log since 09-05 is stamped
+  2.5.1. CI now runs on tag pushes and refuses a tag that does not match
+  the version.
+* **`RELEASING.md`** records the numbering rule and the gate. A change to
+  the binary, the launcher's environment or the prompt runs the multiturn
+  arm with think time and the 3K stall probe before it is tagged, because
+  both regressions above lived where the extended suite does not look.
+
 ### The end-of-turn prewarm is already right (negative result)
 
 A tail-aware, forced end-of-turn prewarm was built, unit-tested and measured

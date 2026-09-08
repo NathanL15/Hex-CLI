@@ -235,6 +235,64 @@ def test_rewind_runtime_needs_both_new_sdk_and_new_npurun() -> None:
         assert launcher.rewind_runtime_root(stack, npurun_version=(0, 2, 0)) == new
 
 
+# ---------------------------------------------------------------------------
+# The required fork build (launcher.REQUIRED_NPURUN) and where it comes from
+# ---------------------------------------------------------------------------
+
+def test_installer_reads_required_npurun_from_launcher() -> None:
+    """install.ps1 keeps no copy of the required fork version: it parses
+    launcher.py's REQUIRED_NPURUN line with this exact pattern. The pattern
+    must still appear in the installer and still match the line."""
+    import re
+    pattern = r"REQUIRED_NPURUN\s*=\s*\((\d+),\s*(\d+),\s*(\d+)\)"
+    ps_text = INSTALL_PS1.read_text(encoding="utf-8")
+    py_text = (REPO / "launcher.py").read_text(encoding="utf-8")
+    assert pattern in ps_text, "install.ps1 no longer parses REQUIRED_NPURUN with the shared pattern"
+    m = re.search(pattern, py_text)
+    assert m, "launcher.py's REQUIRED_NPURUN line no longer has the shape the installer parses"
+    assert tuple(int(g) for g in m.groups()) == tuple(launcher.REQUIRED_NPURUN)
+
+
+def test_binary_comes_from_the_fork_everywhere() -> None:
+    """Installer, updater and launcher all point at the fork's releases —
+    a Hex CLI release carries no binary any more."""
+    from hexcli import distribution
+    ps_text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "api.github.com/repos/NathanL15/npurun/releases" in ps_text
+    assert "repos/NathanL15/Hex-CLI/releases" not in ps_text
+    assert "repos/NathanL15/npurun/releases" in distribution._GITHUB_API
+    assert launcher.NPURUN_RELEASES.startswith("https://github.com/NathanL15/npurun")
+
+
+def test_find_npurun_skips_a_build_older_than_required() -> None:
+    """A stale cargo build must not shadow the binary --update just
+    downloaded; when every candidate is old, the first still wins (the
+    doctor says why) rather than nothing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "home"
+        app = Path(tmp) / "app"
+        cargo_exe = home / ".cargo" / "bin" / "npurun.exe"
+        cargo_exe.parent.mkdir(parents=True)
+        cargo_exe.write_bytes(b"x")
+        app.mkdir()
+        downloaded = app / "npurun-arm64.exe"
+        downloaded.write_bytes(b"x")
+        versions = {cargo_exe: (0, 2, 1), downloaded: (0, 2, 3)}
+        with unittest.mock.patch.object(launcher, "_npurun_version", side_effect=lambda p: versions[p]):
+            assert launcher.find_npurun_exe(home=home, app_dir=app, required=(0, 2, 3)) == downloaded
+            assert launcher.find_npurun_exe(home=home, app_dir=app, required=(0, 2, 1)) == cargo_exe
+            assert launcher.find_npurun_exe(home=home, app_dir=app, required=(0, 9, 0)) == cargo_exe
+
+
+def test_npurun_outdated_compares_against_required() -> None:
+    with unittest.mock.patch.object(launcher, "REQUIRED_NPURUN", (0, 2, 3)):
+        assert launcher.npurun_outdated(version=(0, 2, 1)) == (0, 2, 1)
+        assert launcher.npurun_outdated(version=(0, 1, 9)) == (0, 1, 9)
+        assert launcher.npurun_outdated(version=(0, 2, 3)) is None
+        assert launcher.npurun_outdated(version=(0, 3, 0)) is None
+        assert launcher.npurun_outdated(version=()) is None, "unknown is not outdated"
+
+
 TESTS = [
     test_rewind_runtime_needs_both_new_sdk_and_new_npurun,
     test_install_ps1_parses_as_valid_powershell,
@@ -250,6 +308,10 @@ TESTS = [
     test_find_qairt_compares_versions_numerically,
     test_installer_also_sorts_qairt_numerically,
     test_find_qairt_none_when_nothing_valid,
+    test_installer_reads_required_npurun_from_launcher,
+    test_binary_comes_from_the_fork_everywhere,
+    test_find_npurun_skips_a_build_older_than_required,
+    test_npurun_outdated_compares_against_required,
 ]
 
 

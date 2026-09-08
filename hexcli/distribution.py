@@ -12,7 +12,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-_GITHUB_API = "https://api.github.com/repos/NathanL15/Hex-CLI/releases/latest"
+# The npurun binary comes from the fork's own releases, not Hex CLI's.
+_GITHUB_API = "https://api.github.com/repos/NathanL15/npurun/releases/latest"
 _NPURUN_ASSET = "npurun-arm64.exe"
 _SHORTCUT_NAME = "Hex CLI.lnk"
 _START_MENU = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs"
@@ -46,6 +47,20 @@ def _download(url: str, dest: Path) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "hexcli"})
     with urllib.request.urlopen(req, timeout=120) as resp, dest.open("wb") as fh:
         shutil.copyfileobj(resp, fh)
+
+
+def _launcher():
+    try:
+        import launcher
+        return launcher
+    except Exception:
+        return None
+
+
+def _parse_version(tag: str) -> tuple[int, ...]:
+    import re
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", tag or "")
+    return tuple(int(x) for x in m.groups()) if m else ()
 
 
 def _git_pull(install_dir: Path) -> bool:
@@ -87,8 +102,8 @@ def update(install_dir: Path) -> int:
     _print("Pulling latest source …")
     _git_pull(install_dir)
 
-    # 2. Fetch latest release metadata from GitHub.
-    _print("Checking latest release …")
+    # 2. Fetch the fork's latest release metadata from GitHub.
+    _print("Checking the latest npurun release …")
     try:
         release = _fetch_latest_release()
     except Exception as exc:
@@ -97,7 +112,17 @@ def update(install_dir: Path) -> int:
         return 1
 
     tag = release.get("tag_name", "unknown")
-    _print(f"Latest release: {tag}")
+    _print(f"Latest npurun: {tag}")
+
+    # Nothing to do when the binary the launcher will run is already there.
+    ln = _launcher()
+    if ln is not None:
+        have = ln.find_npurun_exe()
+        have_version = ln._npurun_version(have) if have else ()
+        want = _parse_version(tag)
+        if have_version and want and tuple(have_version) >= want:
+            _print(f"npurun {ln.version_str(have_version)} at {have} is current.")
+            return 0
 
     # 3. Download the npurun binary if a matching asset exists.
     url = _find_asset_url(release, _NPURUN_ASSET)
@@ -177,7 +202,7 @@ def first_run_check(install_dir: Path) -> None:
     if not npurun_on_path and not npurun_local:
         hints.append(
             "  npurun not found. Run:  hexcli --update\n"
-            "  (or install QAIRT SDK + build from https://github.com/bpbonker/npurun)"
+            "  (or build branch hexcli-fork of https://github.com/NathanL15/npurun)"
         )
 
     # ONNX embedding model for memory.

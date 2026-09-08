@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -17,6 +18,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Release tag matches hexcli.__version__
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          v="v$(python -c 'import hexcli; print(hexcli.__version__)')"
+          if [ "$v" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME but hexcli.__version__ is $v"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: pip install numpy onnxruntime ruff

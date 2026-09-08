@@ -6,8 +6,8 @@
 .DESCRIPTION
     Walks the full setup: ARM64 + Python 3.11+ checks, pip dependencies,
     QAIRT SDK discovery (with guided download instructions if absent — the
-    SDK cannot be redistributed), the prebuilt npurun ARM64 binary from
-    GitHub Releases, the Qwen3-4B model bundle pull (~2.5 GB), config
+    SDK cannot be redistributed), the prebuilt npurun ARM64 binary from the
+    fork's GitHub Releases (github.com/NathanL15/npurun), the Qwen3-4B model bundle pull (~2.5 GB), config
     scaffold, Start Menu shortcut, and a final `hexcli --doctor` check.
 
     Every step that finds its work already done skips it, so re-running
@@ -27,8 +27,8 @@
     Never pull the model bundle, even interactively.
 
 .PARAMETER NpurunVersion
-    Override the release tag to download npurun from (e.g. "v2.0.0").
-    Default: "latest".
+    Override the npurun release tag to download (e.g. "v0.2.3") from
+    github.com/NathanL15/npurun/releases. Default: "latest".
 
 .EXAMPLE
     Set-Location Hex-CLI
@@ -180,32 +180,56 @@ if ($qairtRoot) {
 }
 
 # ---------------------------------------------------------------------------
-# 5. npurun binary (prebuilt, from GitHub Releases)
+# 5. npurun binary (prebuilt, from the fork's GitHub Releases)
 # ---------------------------------------------------------------------------
 Write-Step "Looking for npurun ..."
+
+function Get-NpurunVersion {
+    # Same 5.1 trap as the Python probe: native stderr under 2>&1 can throw.
+    param([string]$Exe)
+    $out = try { & $Exe --version 2>&1 | Out-String } catch { "" }
+    if ($out -match "(\d+)\.(\d+)\.(\d+)") {
+        return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+    }
+    return $null
+}
+
+# The build this Hex CLI is written for lives in launcher.py (REQUIRED_NPURUN);
+# read it there rather than keeping a second copy that drifts.
+$requiredNpurun = $null
+$launcherText = Get-Content (Join-Path $InstallDir "launcher.py") -Raw
+if ($launcherText -match "REQUIRED_NPURUN\s*=\s*\((\d+),\s*(\d+),\s*(\d+)\)") {
+    $requiredNpurun = [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+}
+
 $npurunExe = $null
+$npurunOld = $null
 $userProfile = [Environment]::GetFolderPath("UserProfile")
 $npurunCandidates = @(
     (Join-Path $userProfile ".cargo\bin\npurun.exe"),
     (Join-Path $InstallDir "npurun-arm64.exe")
 )
+$onPath = Get-Command npurun -ErrorAction SilentlyContinue
+if ($onPath) { $npurunCandidates += $onPath.Source }
 foreach ($c in $npurunCandidates) {
-    if (Test-Path $c) { $npurunExe = $c; break }
-}
-if (-not $npurunExe) {
-    $onPath = Get-Command npurun -ErrorAction SilentlyContinue
-    if ($onPath) { $npurunExe = $onPath.Source }
+    if (-not (Test-Path $c)) { continue }
+    $v = Get-NpurunVersion $c
+    if ((-not $requiredNpurun) -or (-not $v) -or ($v -ge $requiredNpurun)) { $npurunExe = $c; break }
+    if (-not $npurunOld) { $npurunOld = "$v at $c" }
 }
 
 if ($npurunExe) {
     Write-Ok "npurun: $npurunExe"
 } else {
+    if ($npurunOld) {
+        Write-Warn "npurun $npurunOld is older than the $requiredNpurun this Hex CLI is written for."
+    }
     Write-Step "Downloading prebuilt npurun (ARM64, MIT/Apache-2.0) ..."
     $npurunDest = Join-Path $InstallDir "npurun-arm64.exe"
     $apiUrl = if ($NpurunVersion -eq "latest") {
-        "https://api.github.com/repos/NathanL15/Hex-CLI/releases/latest"
+        "https://api.github.com/repos/NathanL15/npurun/releases/latest"
     } else {
-        "https://api.github.com/repos/NathanL15/Hex-CLI/releases/tags/$NpurunVersion"
+        "https://api.github.com/repos/NathanL15/npurun/releases/tags/$NpurunVersion"
     }
     try {
         $headers = @{ "User-Agent" = "hexcli-installer"; "Accept" = "application/vnd.github+json" }
@@ -214,13 +238,13 @@ if ($npurunExe) {
         if ($asset) {
             Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $npurunDest -Headers $headers
             $npurunExe = $npurunDest
-            Write-Ok "Downloaded npurun-arm64.exe from release $($release.tag_name)."
+            Write-Ok "Downloaded npurun-arm64.exe from npurun release $($release.tag_name)."
         } else {
             Write-Warn "No 'npurun-arm64.exe' asset in release $($release.tag_name)."
         }
     } catch {
         Write-Warn "Could not download npurun: $_"
-        Write-Warn "Build from source instead: github.com/bpbonker/npurun (cargo install, MSVC ARM64)."
+        Write-Warn "Build from source instead: github.com/NathanL15/npurun, branch hexcli-fork (cargo install, MSVC ARM64)."
     }
 }
 
