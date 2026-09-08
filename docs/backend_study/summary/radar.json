@@ -35,9 +35,9 @@
     "v251": 7.16,
     "v26": 8.0,
     "lcpp": null,
-    "ceiling": 12.0
+    "ceiling": 7.2
    },
-   "note": "median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: the 20 % of first calls that pay an in-line rebuild (PROMPT_LEVER.md \u00a73.3) moved to a background prewarm; prompt length is not a lever (\u00a73.2).",
+   "note": "median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: today's value \u2014 prompt length is not a lever (PROMPT_LEVER.md \u00a73.2) and the rebuild share seen in evals is a harness artefact (\u00a77); the per-call floor is the 0.7 s wake-up plus the model's own tokens.",
    "scores": {
     "v251": 100.0,
     "v26": 100.0,
@@ -51,17 +51,17 @@
    "target": 200.0,
    "unit": "J",
    "values": {
-    "v251": 453.8,
-    "v26": 215.4,
+    "v251": 453.9,
+    "v26": 215.5,
     "lcpp": 662.3,
-    "ceiling": 180.0
+    "ceiling": 215.0
    },
-   "note": "system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: 2.6 minus the in-line rebuild share (~20 % of LLM time); prompt-length savings measured at zero (PROMPT_LEVER.md).",
+   "note": "system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: today's value; prompt-length savings measured at zero and the rebuild share is a harness artefact (PROMPT_LEVER.md \u00a74, \u00a77).",
    "scores": {
     "v251": 44.1,
-    "v26": 92.9,
+    "v26": 92.8,
     "lcpp": 30.2,
-    "ceiling": 100.0
+    "ceiling": 93.0
    }
   },
   {
@@ -464,9 +464,9 @@
    "passes": 62,
    "runs": 82,
    "invalid": 0,
-   "j_per_pass": 215.4,
+   "j_per_pass": 215.5,
    "wall_per_pass_s": 26.4,
-   "total_j": 13357.0
+   "total_j": 13362.0
   },
   "energy_ext_on": {
    "cases": 41,
@@ -474,9 +474,9 @@
    "passes": 61,
    "runs": 82,
    "invalid": 0,
-   "j_per_pass": 453.8,
+   "j_per_pass": 453.9,
    "wall_per_pass_s": 23.6,
-   "total_j": 27679.6
+   "total_j": 27690.0
   },
   "smoke_26": {
    "cases": 20,
@@ -484,9 +484,9 @@
    "passes": 38,
    "runs": 40,
    "invalid": 0,
-   "j_per_pass": 161.1,
+   "j_per_pass": 161.2,
    "wall_per_pass_s": 16.5,
-   "total_j": 6122.6
+   "total_j": 6124.9
   },
   "smoke_251": {
    "cases": 10,

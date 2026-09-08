@@ -73,7 +73,7 @@ def prewarm(prompt: str) -> float:
     t0 = time.time()
     while time.time() - t0 < 180:
         try:
-            req = urllib.request.Request(bench.BASES["npu"].rstrip("/") + "/npurun/prewarm", data=body, method="POST",
+            req = urllib.request.Request((bench.BASES["npu"].rstrip("/") + ("" if bench.BASES["npu"].rstrip("/").endswith("/v1") else "/v1") + "/npurun/prewarm"), data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer local"})
             with urllib.request.urlopen(req, timeout=180):
                 return round(time.time() - t0, 2)

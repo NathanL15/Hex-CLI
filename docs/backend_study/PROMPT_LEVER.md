@@ -99,10 +99,11 @@ decided in 2.6 (0.6 s per call for 11 W of idle).
 
 The one large item is neither: **20 % of first calls (41 of 208) carry a
 rebuild-sized excess (mean +9.7 s)** — 369 of the 1,819 s of LLM time in the
-whole run. Those are conversations whose start diverged from the cached
-transcript by more than the runtime's discard limit, so the dialog was rebuilt
-in-line. That is a cache-policy cost, and it is the biggest latency item left
-on the stack.
+whole run. §7 traces those to the eval harness itself (zero think time, so
+the end-of-turn prewarm's rebuild lands on the next case's first call, plus
+the runner's single-message latency canaries, which diverge the cache at
+every chunk boundary), not to anything a REPL user pays. Corrected the same
+day; the earlier reading of this number as "the next lever" was wrong.
 
 ## 4. Verdict on the lever
 
@@ -173,3 +174,48 @@ Two smaller runtime rules, both reproducible:
    so the next runtime change is gated on it.
 5. **Optional, low value:** the dedent, through the full 5-run gate, only for
    the history room.
+
+## 7. Follow-up (2026-09-07): the "rebuild avoidance" lever, measured and withdrawn
+
+Recommendation 2 above proposed forcing the end-of-turn prewarm when a turn's
+tail exceeds the 600-token discard limit. It was built (a tail-aware
+`_prewarm_backend`, config `prewarm_force_tail_tokens`), unit-tested, and
+measured against the shipped prewarm on Hex's real turn shape
+(`tools/backend_bench/prewarm_tail_probe.py`: request + tool steps, the
+prewarm under test, 15 s of think time, then the next turn's request; four
+reps per cell, fresh server per run, 2.6.2 stack):
+
+| turn shape | shipped prewarm: next turn first token | forced/tail-aware: next turn first token |
+|---|---|---|
+| tail ≈ 520 tokens (one small step) | 0.72–0.88 s | 0.72–0.90 s |
+| tail ≈ 665–724 (the supposed gap band) | 0.72–1.02 s | 0.73–0.87 s |
+| tail ≈ 1,350 (three steps) | 0.71–0.73 s | 0.71–0.73 s |
+| tail ≈ 1,350 with 1,000 tokens of history, prewarm prefills the full prefix | 0.72–0.89 s | **8.7 s** (rebuild) |
+
+The shipped prewarm already warms every shape: below ~690 tail tokens the next
+turn Rewinds the tail, above it the server rebuilds on its own in the
+background. Prefilling the history into the prewarm is actively harmful: a
+prewarmed prefix past Genie's ~3,100-token divergence ceiling cannot be
+matched by the next turn at all, while re-reading 1,000 tokens of history on
+the warm path costs ~0.15 s. The change was reverted; nothing ships.
+
+What the multi-turn instrument showed on the way (control arm, 3 runs × 3
+scenarios, 196 requests): 15 in-line rebuilds, of which 10 were the runner's
+own single-message latency canaries diverging the cache at chunk boundaries
+and 5 were mid-turn server trims (the window filling up); none were a turn
+whose tail the prewarm failed to cover. The eval's 12 s think time is also
+shorter than a background rebuild (drop + create 5–8 s, prefill 4.7 s), so
+first-call latencies in that suite include waiting for the prewarm — a cost a
+person reading the previous answer does not pay. Two more instrument facts:
+`bench.BASES["npu"]` has no `/v1`, so every earlier probe's prewarm call had
+been answering 404 silently (fixed in the three probes; their conclusions
+stand, since none depended on the prewarm), and the eval runner's canaries
+should carry the system prompt if the suite is ever used to measure cache
+behaviour.
+
+Verdict: the runtime's cache policy is already right for Hex's turn shapes.
+The latency floor per call is the 0.7 s wake-up plus the model's own tokens,
+and the only remaining runtime lever is the rebuild itself (5–8 s to drop and
+create a dialog with async init off), which is the price of the 2.6.2 hang
+fix.
+

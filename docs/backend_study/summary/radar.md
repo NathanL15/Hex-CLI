@@ -3,8 +3,8 @@
 | axis | target | v2.5.1 | 2.6 | llama.cpp | ceiling | scores (v2.5.1 / 2.6 / llama.cpp / ceiling) |
 |---|---|---|---|---|---|---|
 | task pass rate, extended suite | 0.83 fraction | 0.793 | 0.756 | — | 0.830 | 95.5 / 91.1 / — / 100 |
-| wall per task, extended suite | 20 s | 7.16 | 8 | — | 12 | 100 / 100 / — / 100 |
-| energy per solved task, extended suite | 200 J | 453.8 | 215.4 | 662.3 | 180 | 44.1 / 92.9 / 30.2 / 100 |
+| wall per task, extended suite | 20 s | 7.16 | 8 | — | 7.2 | 100 / 100 / — / 100 |
+| energy per solved task, extended suite | 200 J | 453.9 | 215.5 | 662.3 | 215 | 44.1 / 92.8 / 30.2 / 93 |
 | first LLM call, whole latency | 4 s | 5.53 | 6.19 | — | 3 | 72.3 / 64.6 / — / 100 |
 | first turn after server start | 1 s | 4.2 | 0.85 | 1.3 | 0.85 | 23.8 / 100 / 76.9 / 100 |
 | follow-up turn, first token | 1 s | 0.989 | 1.151 | 3.565 | 0.7 | 100 / 86.9 / 28.1 / 100 |
@@ -27,8 +27,8 @@
 ## Notes per axis
 
 - **task pass rate, extended suite**: v2.5.1: 165/208 (5 runs/case, Wilson (0.733, 0.843)); 2.6: 62/82 (Wilson (0.653, 0.836)); paired polling-on control 61/82. Target = project baseline 97/117. llama.cpp: not run on the extended suite; smoke 14/14 valid with 6 client timeouts.
-- **wall per task, extended suite**: median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: the 20 % of first calls that pay an in-line rebuild (PROMPT_LEVER.md §3.3) moved to a background prewarm; prompt length is not a lever (§3.2).
-- **energy per solved task, extended suite**: system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: 2.6 minus the in-line rebuild share (~20 % of LLM time); prompt-length savings measured at zero (PROMPT_LEVER.md).
+- **wall per task, extended suite**: median trace wall (Enter to final message, no harness overhead), paired runs same evening; v2.5.1 column uses the polling-on control. Ceiling: today's value — prompt length is not a lever (PROMPT_LEVER.md §3.2) and the rebuild share seen in evals is a harness artefact (§7); the per-call floor is the 0.7 s wake-up plus the model's own tokens.
+- **energy per solved task, extended suite**: system joules over the case window / passes; harness overhead included. llama.cpp value is from its smoke suite (14 passes, 6 invalid). Ceiling: today's value; prompt-length savings measured at zero and the rebuild share is a harness artefact (PROMPT_LEVER.md §4, §7).
 - **first LLM call, whole latency**: median first LLM call per run (prefill + generation of the first step) from eval traces, paired same-evening runs; the earlier 5-run baseline measured 3.41 s. Polling off adds wake-up latency to every call.
 - **first turn after server start**: fresh server each rep, A/B with and without the start-up prime; llama.cpp = warm prefix.
 - **follow-up turn, first token**: four-turn Hex conversation, turn 2 (+350 tokens); ceiling = measured pure extension cost.

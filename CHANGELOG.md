@@ -4,6 +4,21 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+### The end-of-turn prewarm is already right (negative result)
+
+A tail-aware, forced end-of-turn prewarm was built, unit-tested and measured
+against the shipped one on Hex's real turn shape
+(`tools/backend_bench/prewarm_tail_probe.py`): identical next-turn first
+token (0.7–0.9 s) at every tail length, and prefilling the session history
+into the prewarm costs a rebuild (8.7 s) because a prefix past Genie's
+~3,100-token divergence ceiling cannot be matched. Reverted; the "20 % of
+first calls pay a rebuild" figure in the 2.6.2 study was a harness artefact
+(zero think time and single-message latency canaries), corrected in
+`docs/backend_study/PROMPT_LEVER.md` §7 and the radar ceilings. Probe fix:
+the bench prewarm calls were missing `/v1` and had been 404-ing silently.
+
 ## 2.6.2 — 2026-09-07
 
 ### NPU hangs at long context: async dialog init off by default
