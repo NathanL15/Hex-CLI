@@ -479,29 +479,51 @@ class LiveArea:
         pad = max(0, below - len(rows)) if below is not None else 0
         return rows, pad
 
+    def _insert_rows_above(self, inner: Any, pad: int) -> None:
+        """Push the transcript down by `pad` rows by inserting blank rows at
+        the top of the window, then put the cursor back on its (moved) row.
+
+        This is how the box is pinned to the bottom: the blank rows go ABOVE
+        the transcript, so the text always hugs the box like a chat window,
+        and a window that shrinks drops empty rows first instead of the
+        banner. (Padding with newlines below the transcript left a gap
+        between the text and the box that a shrink then preserved while the
+        banner scrolled away.) Only blank rows fall off the bottom: the box
+        has just been erased, so everything below the cursor is empty.
+        """
+        geo = self._geometry()
+        if geo is None or pad <= 0:
+            return
+        row, _height = geo
+        m = self.margin
+        col = m.pad + m.col
+        inner.write(f"\033[H\033[{pad}L\033[{row + pad + 1};{col + 1}H")
+
     def _draw(self, inner: Any, rows: list[str] | None = None, pad: int = 0) -> None:
         m = self.margin
         if rows is None:
             rows, pad = self._compose()
         saved = (m.col, m.word, m.word_vis)
-        out = ["\033[?25l", "\n" * pad, "\n", "\n".join(rows), "\r", f"\033[{len(rows) + pad}A"]
+        if pad:
+            self._insert_rows_above(inner, pad)
+        out = ["\033[?25l", "\n", "\n".join(rows), "\r", f"\033[{len(rows)}A"]
         if saved[0]:
             out.append(f"\033[{saved[0]}C")
         out.append("\033[?25h")
         inner.write("".join(out))
         m.col, m.word, m.word_vis = saved
-        self._drawn = len(rows) + pad
+        self._drawn = len(rows)
         self._signature = (tuple(rows), pad, saved[0])
 
     def pad_for_editor(self) -> None:
-        """Move the cursor down so the editor's rows land on the window's
+        """Push the transcript down so the editor's rows land on the window's
         last rows. Called with the box down and the cursor on a fresh row."""
         below = self._rows_below_cursor()
         if below is None or self._inner is None:
             return
         pad = below - (self.editor_rows - 1)
         if pad > 0:
-            self._inner.write("\n" * pad)
+            self._insert_rows_above(self._inner, pad)
 
     def write(self, inner: Any, text: str) -> None:
         """A transcript write from one of the wrapped streams."""

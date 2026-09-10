@@ -30,9 +30,9 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   ticks go through the same lock. The box is pinned to the window's last
   rows from the first prompt: the console's cursor position
   (`GetConsoleScreenBufferInfo`) says how many rows lie below the
-  transcript, and blank rows fill the gap until the conversation is long
-  enough to reach the box on its own. Ctrl+L and a zoom redraw keep it
-  there.
+  transcript, and that many blank rows are inserted at the top of the
+  window until the conversation is long enough to reach the box on its
+  own. Ctrl+L and a zoom redraw keep it there.
 * **Metrics.** `npu` is Windows' own NPU counter: `GPU Engine` utilisation
   for the adapter DirectX does not list, the source Task Manager's NPU
   graph reads, through `pdh.dll` with ctypes. Measured on this machine:
@@ -99,8 +99,16 @@ Six interaction issues found by driving the whole flow under a pseudo-console:
 * **Resize no longer corrupts the box.** There was no resize handler, so
   changing the window size left the rules at mismatched widths and one row
   without its margin. A console window-size event (or a size change caught
-  on the idle tick) now reprints the transcript at the new width and
-  re-pins the box, the same recovery the zoom already used.
+  on the idle tick) now clears only the box's own rows, computed from how
+  the terminal re-wrapped them at the new width, and redraws; the
+  transcript above is left exactly as the terminal reflowed it. (A first
+  version reprinted the saved chat instead, which made the banner and every
+  notice vanish on resize.)
+* **The transcript hugs the box.** Pinning used to pad blank rows between
+  the transcript and the box; a window that shrank kept those blanks and
+  scrolled the banner away. The padding is now inserted at the top of the
+  window, so the text sits directly above the box like a chat window and a
+  shrink drops empty rows first.
 * **One prompt during a confirmation.** A `y/N` confirm used to render on
   top of the still-live input box, so two prompts showed at once and it was
   unclear where to type. The box is taken down for the duration of any

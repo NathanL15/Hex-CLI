@@ -710,18 +710,39 @@ def test_idle_tick_repaints_only_when_the_chrome_changed() -> None:
     assert "b" in out[1] and out[2].endswith("> \n"), [repr(o) for o in out]
 
 
-def test_resize_token_calls_on_resize_and_re_anchors() -> None:
-    """A RESIZE token (a console window-size event) runs the on_resize hook,
-    resets the render anchor and redraws. Without a hook it clears and re-pads."""
+def test_resize_token_clears_only_the_box_rows_and_calls_on_resize() -> None:
+    """A RESIZE token (a console window-size event) walks up over the rows
+    the terminal re-wrapped, clears from there to the end of the screen,
+    runs the on_resize hook, and redraws. The transcript above is never
+    touched: no full-screen clear."""
     from hexcli import lineedit as le
     calls = []
-    ed, out = editor([le.RESIZE, le.ENTER], chrome=lambda w: (["top"], ["bot"]),
-                     on_resize=lambda: calls.append(1))
+    ed, out = editor([le.RESIZE, le.ENTER], width=60, margin=2,
+                     chrome=lambda w: (["x" * 50], ["bot"]), on_resize=lambda: calls.append(1))
+    # Same width: the top chrome row is one row, so climb one and clear.
     ed.read("> ")
     assert calls == [1], "on_resize was not called"
-    ed, out = editor([le.RESIZE, le.ENTER], height=10, chrome=lambda w: (["top"], ["bot"]))
-    ed.read("> ")
-    assert "\033[2J\033[H" in "".join(out), "no hook: clears the screen and re-pads"
+    joined = "".join(out)
+    assert "\r\033[1A\033[J" in joined and "\033[2J" not in joined, repr(joined)
+
+    # Narrowed mid-read from 60 to 30 columns: the 50-cell chrome row (plus
+    # the 2-cell margin) now occupies two rows, so climb two.
+    keys = iter([le.RESIZE, le.ENTER])
+
+    def read_key() -> str:
+        key = next(keys, le.EXHAUSTED)
+        if key == le.RESIZE:
+            ed2._forced_width = 30
+        return key
+
+    out2: list[str] = []
+    ed2 = le.LineEditor(read_key=read_key, write=out2.append, width=60, styled=False,
+                        margin=2, chrome=lambda w: (["x" * 50], ["bot"]))
+    ed2.read("> ")
+    joined2 = "".join(out2)
+    assert "\r\033[2A\033[J" in joined2, repr(joined2)
+    # And the redraw after it is laid out at the new width (26 usable).
+    assert ed2.usable == 26 and ed2._last_size == (26, ed2.height)
 
 
 def test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom() -> None:
@@ -826,7 +847,7 @@ TESTS = [
     test_repl_commands_has_no_phantoms,
     test_chrome_rows_frame_the_input_and_stay_out_of_the_transcript,
     test_idle_tick_repaints_only_when_the_chrome_changed,
-    test_resize_token_calls_on_resize_and_re_anchors,
+    test_resize_token_clears_only_the_box_rows_and_calls_on_resize,
     test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]

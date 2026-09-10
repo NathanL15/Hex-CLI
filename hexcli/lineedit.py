@@ -742,11 +742,35 @@ class LineEditor:
                 self._write("\033[?25h")
 
     def _handle_resize(self, prompt: str) -> None:
-        """Recover the display after the window was resized. The old rows the
-        terminal reflowed no longer match our anchor, so start clean: let the
-        caller reprint the transcript at the new width and re-pin the box,
-        then re-anchor and render. Without a caller hook, clear the screen and
-        re-pad the box to the new bottom ourselves."""
+        """Recover the display after the window was resized, touching only
+        our own rows: the transcript above stays exactly as the terminal
+        reflowed it.
+
+        The terminal re-wraps every row we wrote at the old width. The cursor
+        is still on the input row (terminals keep it on its cell), so the
+        number of rows now sitting between the top of the box and the cursor
+        is the sum, over the rows we wrote before the cursor row, of how many
+        rows each occupies at the new width, plus the cursor's own wrap
+        offset. Walk up that far, clear to the end of the screen (everything
+        below the box top is ours), let the caller re-pin the box, and render
+        at the new width.
+        """
+        old_usable, _old_height = self._last_size or (self.usable, self.height)
+        m = self.margin
+        saved_width = self._forced_width
+        self._forced_width = old_usable + 2 * m
+        try:
+            text, _rows, cursor_row, cursor_col = self._layout(prompt)
+        finally:
+            self._forced_width = saved_width
+        new_width = max(1, self.usable + 2 * m)
+
+        def occupied(row: str) -> int:
+            cells = m + visible_len(row)
+            return max(1, -(-cells // new_width))
+
+        up = sum(occupied(r) for r in text.split("\n")[:cursor_row]) + (m + cursor_col) // new_width
+        self._write("\r" + (f"\033[{up}A" if up else "") + "\033[J")
         self._cursor_row = 0
         self._rendered_rows = 0
         self._last_text = None
@@ -755,12 +779,6 @@ class LineEditor:
                 self.on_resize()
             except Exception:
                 pass
-        elif self.chrome is not None:
-            self._write("\033[2J\033[H")
-            rows = self._layout(prompt)[1]
-            self._write("\n" * max(0, self.height - rows))
-        else:
-            self._write("\r\033[J")
         self._last_size = (self.usable, self.height)
         self.render(prompt)
 

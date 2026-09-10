@@ -371,9 +371,9 @@ def run_repl(config: dict[str, Any]) -> int:
         return True
 
     def _resize() -> None:
-        """The window was resized while at the prompt: reprint the transcript
-        at the new width and re-pin the box, the same recovery as a zoom."""
-        ui.redraw_transcript(current_session)
+        """The window was resized while at the prompt. The editor has just
+        cleared its own rows and left the cursor at the box top; the
+        transcript above is untouched. Re-pin the box to the new bottom."""
         if live is not None:
             live.pad_for_editor()
 
