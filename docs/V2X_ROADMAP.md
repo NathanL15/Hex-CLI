@@ -82,7 +82,7 @@ model pull. Nobody but the author has ever run it.
 2. **`/setup` wizard** — first-run interactive config: workspace scope,
    network policy, destructive-command policy, history location.
 3. **One-shot / pipe mode hardening** — `echo "task" | hexcli`, `hexcli -c
-   "task"`; builds on the non-interactive consent fix (a15ac97). This is what
+   "task"`; builds on the non-interactive consent fix (bed4d83). This is what
    makes it scriptable.
 4. **Custom slash commands** — user-defined prompt templates in
    `~/.shellai/commands/`.
@@ -98,7 +98,7 @@ steps.*
 
 ## Phase: The Split — codebase health (agent.py stages 3–8)
 
-> **COMPLETE 2026-09-01 (commits 7156138..cf20b8c).** Seven stages shipped;
+> **COMPLETE 2026-09-01 (commits 7156138..cc1ef49).** Seven stages shipped;
 > agent.py 3,818 → 1,499 lines and no module exceeds 800 (tools 738, repl
 > 613, llm 506). Exit gate met: 23 suites / 687 tests green after every
 > stage, zero vacuous patches (each stage's patch sites verified by
@@ -124,7 +124,7 @@ steps.*
 > note a module-level `__getattr__` does NOT serve bare globals inside that
 > module's own functions.
 
-**Progress 2026-08-31 (commits 7156138..cac1462):** four stages landed —
+**Progress 2026-08-31 (commits 7156138..b025b0d):** four stages landed —
 `parsing.py` (protocol text + TOOL_NAMES), `http_client.py` (keep-alive
 transport), `cancel.py` (Esc-cancel primitives; the eval runner now silences
 BOTH hexcli.agent and hexcli.cancel), `tools.py` (15 leaf tools +
