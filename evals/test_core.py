@@ -1279,7 +1279,51 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
         ui._COLOR_ON = orig
 
 
+def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
+    """The Result box repeats the final message. When the final model call
+    streamed that exact text (whitespace aside) the REPL skips the box; a
+    call that streamed nothing, or something else, keeps it."""
+    import contextlib
+    import io
+
+    from hexcli import llm
+    from hexcli.stream_render import StreamRenderer
+
+    class _R(StreamRenderer):
+        pass
+
+    def stream(raw: str) -> None:
+        state = {"started": False}
+        out: list[str] = []
+
+        def emit(t: str) -> None:
+            state["started"] = True
+            out.append(t)
+        r = _R(emit)
+        r._live_started = state  # type: ignore[attr-defined]
+        r.feed(raw)
+        r.finish()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            llm._end_live_render(r)
+
+    stream('{"action":"finish","message":"Nested dicts hold dicts.\\nExample:\\n  x = 1"}')
+    assert llm.last_streamed_matches("Nested dicts hold dicts.\nExample:\n  x = 1")
+    assert llm.last_streamed_matches("  Nested dicts hold  dicts. Example: x = 1 "), "whitespace is not a difference"
+    assert not llm.last_streamed_matches("Done."), "a harness message is not what streamed"
+    stream('{"action":"read_file","args":{"path":"a"}}')
+    assert not llm.last_streamed_matches(""), "a tool step streams nothing"
+    assert not llm.last_streamed_matches("Done.")
+    # A fresh call resets the record, so a non-streaming final call cannot
+    # be matched against an earlier step's text.
+    stream('{"action":"finish","message":"hello"}')
+    assert llm.last_streamed_matches("hello")
+    sa.set_mock_responses(['{"action":"finish","message":"hello"}'])
+    llm.call_llm({"backend": "mock"}, [], "max_output_tokens")
+    assert not llm.last_streamed_matches("hello")
+
+
 TESTS = [
+    test_result_box_is_skipped_when_the_answer_already_streamed,
     test_redraw_transcript_clears_and_reprints_the_conversation,
     test_margin_stream_pads_every_row_and_delegates_the_rest,
     test_margin_wraps_long_rows_itself_at_word_boundaries,

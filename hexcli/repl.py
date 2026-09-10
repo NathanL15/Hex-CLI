@@ -640,7 +640,10 @@ def run_repl(config: dict[str, Any]) -> int:
         try:
             message = sa.run_autopilot(config, history, query, shell_exe,
                                        session=current_session, turn=turn, probe=probe)
-            sa.render_result("Result", message)
+            if sa.last_streamed_matches(message):
+                print()   # the answer streamed as it arrived; no need to print it twice
+            else:
+                sa.render_result("Result", message)
             sa.append_session_message(current_session, "user", query)
             sa.append_session_message(current_session, "assistant", message)
             sa.sync_session_store(sessions, current_session)

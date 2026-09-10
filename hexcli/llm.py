@@ -442,13 +442,31 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
 
 
 def _end_live_render(renderer: Any) -> None:
+    global _LAST_STREAMED_TEXT
     started = getattr(renderer, "_live_started", {}).get("started", False)
+    _LAST_STREAMED_TEXT = getattr(renderer, "text_emitted", "") if started else ""
     if started:
         sys.stdout.write("\n")
         sys.stdout.flush()
     else:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
+
+
+# What the most recent model call streamed to the screen. Reset at the start
+# of every call_llm, so after a turn it holds the FINAL call's text (or "" if
+# that call did not stream: mock backend, non-tty, delegate, a dropped-stream
+# retry). The REPL uses it to skip the "Result" box when the answer is
+# already on screen word for word.
+_LAST_STREAMED_TEXT = ""
+
+
+def last_streamed_matches(message: str) -> bool:
+    """True when `message` is what the final model call already streamed,
+    ignoring whitespace differences (the parser trims the message; the
+    margin layer reflows it)."""
+    streamed = " ".join(_LAST_STREAMED_TEXT.split())
+    return bool(streamed) and streamed == " ".join(message.split())
 
 
 def ollama_generate_with_system(config: dict[str, Any], system: str, prompt: str) -> str:
@@ -498,9 +516,12 @@ def call_llm(
     Streaming path (_ollama_stream_chat) manages its own CancelMonitor; calling
     it through run_cancellable would create two competing monitors on the same
     console input buffer. Non-streaming path uses run_cancellable + Spinner.
+    Resets _LAST_STREAMED_TEXT so it only ever describes this call.
     Acquires memory._NPU_INFERENCE_LOCK so the dreaming daemon defers while any
     inference is in progress.
     """
+    global _LAST_STREAMED_TEXT
+    _LAST_STREAMED_TEXT = ""
     with memory._NPU_INFERENCE_LOCK:
         if config.get("backend") == "mock":
             # Mock fixtures carry no real token counts — never feed the

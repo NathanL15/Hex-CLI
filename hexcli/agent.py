@@ -59,6 +59,7 @@ _MOCK_RESPONSE_QUEUE = llm._MOCK_RESPONSE_QUEUE
 set_mock_responses = llm.set_mock_responses
 _pop_mock_response = llm._pop_mock_response
 _TokenEstimator = llm._TokenEstimator
+last_streamed_matches = llm.last_streamed_matches
 _TOKEN_ESTIMATOR = llm._TOKEN_ESTIMATOR
 estimate_tokens = llm.estimate_tokens
 _ollama_stream_chat = llm._ollama_stream_chat
@@ -1520,7 +1521,10 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     tel.record_turn(turn)
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)
-    render_result("Result", message)
+    if last_streamed_matches(message):
+        print()
+    else:
+        render_result("Result", message)
     return 0
 
 

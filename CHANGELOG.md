@@ -48,6 +48,14 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   so the step label shows before the first token arrives, and the
   transcript's `thinking...` line is dropped. The prompt is `> `; the
   `[model | cwd | gauge]` header line is gone, the bar carries both.
+* **No more answer printed twice.** Every turn ended with a `── Result`
+  box repeating the text that had just streamed. The box is now skipped
+  when the final model call streamed exactly the message the turn returned
+  (whitespace aside). It still appears when they differ: nothing streamed
+  (mock backend, no tty, a dropped stream retried without streaming), the
+  turn ended on a tool result or a harness message instead of a model
+  message (`Done.`, step limit, loop stop, refusal), or the parser
+  recovered a message from output the renderer could not follow.
 * Off a console (pipes, CI, `--raw`) or with `status_bar: false` the old
   inline prompt is used unchanged. Checked under a pseudo-console (ConPTY
   plus a VT emulator, scratch tooling, not committed): plain turn, tool
