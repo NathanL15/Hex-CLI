@@ -54,6 +54,21 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Windows Terminal by default
+
+The Start Menu shortcut launched `conhost.exe` on purpose (2.2.0, for the
+taskbar icon). Since 2.5.1 turned QuickEdit off there to stop clicks from
+freezing output, the classic console has had no drag-to-select at all,
+which is how the question "why can't I select text" came up. The installer
+now registers a "Hex CLI" Windows Terminal profile as a fragment (never
+touching the user's settings.json, and skipped when a profile of that name
+already exists) and points the shortcut at `wt.exe -p "Hex CLI"` when
+Windows Terminal is installed; conhost stays the fallback. Selection and
+copy work in Windows Terminal whatever the console mode, the context gauge
+draws its pie glyph there, and redraws of the status bar are smoother. The
+uninstaller removes the fragment. Trade-off: the taskbar shows the
+Terminal icon, not Hex's; the tab shows Hex's.
+
 ### Releases, re-organised
 
 Ten releases in 38 days, and the last five were set by the npurun fork's

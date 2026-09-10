@@ -17,6 +17,9 @@ _GITHUB_API = "https://api.github.com/repos/NathanL15/npurun/releases/latest"
 _NPURUN_ASSET = "npurun-arm64.exe"
 _SHORTCUT_NAME = "Hex CLI.lnk"
 _START_MENU = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+# The Windows Terminal profile install.ps1 registers (a fragment, so it never
+# edits the user's settings.json). Removed on uninstall.
+_WT_FRAGMENT = Path.home() / "AppData" / "Local" / "Microsoft" / "Windows Terminal" / "Fragments" / "Hex CLI" / "hexcli.json"
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +163,12 @@ def uninstall(install_dir: Path) -> int:
             _print(f"Could not remove shortcut: {exc}")
     else:
         _print("Start Menu shortcut not found (already removed).")
+    if _WT_FRAGMENT.exists():
+        try:
+            _WT_FRAGMENT.unlink()
+            _print("Removed Windows Terminal profile: Hex CLI")
+        except OSError as exc:
+            _print(f"Could not remove the Windows Terminal profile: {exc}")
 
     # 2. Ask whether to purge per-user data.
     shellai_dir = install_dir / ".shellai"

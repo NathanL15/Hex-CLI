@@ -46,6 +46,14 @@ redistribution. It prints instructions for that step and picks the SDK up on
 the next run. See [Setup by hand](#setup-by-hand) if you want to do the
 steps yourself.
 
+The Start Menu shortcut opens Hex in Windows Terminal when it is installed,
+through a "Hex CLI" profile the installer registers. Text selection, copy
+and paste work there as in any other tab. Without Windows Terminal the
+shortcut uses the classic console, where drag-select is off because Hex
+disables QuickEdit (a click would otherwise freeze output); use the window
+menu's Edit, Mark to copy there. To have `Hex CLI.cmd` itself open in
+Windows Terminal, set it as the default terminal in its Settings, Startup.
+
 ## Usage
 
 ```powershell

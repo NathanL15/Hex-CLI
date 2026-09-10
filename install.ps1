@@ -311,20 +311,51 @@ if (-not $NoStartMenu) {
     $targetCmd  = Join-Path $InstallDir "Hex CLI.cmd"
     if (Test-Path $targetCmd) {
         try {
+            $icon    = Join-Path $InstallDir "assets\hexcli.ico"
+            $iconPng = Join-Path $InstallDir "assets\hexcli.png"
+            # Windows Terminal when it is installed: text selection works
+            # there whatever the console mode (Hex turns QuickEdit off, which
+            # kills drag-select in the classic console), the status bar's
+            # gauge glyphs render, and redraws are smoother. The profile is
+            # registered as a fragment (the supported way for an app to add
+            # one) unless the user already has a "Hex CLI" profile of their
+            # own. Classic conhost is the fallback; it keeps the taskbar icon
+            # launcher.py stamps on the window.
+            $wt = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\wt.exe"
+            $useTerminal = Test-Path $wt
+            if ($useTerminal) {
+                $wtSettings = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+                $hasOwnProfile = (Test-Path $wtSettings) -and ((Get-Content $wtSettings -Raw) -match '"name"\s*:\s*"Hex CLI"')
+                if (-not $hasOwnProfile) {
+                    $fragmentDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\Fragments\Hex CLI"
+                    New-Item -ItemType Directory -Force -Path $fragmentDir | Out-Null
+                    $fragment = @{
+                        profiles = @(@{
+                            name              = "Hex CLI"
+                            commandline       = "cmd.exe /c `"$targetCmd`""
+                            startingDirectory = $InstallDir
+                            icon              = $(if (Test-Path $iconPng) { $iconPng } else { $null })
+                            tabTitle          = "Hex CLI"
+                        })
+                    }
+                    $fragment | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $fragmentDir "hexcli.json") -Encoding UTF8
+                    Write-Ok "Windows Terminal profile registered: Hex CLI"
+                }
+            }
             $shell    = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($lnkPath)
-            # conhost.exe on purpose: Windows Terminal ignores per-profile
-            # taskbar icons, so a WT-hosted launch always shows the generic
-            # terminal icon. Classic conhost lets launcher.py stamp the Hex
-            # logo on the window/taskbar via WM_SETICON.
-            $shortcut.TargetPath       = "$env:SystemRoot\System32\conhost.exe"
-            $shortcut.Arguments        = "cmd.exe /c `"$targetCmd`""
+            if ($useTerminal) {
+                $shortcut.TargetPath = $wt
+                $shortcut.Arguments  = '-p "Hex CLI"'
+            } else {
+                $shortcut.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+                $shortcut.Arguments  = "cmd.exe /c `"$targetCmd`""
+            }
             $shortcut.WorkingDirectory = $InstallDir
             $shortcut.Description      = "Hex CLI - local NPU terminal agent"
-            $icon = Join-Path $InstallDir "assets\hexcli.ico"
             $shortcut.IconLocation = if (Test-Path $icon) { "$icon,0" } else { "powershell.exe,0" }
             $shortcut.Save()
-            Write-Ok "Shortcut created: $lnkPath"
+            Write-Ok "Shortcut created: $lnkPath $(if ($useTerminal) { '(Windows Terminal)' } else { '(classic console)' })"
         } catch {
             Write-Warn "Could not create shortcut: $_"
         }
