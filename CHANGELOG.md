@@ -56,6 +56,8 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn ended on a tool result or a harness message instead of a model
   message (`Done.`, step limit, loop stop, refusal), or the parser
   recovered a message from output the renderer could not follow.
+* The `(~N tokens generated)` line after every answer is gone; the count
+  lives in `/stats`. Hitting the step limit now says so without a number.
 * Off a console (pipes, CI, `--raw`) or with `status_bar: false` the old
   inline prompt is used unchanged. Checked under a pseudo-console (ConPTY
   plus a VT emulator, scratch tooling, not committed): plain turn, tool

@@ -1280,8 +1280,6 @@ def _run_autopilot_turn(
                 continue
             result = msg or last_tool_output or "Done."
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
-            if total_eval:
-                cprint(f"\n  (~{total_eval} tokens generated)", C.DIM)
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
             _probe(probe, "on_end", "finish", result)
@@ -1419,7 +1417,7 @@ def _run_autopilot_turn(
 
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
     if total_eval:
-        cprint(f"\n  (~{total_eval} tokens generated, hit step limit)", C.DIM)
+        cprint("\n  Step limit reached.", C.DIM)
     if session:
         _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
     _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
