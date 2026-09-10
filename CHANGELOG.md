@@ -104,11 +104,11 @@ Six interaction issues found by driving the whole flow under a pseudo-console:
   transcript above is left exactly as the terminal reflowed it. (A first
   version reprinted the saved chat instead, which made the banner and every
   notice vanish on resize.)
-* **The transcript hugs the box.** Pinning used to pad blank rows between
-  the transcript and the box; a window that shrank kept those blanks and
-  scrolled the banner away. The padding is now inserted at the top of the
-  window, so the text sits directly above the box like a chat window and a
-  shrink drops empty rows first.
+* A version that inserted the padding above the transcript, so the text
+  hugged the box like a chat window, was tried and reverted the same day:
+  the banner belongs at the top. The blank rows sit between the transcript
+  and the box, and a burst of resize events from a window drag is handled
+  once, at the final size.
 * **One prompt during a confirmation.** A `y/N` confirm used to render on
   top of the still-live input box, so two prompts showed at once and it was
   unclear where to type. The box is taken down for the duration of any

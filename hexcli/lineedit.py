@@ -173,7 +173,11 @@ def _console_peek() -> Callable[[], str | None] | None:
         if not k32.PeekConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count)) or not count.value:
             return ""
         if rec.EventType == 4:  # WINDOW_BUFFER_SIZE_EVENT: the window resized
+            # A drag produces a burst of these; handle the last size once.
             consume()
+            while (k32.PeekConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count))
+                   and count.value and rec.EventType == 4):
+                consume()
             return RESIZE
         if rec.EventType != 1:  # not a KEY_EVENT
             consume()
