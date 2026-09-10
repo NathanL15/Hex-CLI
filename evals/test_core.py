@@ -1203,6 +1203,9 @@ def test_quick_edit_is_off_while_the_repl_runs() -> None:
     mode = ctypes.c_uint32()
     if k32.GetConsoleMode(k32.GetStdHandle(-10), ctypes.byref(mode)):
         assert not (mode.value & 0x0040), f"QuickEdit still set: mode={mode.value:#x}"
+        # Mouse input must be off too, or Windows Terminal gives the mouse to
+        # the app and drag-select stops working.
+        assert not (mode.value & 0x0010), f"mouse input still set: mode={mode.value:#x}"
 
 
 def test_margin_stream_pads_every_row_and_delegates_the_rest() -> None:

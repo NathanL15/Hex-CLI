@@ -171,8 +171,13 @@ def disable_quick_edit() -> None:
         if not k32.GetConsoleMode(stdin, ctypes.byref(mode)):
             return
         original = mode.value
-        ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
-        if k32.SetConsoleMode(stdin, (original & ~ENABLE_QUICK_EDIT) | ENABLE_EXTENDED_FLAGS):
+        ENABLE_MOUSE_INPUT, ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0010, 0x0040, 0x0080
+        # Mouse input off as well: with it on and QuickEdit off, Windows
+        # Terminal routes the mouse to the application instead of selecting
+        # text (Shift+drag was the only way to copy). Hex reads no mouse
+        # events, so nothing is lost.
+        wanted = (original & ~ENABLE_QUICK_EDIT & ~ENABLE_MOUSE_INPUT) | ENABLE_EXTENDED_FLAGS
+        if k32.SetConsoleMode(stdin, wanted):
             atexit.register(lambda: k32.SetConsoleMode(stdin, original))
     except Exception:
         pass

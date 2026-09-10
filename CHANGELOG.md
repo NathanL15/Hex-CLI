@@ -69,6 +69,12 @@ draws its pie glyph there, and redraws of the status bar are smoother. The
 uninstaller removes the fragment. Trade-off: the taskbar shows the
 Terminal icon, not Hex's; the tab shows Hex's.
 
+Selection did not work there at first either: the mode Hex sets (QuickEdit
+off, mouse input still on, the console default) is exactly the one Windows
+Terminal reads as "the application wants the mouse", so drags went to Hex
+and only Shift+drag selected. `disable_quick_edit` and the launcher now
+clear `ENABLE_MOUSE_INPUT` as well; Hex reads no mouse events.
+
 ### Releases, re-organised
 
 Ten releases in 38 days, and the last five were set by the npurun fork's

@@ -187,9 +187,11 @@ def _dress_console_window() -> None:
     # selection lived, and the process never received an interrupt.
     stdin = k32.GetStdHandle(-10)
     mode = ctypes.c_uint32()
+    # Mouse input off too: Windows Terminal gives the mouse to the app when
+    # that flag is on and QuickEdit is off, and text selection stops working.
     if k32.GetConsoleMode(stdin, ctypes.byref(mode)):
-        ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
-        k32.SetConsoleMode(stdin, (mode.value & ~ENABLE_QUICK_EDIT) | ENABLE_EXTENDED_FLAGS)
+        ENABLE_MOUSE_INPUT, ENABLE_QUICK_EDIT, ENABLE_EXTENDED_FLAGS = 0x0010, 0x0040, 0x0080
+        k32.SetConsoleMode(stdin, (mode.value & ~ENABLE_QUICK_EDIT & ~ENABLE_MOUSE_INPUT) | ENABLE_EXTENDED_FLAGS)
     hwnd = k32.GetConsoleWindow()
     ico = APP_DIR / "assets" / "hexcli.ico"
     if not (hwnd and ico.exists()):
