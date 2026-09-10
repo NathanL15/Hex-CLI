@@ -113,3 +113,5 @@ jobs:
         run: python evals/test_chatlog.py
       - name: status bar
         run: python evals/test_statusbar.py
+      - name: markdown stream
+        run: python evals/test_markdown_stream.py

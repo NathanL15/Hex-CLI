@@ -153,7 +153,7 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
         print(f"\n{result}\n")
 
     elif sub == "clear":
-        confirm = input("  Delete all memory entries? [y/N] ").strip().lower()
+        confirm = (ui.ask_line("  Delete all memory entries? [y/N] ") or "").strip().lower()
         if confirm not in ("y", "yes"):
             print("  Aborted.")
             return
@@ -269,10 +269,8 @@ def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
         return
     sa.cprint("  This usually means the NPU server needs a restart "
            "(it degrades after a few hours of use).", sa.C.DIM)
-    try:
-        answer = input("  Restart the model server now? [Y/n] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = "n"
+    answer = ui.ask_line("  Restart the model server now? [Y/n] ")
+    answer = "n" if answer is None else answer.strip().lower()   # no human: never restart
     if answer in ("", "y", "yes"):
         if restart_backend(config):
             sa.cprint("  Server restarted. Retry the last request.", sa.C.BGREEN)
@@ -343,6 +341,16 @@ def run_repl(config: dict[str, Any]) -> int:
     ui.enable_vt_processing()
     ui.install_margin(int(config.get("side_padding", 0) or 0))
     ui.apply_saved_console_font()
+    # The status bar: input box pinned at the bottom with context, NPU and
+    # memory under it. Up before the banner, so the first thing on screen is
+    # the finished layout. Between reads the live area draws it under
+    # whatever the turn prints; while reading, the editor draws it as its
+    # chrome. main() uninstalls it on the way out, whichever way the loop
+    # ends. `current_session` is rebound by /new and /resume; the lambda
+    # reads the name at call time, so the gauge follows.
+    live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
+    if live is not None:
+        live.enable()
     ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
     sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
     if config.get("memory_dreaming", False):
@@ -361,14 +369,6 @@ def run_repl(config: dict[str, Any]) -> int:
         if live is not None:
             live.pad_for_editor()
         return True
-
-    # The status bar: input box pinned at the bottom with context, NPU and
-    # memory under it. Between reads the live area draws it under whatever
-    # the turn prints; while reading, the editor draws it as its chrome.
-    # main() uninstalls it on the way out, whichever way the loop ends.
-    # `current_session` is rebound by /new and /resume; the lambda reads the
-    # name at call time, so the gauge follows.
-    live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
 
     def _resize() -> None:
         """The window was resized while at the prompt: reprint the transcript

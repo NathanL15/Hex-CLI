@@ -64,6 +64,34 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Answers render their markdown
+
+Streamed answers printed their markup raw: `## Heading`, `**bold**`,
+backtick spans and ``` fences with the backticks showing. New module
+`hexcli/markdown_stream.py` turns that subset into terminal styling one
+character at a time, so streaming keeps its word-by-word feel: headings
+bold with the hashes dropped, `- ` / `* ` bullets as `•`, `**bold**` bold,
+`` `code` `` cyan, and a fence as a dim rule carrying the language with the
+code left exactly as written (no gutter, so it copies cleanly). Markers are
+held only while ambiguous and released literally otherwise, so `2 * 3` and
+`C#` survive. Feeding the same text whole or per character gives identical
+output; `evals/test_markdown_stream.py` pins that. The non-streamed
+`Result` box goes through the same renderer, so both paths match.
+
+### Shift+Enter, and two prompts that bypassed the console handling
+
+* `Shift+Enter` inserts a new line in the entry (the key reader already
+  peeks console events, so the modifier is visible; `msvcrt` alone would
+  hand it over as Enter). `\` then Enter still works.
+* `/memory clear` and the "restart the model server?" question used raw
+  `input()`, whose echo goes through the console itself: the status box
+  was left jumbled after Enter and the margin's column went stale. Both
+  now use `ui.ask_line`, the same polled read the confirms use, with the
+  box lowered for the question. A no-human answer (not a console, Ctrl-C,
+  idle timeout) never restarts the server.
+* The status box is up before the banner, so the first thing on screen is
+  the finished layout.
+
 ### Status-bar flow polish
 
 Six interaction issues found by driving the whole flow under a pseudo-console:

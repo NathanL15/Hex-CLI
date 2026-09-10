@@ -921,7 +921,29 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
         return _confirm_or_deny_read(prompt, timeout_s)
 
 
+def ask_line(prompt: str, timeout_s: float | None = None) -> str | None:
+    """Read one line at an inline prompt the way the confirms do: keys are
+    polled and echoed through our own streams, so the status box can be
+    lowered around it and the margin's column stays right (``input()`` echoes
+    through the console itself, which left the box jumbled after Enter).
+    Returns the text, or None when no human answered: not a console, Ctrl-C,
+    or the idle timeout. Callers choose their own default for None."""
+    if timeout_s is None:
+        timeout_s = CONFIRM_TIMEOUT_S
+    if not sys.stdin.isatty():
+        return None
+    with paused_status():
+        return _console_read_line(prompt, timeout_s, cancel_note="   Cancelled.", timeout_suffix=".")
+
+
 def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:
+    answer = _console_read_line(prompt, timeout_s, cancel_note="   Cancelled; denied.",
+                                timeout_suffix="; denied.")
+    return answer is not None and answer.strip().lower() in {"y", "yes"}
+
+
+def _console_read_line(prompt: str, timeout_s: float, cancel_note: str,
+                       timeout_suffix: str) -> str | None:
     sys.stdout.write(prompt)
     sys.stdout.flush()
     deadline = time.monotonic() + timeout_s
@@ -934,11 +956,11 @@ def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:
         deadline = time.monotonic() + timeout_s  # a human is here; start the clock over
         if ch in ("\r", "\n"):
             print()
-            return buf.strip().lower() in {"y", "yes"}
+            return buf
         if ch == "\x03":  # Ctrl-C — an emphatic no, not a crash
             print()
-            cprint("   Cancelled; denied.", C.DIM)
-            return False
+            cprint(cancel_note, C.DIM)
+            return None
         if ch in ("\b", "\x7f"):
             if buf:
                 buf = buf[:-1]
@@ -954,8 +976,8 @@ def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:
         sys.stdout.write(ch)
         sys.stdout.flush()
     print()
-    cprint(f"   No response after {timeout_s:.0f}s; denied.", C.DIM)
-    return False
+    cprint(f"   No response after {timeout_s:.0f}s{timeout_suffix}", C.DIM)
+    return None
 
 
 def confirm_network_fetch(url: str) -> bool:
@@ -993,8 +1015,9 @@ def confirm_destructive_command(cmd: str) -> bool:
 
 
 def render_result(title: str, body: str) -> None:
+    from hexcli.markdown_stream import render_markdown  # lazy: it imports C from here
     print()
     cprint(f"── {title} ", C.BOLD + C.BCYAN)
     cprint("─" * 60, C.DIM)
-    print(body)
+    print(render_markdown(body))
     print()

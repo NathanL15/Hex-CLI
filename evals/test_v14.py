@@ -234,7 +234,7 @@ def test_memory_clear_aborted() -> None:
         meta = store_dir / "metadata.json"
         meta.write_text("[]", encoding="utf-8")
         try:
-            with unittest.mock.patch("builtins.input", return_value="n"):
+            with unittest.mock.patch("hexcli.ui.ask_line", return_value="n"):
                 sa._handle_memory_cmd("/memory clear", cfg)
             assert meta.exists(), "aborted clear must not delete the file"
         finally:
@@ -251,7 +251,7 @@ def test_memory_clear_confirmed() -> None:
         meta = store_dir / "metadata.json"
         meta.write_text("[]", encoding="utf-8")
         try:
-            with unittest.mock.patch("builtins.input", return_value="y"):
+            with unittest.mock.patch("hexcli.ui.ask_line", return_value="y"):
                 sa._handle_memory_cmd("/memory clear", cfg)
             assert not meta.exists(), "confirmed clear must delete metadata.json"
         finally:

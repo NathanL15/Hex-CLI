@@ -119,6 +119,7 @@ whatever follows the command.
 | `Ctrl+W` `Ctrl+U` `Ctrl+K` | delete the word before, to line start, to line end |
 | `Esc` | clear the line |
 | `Ctrl+V` | paste a block. Nothing is sent until you press Enter |
+| `Shift+Enter` | new line inside the entry |
 | `\` then `Enter` | continue on a new line |
 | `Ctrl+Plus` `Ctrl+Minus` | text size in the classic console |
 

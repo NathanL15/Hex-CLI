@@ -119,6 +119,8 @@ _VK_ZOOM_OUT = frozenset({0xBD, 0x6D})   # VK_OEM_MINUS, VK_SUBTRACT
 _VK_MODIFIERS = frozenset({0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C, 0x90, 0x91,
                            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5})
 _CTRL_PRESSED = 0x0008 | 0x0004          # LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED
+_SHIFT_PRESSED = 0x0010
+_VK_RETURN = 0x0D
 
 
 def _console_peek() -> Callable[[], str | None] | None:
@@ -177,6 +179,11 @@ def _console_peek() -> Callable[[], str | None] | None:
             consume()
             return ""
         key = rec.Event.KeyEvent
+        if key.bKeyDown and key.wVirtualKeyCode == _VK_RETURN and key.dwControlKeyState & _SHIFT_PRESSED:
+            # Shift+Enter: a new line inside the entry, as in every chat UI.
+            # msvcrt would hand this over as a plain Enter and submit.
+            consume()
+            return NEWLINE
         if key.bKeyDown and key.dwControlKeyState & _CTRL_PRESSED:
             if key.wVirtualKeyCode in _VK_ZOOM_IN:
                 consume()

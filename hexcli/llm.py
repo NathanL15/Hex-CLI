@@ -417,9 +417,11 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
     if not sys.stderr.isatty():
         return None  # eval/CI capture: keep logs clean
 
+    from .markdown_stream import MarkdownStream
     from .stream_render import StreamRenderer
 
     state = {"started": False}
+    markdown = MarkdownStream()   # headings, bullets, bold, code spans and fences, live
 
     def emit(text: str) -> None:
         if not state["started"]:
@@ -430,7 +432,7 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
             live = ui.LIVE_AREA
             if live is not None and live.enabled:
                 live.set_activity("responding (Esc to cancel)")
-        sys.stdout.write(text)
+        sys.stdout.write(markdown.feed(text))
         sys.stdout.flush()
 
     def on_tool(name: str) -> None:
@@ -443,6 +445,7 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
 
     r = StreamRenderer(emit, on_tool)
     r._live_started = state  # type: ignore[attr-defined]
+    r._markdown = markdown  # type: ignore[attr-defined]
     return r
 
 
@@ -451,7 +454,9 @@ def _end_live_render(renderer: Any) -> None:
     started = getattr(renderer, "_live_started", {}).get("started", False)
     _LAST_STREAMED_TEXT = getattr(renderer, "text_emitted", "") if started else ""
     if started:
-        sys.stdout.write("\n")
+        markdown = getattr(renderer, "_markdown", None)
+        tail = markdown.finish() if markdown is not None else ""
+        sys.stdout.write(tail + "\n")
         sys.stdout.flush()
     else:
         sys.stderr.write("\r\033[K")
