@@ -63,7 +63,7 @@ def _live(width: int = 40, pad: int = 2, pct: int = 32) -> tuple[sb.LiveArea, _S
     base = _Stream()
     margin = ui._Margin(pad, width=lambda: width)
     inner = ui._MarginStream(base, margin)
-    live = sb.LiveArea(margin, lambda: pct, sampler=_Sampler())
+    live = sb.LiveArea(margin, lambda: pct, sampler=_Sampler(), geometry=lambda: None)
     live._inner = inner
     return live, base, inner
 
@@ -254,6 +254,44 @@ def test_activity_and_ticks_repaint_the_status_row() -> None:
         restore()
 
 
+def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
+    """Cursor on row 5 of a 30-row window: 24 rows lie below it, the box
+    takes 4, so 20 blank rows go in between and the cursor walks back up
+    24. Once the transcript reaches the bottom there is nothing to pad."""
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        geo = {"row": 5, "height": 30}
+        live._geometry = lambda: (geo["row"], geo["height"])
+        live.enable()
+        text = base.text
+        assert text.startswith("\033[?25l" + "\n  " * 20 + "\n  "), repr(text[:80])
+        assert text.endswith("\r  \033[24A\033[?25h") and live._drawn == 24, (repr(text[-30:]), live._drawn)
+        geo["row"] = 27
+        base.chunks.clear()
+        live.write(inner, "x")
+        assert "\033[?25l\n  " in base.text and "\n  \n" not in base.text, repr(base.text)
+        # Before the editor takes over, the cursor is moved down so the
+        # editor's four rows land on the last four rows of the window.
+        live.write(inner, "\n")   # column 0: no fresh-row newline to add
+        geo["row"] = 3
+        base.chunks.clear()
+        live.disable()
+        assert base.text == "\033[J" + "\n  " * 23, repr(base.text)
+        geo["row"] = 28
+        base.chunks.clear()
+        live.enable()
+        live.disable()
+        assert base.text.endswith("\033[J"), repr(base.text)
+        # No console geometry: no padding at all.
+        live._geometry = lambda: None
+        base.chunks.clear()
+        live.enable()
+        assert base.text.startswith("\033[?25l\n  ") and live._drawn == 4
+    finally:
+        restore()
+
+
 def test_spinner_uses_the_live_area_when_one_is_up() -> None:
     restore = _no_color()
     live, base, inner = _live(width=80)
@@ -299,6 +337,7 @@ TESTS = [
     test_disabled_area_passes_writes_straight_through,
     test_disable_erases_the_box_and_starts_a_fresh_row,
     test_activity_and_ticks_repaint_the_status_row,
+    test_box_is_padded_down_to_the_last_rows_of_the_window,
     test_spinner_uses_the_live_area_when_one_is_up,
     test_install_declines_off_a_console_and_when_turned_off,
     test_status_bar_is_a_settable_config_key,

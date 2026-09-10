@@ -358,6 +358,8 @@ def run_repl(config: dict[str, Any]) -> int:
         if ui.console_zoom(delta) is None:
             return False
         ui.redraw_transcript(current_session)
+        if live is not None:
+            live.pad_for_editor()
         return True
 
     # The status bar: input box pinned at the bottom with context, NPU and

@@ -117,7 +117,8 @@ whatever follows the command.
 History is saved in `~/.shellai/input_history`. When stdin is not a
 terminal the agent falls back to plain `input()`, so pipes and CI work.
 
-The input box stays at the bottom of the window. The status line under it
+The input box stays on the last rows of the window, and the conversation
+scrolls up above it. The status line under it
 shows how full the context is, the NPU load (the counter behind Task
 Manager's NPU graph), memory in use, and the working directory and branch.
 Set `status_bar` to `false` for the old inline prompt.

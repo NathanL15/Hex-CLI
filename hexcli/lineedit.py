@@ -421,6 +421,7 @@ class LineEditor:
         read_key: Callable[[], str] | None = None,
         write: Callable[[str], None] | None = None,
         width: int | None = None,
+        height: int | None = None,
         styled: bool | None = None,
         margin: int = 0,
         on_zoom: Callable[[int], Any] | None = None,
@@ -431,6 +432,7 @@ class LineEditor:
         self._read_key = read_key or windows_key_reader()
         self._write = write or (lambda s: (sys.stdout.write(s), sys.stdout.flush()) and None)
         self._forced_width = width
+        self._forced_height = height
         # Left margin the output stream adds after every "\n" and "\r"
         # (ui.install_margin). Rows then start `margin` columns in, so the
         # usable width shrinks by that much and wraps must be explicit
@@ -462,6 +464,15 @@ class LineEditor:
             return max(20, os.get_terminal_size().columns)
         except OSError:
             return 80
+
+    @property
+    def height(self) -> int:
+        if self._forced_height:
+            return self._forced_height
+        try:
+            return max(4, os.get_terminal_size().lines)
+        except OSError:
+            return 24
 
     @property
     def usable(self) -> int:
@@ -776,6 +787,10 @@ class LineEditor:
         if key == CLEAR_SCREEN:
             self._write("\033[2J\033[H")
             self._cursor_row = 0
+            if self.chrome is not None:
+                # Keep the box on the window's last rows after the clear.
+                rows = self._layout(prompt)[1]
+                self._write("\n" * max(0, self.height - rows))
             return None
         if key == ESCAPE:
             self.buffer, self.pos = "", 0

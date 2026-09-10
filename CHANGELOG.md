@@ -27,7 +27,12 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   when the text changes. Between reads a wrapper on stdout/stderr erases
   the box before every transcript write and redraws it after, borrowing the
   margin layer's column bookkeeping to put the cursor back; the spinner's
-  ticks go through the same lock.
+  ticks go through the same lock. The box is pinned to the window's last
+  rows from the first prompt: the console's cursor position
+  (`GetConsoleScreenBufferInfo`) says how many rows lie below the
+  transcript, and blank rows fill the gap until the conversation is long
+  enough to reach the box on its own. Ctrl+L and a zoom redraw keep it
+  there.
 * **Metrics.** `npu` is Windows' own NPU counter: `GPU Engine` utilisation
   for the adapter DirectX does not list, the source Task Manager's NPU
   graph reads, through `pdh.dll` with ctypes. Measured on this machine:

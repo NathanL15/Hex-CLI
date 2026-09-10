@@ -710,6 +710,19 @@ def test_idle_tick_repaints_only_when_the_chrome_changed() -> None:
     assert "b" in out[1] and out[2].endswith("> \n"), [repr(o) for o in out]
 
 
+def test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom() -> None:
+    """Ctrl+L: the screen is cleared, then enough blank rows are written
+    that the four-row box lands on the last rows of a ten-row window."""
+    from hexcli import lineedit as le
+    ed, out = editor([le.CLEAR_SCREEN, le.ENTER], height=10, chrome=lambda w: (["top"], ["bottom", "status"]))
+    ed.read("> ")
+    joined = "".join(out)
+    assert "\033[2J\033[H" + "\n" * 6 in joined, repr(joined)
+    ed, out = editor([le.CLEAR_SCREEN, le.ENTER], height=10)
+    ed.read("> ")
+    assert "\033[2J\033[H\n" not in "".join(out), "no chrome: no padding"
+
+
 def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
     from hexcli import lineedit as le
     ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
@@ -799,6 +812,7 @@ TESTS = [
     test_repl_commands_has_no_phantoms,
     test_chrome_rows_frame_the_input_and_stay_out_of_the_transcript,
     test_idle_tick_repaints_only_when_the_chrome_changed,
+    test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 

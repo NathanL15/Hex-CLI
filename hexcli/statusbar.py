@@ -341,6 +341,38 @@ def rule(width: int) -> str:
 # ── the live area ────────────────────────────────────────────────────────────
 
 
+def console_geometry() -> tuple[int, int] | None:
+    """(cursor row within the window, window height) from the console, or
+    None off Windows / off a console. The box is pinned to the window's
+    last rows with this: the transcript is padded down to it."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _Coord(ctypes.Structure):
+        _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+    class _Rect(ctypes.Structure):
+        _fields_ = [("Left", ctypes.c_short), ("Top", ctypes.c_short),
+                    ("Right", ctypes.c_short), ("Bottom", ctypes.c_short)]
+
+    class _Info(ctypes.Structure):
+        _fields_ = [("dwSize", _Coord), ("dwCursorPosition", _Coord), ("wAttributes", wintypes.WORD),
+                    ("srWindow", _Rect), ("dwMaximumWindowSize", _Coord)]
+
+    k32 = ctypes.windll.kernel32
+    k32.GetStdHandle.restype = ctypes.c_void_p
+    info = _Info()
+    if not k32.GetConsoleScreenBufferInfo(ctypes.c_void_p(k32.GetStdHandle(-11)), ctypes.byref(info)):
+        return None
+    height = info.srWindow.Bottom - info.srWindow.Top + 1
+    row = info.dwCursorPosition.Y - info.srWindow.Top
+    if height <= 0 or row < 0 or row >= height:
+        return None
+    return row, height
+
+
 class LiveArea:
     """The box between reads. See the module docstring for the mechanics.
 
@@ -355,11 +387,14 @@ class LiveArea:
         context_percent: Callable[[], int | None],
         sampler: SystemSampler | None = None,
         prompt: str = "> ",
+        geometry: Callable[[], tuple[int, int] | None] | None = None,
     ) -> None:
         self.margin = margin
         self._context_percent = context_percent
         self.sampler = sampler or SystemSampler()
         self.prompt = prompt
+        self._geometry = geometry or console_geometry
+        self.editor_rows = 4       # rule, input row, rule, status: what the editor draws
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
@@ -413,17 +448,41 @@ class LiveArea:
             inner.write("\033[J")
             self._drawn = 0
 
+    def _rows_below_cursor(self) -> int | None:
+        try:
+            geo = self._geometry()
+        except Exception:  # noqa: BLE001
+            return None
+        if geo is None:
+            return None
+        row, height = geo
+        return height - 1 - row
+
     def _draw(self, inner: Any) -> None:
         m = self.margin
         saved = (m.col, m.word, m.word_vis)
         rows = [clip_visible(r, m.usable) for r in self.rows(m.usable)]
-        out = ["\033[?25l", "\n", "\n".join(rows), "\r", f"\033[{len(rows)}A"]
+        # Pin to the window's last rows: blank rows between the transcript
+        # and the box until the transcript is long enough to push it there.
+        below = self._rows_below_cursor()
+        pad = max(0, below - len(rows)) if below is not None else 0
+        out = ["\033[?25l", "\n" * pad, "\n", "\n".join(rows), "\r", f"\033[{len(rows) + pad}A"]
         if saved[0]:
             out.append(f"\033[{saved[0]}C")
         out.append("\033[?25h")
         inner.write("".join(out))
         m.col, m.word, m.word_vis = saved
-        self._drawn = len(rows)
+        self._drawn = len(rows) + pad
+
+    def pad_for_editor(self) -> None:
+        """Move the cursor down so the editor's rows land on the window's
+        last rows. Called with the box down and the cursor on a fresh row."""
+        below = self._rows_below_cursor()
+        if below is None or self._inner is None:
+            return
+        pad = below - (self.editor_rows - 1)
+        if pad > 0:
+            self._inner.write("\n" * pad)
 
     def write(self, inner: Any, text: str) -> None:
         """A transcript write from one of the wrapped streams."""
@@ -462,6 +521,7 @@ class LiveArea:
                     self._inner.write("\n")
             self.enabled = False
             self.activity, self.frame = None, ""
+            self.pad_for_editor()
         self.refresh_location()
 
     def set_activity(self, label: str | None) -> None:
