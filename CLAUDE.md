@@ -122,7 +122,7 @@ fails if it drifts. Anything settable via `/config` must be in
 
 ---
 
-## 4. Code map (`hexcli/`, 31 modules, none over 1,700 lines)
+## 4. Code map (`hexcli/`, 32 modules, none over 1,700 lines)
 
 agent.py 3,818 → 1,682 lines after "the Split" (2026-09-01, 7 stages).
 Package rule: no module over ~800 lines except agent.py.
@@ -144,7 +144,8 @@ Package rule: no module over ~800 lines except agent.py.
 | `memory.py` | MiniLM vector memory, `search_memory`, memory rules, dreaming daemon (OFF: it fabricated hardware facts) |
 | `sessions.py` | session store; **owns `HISTORY_PATH` — patch it here, not on agent** |
 | `chatlog.py`, `telemetry.py` | full JSONL transcript per session (`~/.shellai/chatlog/`); redacted structured logs |
-| `lineedit.py`, `ui.py`, `stream_render.py`, `diffview.py` | input line (history, Tab, paste, zoom), presentation, live stream renderer, undo-snapshot diffs. One-way dependency: agent → ui |
+| `lineedit.py`, `ui.py`, `stream_render.py`, `diffview.py` | input line (history, Tab, paste, zoom, chrome rows + idle repaint), presentation, live stream renderer, undo-snapshot diffs. One-way dependency: agent → ui |
+| `statusbar.py` | the bottom section: input box + status line (`context`, `npu`, `mem`, cwd/branch). `LiveArea` wraps stdout/stderr between reads (erase box → write → redraw, one lock shared with the spinner); the editor draws the same rows as chrome while reading. NPU % = PDH `GPU Engine` counter for the LUID DirectX does not list; memory = `GlobalMemoryStatusEx`; 1 s sampler thread. `ui.LIVE_AREA` is the hook the spinner and `llm.on_tool` use |
 | `doctor.py`, `distribution.py`, `setup_wizard.py`, `commands.py` | `--doctor`, `--update`/`--uninstall`, `/setup`, custom `.md` slash commands |
 | `escalate.py`, `local_escalation.py`, `network.py`, `lockfile.py` | cloud escalation (opt-in, key), local ladder (dormant, no viable bigger model), `fetch_url` + online probe, advisory PID lock |
 
@@ -185,7 +186,7 @@ server with the system prompt.
    python -m compileall hexcli/ evals/ -q
    python evals/test_core.py            # plus every suite covering what you touched
    ```
-   Full offline set = the step list in `.github/workflows/ci.yml` (25 files, 740 tests). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
+   Full offline set = the step list in `.github/workflows/ci.yml` (26 files, 757 tests). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
 3. Anything touching the model path (prompts, compaction, tools the model sees, launcher env, runtime keys) also needs a live check: at minimum `python evals/cases_smoke.py` on a fresh server (10/10), and for behaviour changes the A/B protocol in §7.
 4. Never weaken a test to make it pass. If the test is wrong, fix it and say why in the commit. Never add a dependency without a strong reason.
 5. Update `CHANGELOG.md` `## Unreleased` with the measured effect. Numbers are pass^k over repeated live runs, never single anecdotes.
@@ -296,6 +297,7 @@ Settled after the user rejected AI-sounding copy twice (2026-08-29):
 - No em-dash asides, no parentheticals, no reassurance, no token or message counts in notices (numbers live in `/stats` and `/context`).
 - Release titles are the bare version; release notes open with the first factual section, no thesis sentence. When unsure, copy what git or aider would print.
 - The REPL: one mode, 18 commands (`/help /clear /new /history /resume /search /diff /undo /stats /context /compact /memory /config /setup /tools /cwd /doctor /exit`), Esc cancels, Tab completes, did-you-mean for typos so a mistyped command never reaches the model. Custom commands are `.md` files in `.shellai/commands/`. Chat/command modes and `/save /load /checkpoints /open /profile /model /models /mode` were removed in 2.3.0 (−685 lines); do not bring them back.
+- Layout (2026-09-10): Claude Code shape. Transcript above; the last rows are the input box (`> `, a rule above and below) and the status line (`context`, `npu`, `mem`, cwd/branch right-aligned; the spinner label and `→ tool` while a turn runs). Nothing uses a scroll region: scrollback is preserved. The user's message is echoed as `> text`. `status_bar: false` or a non-console stdin gives the old inline `[model | cwd | gauge]` prompt. Chrome rows must be one cell narrower than the usable width or the editor pads a spare row. To check rendering without a desktop: run the REPL under ConPTY and render with pyte (the driver used on 09-10 lived in the session scratchpad; the trick is nulling the driver's std handles around CreateProcess, or the child inherits them instead of the pseudo-console's).
 - Model-facing strings are exempt from the copy rules but require §7.
 
 ---

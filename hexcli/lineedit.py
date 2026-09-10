@@ -62,6 +62,7 @@ ZOOM_IN = "<zoom-in>"        # Ctrl+Plus  (main row or numpad)
 ZOOM_OUT = "<zoom-out>"      # Ctrl+Minus
 PASTE = "<paste>"            # prefix: the rest of the token is pasted text
 EXHAUSTED = "<exhausted>"    # key source ran out (tests / closed stdin)
+IDLE = "<idle>"              # nothing typed for a while: a chance to repaint
 
 _ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
 
@@ -159,8 +160,13 @@ def _console_peek() -> Callable[[], str | None] | None:
 
     def peek() -> str | None:
         # 100 ms slices, so a Ctrl+C at the prompt is still raised promptly.
+        # After a second with nothing queued, hand back IDLE so the editor
+        # can refresh the status line it draws under the input.
+        waited = 0
         while k32.WaitForSingleObject(handle, 100) != 0:
-            pass
+            waited += 1
+            if waited >= _IDLE_SLICES:
+                return IDLE
         if not k32.PeekConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count)) or not count.value:
             return ""
         if rec.EventType != 1:  # not a KEY_EVENT
@@ -234,6 +240,7 @@ def windows_key_reader() -> Callable[[], str]:
 
 _BURST_GRACE_S = 0.02
 _PASTE_MIN_CHARS = 3
+_IDLE_SLICES = 10            # × 100 ms between idle repaints of the status line
 
 
 def _is_paste(raw: list[str]) -> bool:
@@ -417,6 +424,7 @@ class LineEditor:
         styled: bool | None = None,
         margin: int = 0,
         on_zoom: Callable[[int], Any] | None = None,
+        chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -429,11 +437,17 @@ class LineEditor:
         # newlines — a terminal auto-wrap would start the next row at column 0.
         self.margin = max(0, int(margin or 0))
         self.on_zoom = on_zoom
+        # Rows drawn above and below the input while editing (the box and
+        # the status line, hexcli.statusbar). Called with the usable width
+        # on every render; each row must already fit in it. Not part of the
+        # transcript: the finished line is written without them.
+        self.chrome = chrome
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
         self._rendered_rows = 0
         self._cursor_row = 0
+        self._last_text: str | None = None
         self._hist_index: int | None = None
         self._hist_prefix = ""
         self._saved_draft = ""
@@ -469,27 +483,35 @@ class LineEditor:
 
     # -- rendering ----------------------------------------------------------
 
-    def _layout(self, prompt: str) -> tuple[str, int, int, int]:
+    def _layout(self, prompt: str, chrome: bool = True) -> tuple[str, int, int, int]:
         """Return (text_to_write, total_rows, cursor_row, cursor_col)."""
         prompt_lines = prompt.split("\n")
         buf_lines = self.buffer.split("\n")
+        above: list[str] = []
+        below: list[str] = []
+        if chrome and self.chrome is not None:
+            above, below = self.chrome(self.usable)
 
-        # Logical lines: the prompt's leading lines stand alone; its last line
-        # is the prefix of the first buffer line; later buffer lines get the
-        # continuation prompt.
+        # Logical lines: chrome rows above; the prompt's leading lines stand
+        # alone; its last line is the prefix of the first buffer line; later
+        # buffer lines get the continuation prompt; chrome rows below.
         logical: list[tuple[str, int]] = []   # (rendered text, visible width)
+        for line in above:
+            logical.append((line, visible_len(line)))
         for line in prompt_lines[:-1]:
             logical.append((line, visible_len(line)))
         last_prompt = prompt_lines[-1]
         prefixes = [last_prompt] + [self.CONT_PROMPT] * (len(buf_lines) - 1)
         for prefix, line in zip(prefixes, buf_lines):
             logical.append((prefix + line, visible_len(prefix) + len(line)))
+        for line in below:
+            logical.append((line, visible_len(line)))
 
         # Cursor: which buffer line, and how far into it.
         before = self.buffer[:self.pos]
         cur_line = before.count("\n")
         col_in_line = len(before) - (before.rfind("\n") + 1)
-        cursor_logical = len(prompt_lines) - 1 + cur_line
+        cursor_logical = len(above) + len(prompt_lines) - 1 + cur_line
         cursor_vis = visible_len(prefixes[cur_line]) + col_in_line
 
         pieces: list[str] = []
@@ -509,8 +531,11 @@ class LineEditor:
             out += f"\033[{self._cursor_row}A"
         return out
 
-    def render(self, prompt: str) -> None:
+    def render(self, prompt: str, if_changed: bool = False) -> None:
         text, total_rows, cursor_row, cursor_col = self._layout(prompt)
+        if if_changed and text == self._last_text:
+            return   # an idle tick with nothing new on the status line
+        self._last_text = text
         out = [self._move_to_anchor(), "\033[J", text]
         # We are now at the end of the last row; walk back to the anchor and
         # down to the cursor. Both legs are computed, so the next redraw's
@@ -535,11 +560,13 @@ class LineEditor:
         self._write(payload)
 
     def _finish_render(self, prompt: str) -> None:
-        """Leave the finished line on screen and the cursor below it."""
-        text, total_rows, cursor_row, _ = self._layout(prompt)
+        """Leave the finished line on screen (without the chrome) and the
+        cursor below it."""
+        text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False)
         self._write(self._move_to_anchor() + "\033[J" + text + "\n")
         self._rendered_rows = 0
         self._cursor_row = 0
+        self._last_text = None
 
     # -- editing primitives -------------------------------------------------
 
@@ -651,11 +678,15 @@ class LineEditor:
         self.buffer, self.pos = "", 0
         self._hist_index, self._hist_prefix, self._saved_draft = None, "", ""
         self._rendered_rows, self._cursor_row = 0, 0
+        self._last_text = None
         try:
             self.render(prompt)
             while True:
                 key = self._read_key()
                 if key == "":
+                    continue
+                if key == IDLE:
+                    self.render(prompt, if_changed=True)
                     continue
                 result = self._handle(key, prompt)
                 if result is not None:
@@ -663,6 +694,12 @@ class LineEditor:
                     self.history.add(result)
                     return result
                 self.render(prompt)
+        except (KeyboardInterrupt, EOFError):
+            # Ctrl+C / Ctrl+D: keep what was typed on screen, drop the
+            # chrome, and leave the cursor on a fresh row like a finished
+            # line would; the caller's handler then prints as it always did.
+            self._finish_render(prompt)
+            raise
         finally:
             if self.styled:
                 self._write("\033[?25h")
@@ -766,13 +803,15 @@ def make_reader(
     commands: Sequence[str],
     config_keys: Callable[[], Iterable[str]] | None = None,
     on_zoom: Callable[[int], Any] | None = None,
+    chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
     Callers fall back to ``input()`` on None, so a non-tty (piped stdin, CI,
     ``--raw``) keeps working exactly as before. ``on_zoom`` receives +1 / -1
     for Ctrl+Plus / Ctrl+Minus; the margin follows config["side_padding"],
-    the same value the REPL hands ui.install_margin.
+    the same value the REPL hands ui.install_margin; ``chrome`` is the
+    status bar's rows above and below the input (hexcli.statusbar).
     """
     if not bool(config.get("rich_input", True)):
         return None
@@ -791,5 +830,6 @@ def make_reader(
         completer=default_completer(commands, config_keys),
         margin=int(config.get("side_padding", 0) or 0),
         on_zoom=on_zoom,
+        chrome=chrome,
     )
     return editor.read

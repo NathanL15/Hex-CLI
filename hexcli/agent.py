@@ -39,6 +39,7 @@ from hexcli import (
     prompts,
     safety,
     sessions,
+    statusbar,
     telemetry,
     tools,
     ui,
@@ -1161,7 +1162,10 @@ def _run_autopilot_turn(
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
-        cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
+        if ui._live_area() is not None:
+            print(file=sys.stderr)   # the status line carries the step label
+        else:
+            cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
 
         # Up to 2 retries on bad JSON
         raw = ""
@@ -1638,7 +1642,10 @@ def main() -> int:
 
     try:
         if not query:
-            return run_repl(config)
+            try:
+                return run_repl(config)
+            finally:
+                statusbar.uninstall()   # take the input box down however the loop ended
         return one_shot_autopilot(config, query, shell_exe)
     except (UserCancelled, KeyboardInterrupt):
         cprint("Cancelled.", C.YELLOW, file=sys.stderr)

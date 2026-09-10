@@ -111,3 +111,5 @@ jobs:
         run: python evals/test_tool_budget.py
       - name: chat log
         run: python evals/test_chatlog.py
+      - name: status bar
+        run: python evals/test_statusbar.py

@@ -117,6 +117,11 @@ whatever follows the command.
 History is saved in `~/.shellai/input_history`. When stdin is not a
 terminal the agent falls back to plain `input()`, so pipes and CI work.
 
+The input box stays at the bottom of the window. The status line under it
+shows how full the context is, the NPU load (the counter behind Task
+Manager's NPU graph), memory in use, and the working directory and branch.
+Set `status_bar` to `false` for the old inline prompt.
+
 ### Project instructions
 
 If a project has an `AGENTS.md`, the agent reads it every turn. Keep it
@@ -172,6 +177,7 @@ key with its default.
 | `live_streaming` | `true` | show the answer as it arrives |
 | `rich_input` | `true` | history, Tab completion, multi-line paste |
 | `side_padding` | `2` | left margin in columns |
+| `status_bar` | `true` | input box and status line at the bottom |
 | `show_diffs` | `true` | print a diff after each file change |
 | `workspace_write_scope` | `true` | keep writes inside the working directory |
 | `autopilot_confirm_sensitive` | `true` | ask before touching keys and credentials |

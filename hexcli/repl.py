@@ -31,6 +31,7 @@ from hexcli import (
     lineedit,
     memory,
     setup_wizard,
+    statusbar,
     telemetry,
     ui,
 )
@@ -359,13 +360,24 @@ def run_repl(config: dict[str, Any]) -> int:
         ui.redraw_transcript(current_session)
         return True
 
+    # The status bar: input box pinned at the bottom with context, NPU and
+    # memory under it. Between reads the live area draws it under whatever
+    # the turn prints; while reading, the editor draws it as its chrome.
+    # main() uninstalls it on the way out, whichever way the loop ends.
+    # `current_session` is rebound by /new and /resume; the lambda reads the
+    # name at call time, so the gauge follows.
+    live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
+
     read_line = lineedit.make_reader(
         config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE),
-        on_zoom=_zoom,
+        on_zoom=_zoom, chrome=live.chrome if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:
-        prompt = sa.repl_prompt(config, sa.context_fill_percent(current_session, config))
+        prompt = sa.repl_prompt(config, sa.context_fill_percent(current_session, config),
+                                boxed=live is not None)
+        if live is not None:
+            live.disable()
         try:
             query = read_line(prompt).strip()
         except EOFError:
@@ -375,6 +387,9 @@ def run_repl(config: dict[str, Any]) -> int:
         except KeyboardInterrupt:
             print()
             continue
+        finally:
+            if live is not None:
+                live.enable()
 
         memory.touch_last_turn()
 

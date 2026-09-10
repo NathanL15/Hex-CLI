@@ -1271,7 +1271,7 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
                                                {"role": "system", "content": "never shown"}]})
         out = buf.getvalue()
         assert out.startswith("\033[2J\033[3J\033[H\r"), repr(out[:20])
-        assert "you> hi" in out and "hello" in out and "never shown" not in out, out
+        assert "> hi" in out and "hello" in out and "never shown" not in out, out
     finally:
         ui._COLOR_ON = orig
 

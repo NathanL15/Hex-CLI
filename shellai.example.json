@@ -24,6 +24,7 @@
   "side_padding": 2,
   "input_history_file": "",
   "input_history_limit": 500,
+  "status_bar": true,
   "require_verification": true,
   "workspace_write_scope": true,
   "workspace_write_allow": [],

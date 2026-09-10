@@ -74,6 +74,16 @@ def set_color_enabled(enabled: bool) -> None:
 # Spinner
 # ---------------------------------------------------------------------------
 
+# The status bar's live area when one is installed (hexcli.statusbar). The
+# spinner then animates in the status line instead of on the transcript row.
+LIVE_AREA: Any = None
+
+
+def _live_area() -> Any:
+    live = LIVE_AREA
+    return live if live is not None and live.enabled else None
+
+
 class Spinner:
     _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -86,17 +96,28 @@ class Spinner:
         i = 0
         while not self._stop.wait(0.08):
             frame = self._FRAMES[i % len(self._FRAMES)]
-            sys.stderr.write(f"\r{C.BCYAN}{frame}{C.RESET} {C.DIM}{self.label}...{C.RESET}")
-            sys.stderr.flush()
+            live = _live_area()
+            if live is not None:
+                live.tick(frame)
+            else:
+                sys.stderr.write(f"\r{C.BCYAN}{frame}{C.RESET} {C.DIM}{self.label}...{C.RESET}")
+                sys.stderr.flush()
             i += 1
 
     def __enter__(self) -> Spinner:
+        live = _live_area()
+        if live is not None:
+            live.set_activity(self.label)
         self._thread.start()
         return self
 
     def __exit__(self, *_: object) -> None:
         self._stop.set()
         self._thread.join(timeout=1)
+        live = _live_area()
+        if live is not None:
+            live.set_activity(None)
+            return
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
@@ -470,7 +491,7 @@ def redraw_transcript(session: dict[str, Any]) -> None:
         role, content = msg.get("role"), str(msg.get("content", ""))
         if role == "user":
             print()
-            cprint(f"you> {content}", C.DIM)
+            cprint(f"> {content}", C.DIM)
         elif role == "assistant":
             render_result("Result", content)
 
@@ -792,7 +813,13 @@ def context_gauge(percent: int, pie: bool | None = None) -> str:
     return f"{glyph} {pct}%"
 
 
-def repl_prompt(config: dict[str, Any], context_percent: int | None = None) -> str:
+def repl_prompt(config: dict[str, Any], context_percent: int | None = None,
+                boxed: bool = False) -> str:
+    """The input prompt. `boxed` is the status-bar layout: the bar carries
+    the location and the gauge, so the prompt is just the marker. Without
+    it the header line keeps the model, location and gauge as before."""
+    if boxed:
+        return f"{C.BOLD}>{C.RESET} " if _COLOR_ON else "> "
     model = str(config.get("model", "?"))
     cwd_str = short_cwd()
     branch = get_git_branch()
@@ -805,11 +832,11 @@ def repl_prompt(config: dict[str, Any], context_percent: int | None = None) -> s
         return (
             f"{C.DIM}[{C.BCYAN}{model}{C.DIM} | "
             f"{C.BYELLOW}{cwd_str}{branch_str}{gauge}{C.DIM}]{C.RESET}\n"
-            f"{C.BOLD}you>{C.RESET} "
+            f"{C.BOLD}>{C.RESET} "
         )
     if gauge:
         gauge = f" | {gauge}"
-    return f"[{model} | {cwd_str}{branch_str}{gauge}]\nyou> "
+    return f"[{model} | {cwd_str}{branch_str}{gauge}]\n> "
 
 
 # ---------------------------------------------------------------------------

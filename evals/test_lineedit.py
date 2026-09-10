@@ -668,6 +668,60 @@ def test_zoom_redraw_resets_the_render_anchor() -> None:
     assert "\033[1A" in out[-2], repr(out[-2])
 
 
+def test_chrome_rows_frame_the_input_and_stay_out_of_the_transcript() -> None:
+    """The status bar draws as chrome: rows above and below the input row,
+    laid out with the buffer so the cursor maths still holds. The finished
+    line goes to the transcript without them."""
+    from hexcli import lineedit as le
+    widths: list[int] = []
+
+    def chrome(width: int) -> tuple[list[str], list[str]]:
+        widths.append(width)
+        return ["top"], ["bottom", "status"]
+
+    ed, out = editor(typed("hi") + [le.ENTER], width=40, margin=2, chrome=chrome)
+    ed.buffer, ed.pos = "hi", 2
+    text, rows, cursor_row, col = ed._layout("> ")
+    assert text == "top\n> hi\nbottom\nstatus", repr(text)
+    assert (rows, cursor_row, col) == (4, 1, 4), (rows, cursor_row, col)
+    assert widths and widths[-1] == ed.usable == 36
+    ed.buffer, ed.pos = "", 0
+    assert ed.read("> ") == "hi"
+    # Every live render carries the chrome and walks the cursor back up
+    # from the status row to the input row; the finish does neither.
+    live = out[-2]
+    assert "status" in live and "\033[2A" in live, repr(live)
+    finish = out[-1]
+    assert finish.endswith("> hi\n") and "top" not in finish and "status" not in finish, repr(finish)
+
+
+def test_idle_tick_repaints_only_when_the_chrome_changed() -> None:
+    """IDLE arrives about once a second with nothing typed. It repaints
+    when the status text moved (the NPU number, the clock) and writes
+    nothing when it did not, so an idle prompt is silent."""
+    from hexcli import lineedit as le
+    status = ["a", "a", "b"]
+    ed, out = editor([le.IDLE, le.IDLE, le.ENTER],
+                     chrome=lambda w: ([], [status.pop(0) if status else "b"]))
+    assert ed.read("> ") == ""
+    # initial render, one silent idle tick, one repaint, then the finish
+    assert len(out) == 3, [repr(o) for o in out]
+    assert out[0].endswith("> \nb") is False and "a" in out[0]
+    assert "b" in out[1] and out[2].endswith("> \n"), [repr(o) for o in out]
+
+
+def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
+    from hexcli import lineedit as le
+    ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
+    try:
+        ed.read("> ")
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("Ctrl+C did not raise")
+    assert out[-1].endswith("> ab\n") and "status" not in out[-1] and "top" not in out[-1], repr(out[-1])
+
+
 TESTS = [
     test_paste_burst_is_inserted_whole_and_never_submits,
     test_short_burst_replays_as_ordinary_keys,
@@ -743,6 +797,9 @@ TESTS = [
     test_repl_commands_are_all_completable,
     test_repl_commands_covers_everything_run_repl_handles,
     test_repl_commands_has_no_phantoms,
+    test_chrome_rows_frame_the_input_and_stay_out_of_the_transcript,
+    test_idle_tick_repaints_only_when_the_chrome_changed,
+    test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 
 

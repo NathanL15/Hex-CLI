@@ -6,6 +6,49 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+### Input box and status line
+
+The REPL has the Claude Code layout: the transcript scrolls above, and the
+last rows of the window are an input box with a status line under it:
+
+```
+──────────────────────────────────────────────────────────────────
+> what is 2+2
+──────────────────────────────────────────────────────────────────
+⠹ thinking (Esc to cancel)   context ◔ 32%   npu 96%   mem 10.1/15.6 GB
+```
+
+New module `hexcli/statusbar.py`; `lineedit.py` gained chrome rows and an
+idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
+
+* **How it stays at the bottom.** No scroll region and no full-screen
+  redraw, so scrollback is untouched. While the line editor is active it
+  draws the box as its own chrome and repaints on a one-second idle tick
+  when the text changes. Between reads a wrapper on stdout/stderr erases
+  the box before every transcript write and redraws it after, borrowing the
+  margin layer's column bookkeeping to put the cursor back; the spinner's
+  ticks go through the same lock.
+* **Metrics.** `npu` is Windows' own NPU counter: `GPU Engine` utilisation
+  for the adapter DirectX does not list, the source Task Manager's NPU
+  graph reads, through `pdh.dll` with ctypes. Measured on this machine:
+  0 % idle, 90–97 % during decode, attributed to npurun's pid; the adapter
+  LUID changes across boots, so it is discovered at start-up. `mem` is
+  physical memory in use system-wide (`GlobalMemoryStatusEx`). Both are
+  sampled once a second on a daemon thread that never writes to the
+  terminal. `context` is the existing fill gauge; the working directory
+  and branch sit at the right edge when they fit.
+* **The spinner moved into the status line**, as did the tool announcement
+  (`→ read_file`). The streaming path never had a spinner because it would
+  have fought the streamed text for the row; with the bar up it gets one,
+  so the step label shows before the first token arrives, and the
+  transcript's `thinking...` line is dropped. The prompt is `> `; the
+  `[model | cwd | gauge]` header line is gone, the bar carries both.
+* Off a console (pipes, CI, `--raw`) or with `status_bar: false` the old
+  inline prompt is used unchanged. Checked under a pseudo-console (ConPTY
+  plus a VT emulator, scratch tooling, not committed): plain turn, tool
+  turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
+  and 3 in `test_lineedit.py`.
+
 ### Releases, re-organised
 
 Ten releases in 38 days, and the last five were set by the npurun fork's

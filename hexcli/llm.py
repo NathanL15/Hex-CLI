@@ -22,6 +22,7 @@ apart from the two hub lookups.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import sys
@@ -30,7 +31,7 @@ import time
 import urllib.error
 from typing import Any
 
-from hexcli import memory
+from hexcli import memory, ui
 from hexcli.http_client import http_json_request
 from hexcli.ui import C
 
@@ -390,6 +391,17 @@ def _openai_stream_chat(
             sys.stderr.flush()
 
 
+def _status_activity(label: str) -> Any:
+    """The streaming paths never had a spinner: their progress was the
+    text itself, and a spinner would fight it for the same row. With the
+    status bar up the spinner lives in the status line instead, so it can
+    run alongside the stream and show the step while nothing has arrived
+    yet. Without the bar this is a no-op, exactly as before."""
+    if ui._live_area() is None:
+        return contextlib.nullcontext()
+    return _agent().Spinner(f"{label} (Esc to cancel)")
+
+
 def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
     """Renderer that prints the answer as it arrives, or None when live
     rendering is off / inappropriate (evals, delegate sub-loops, compaction).
@@ -417,6 +429,10 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
         sys.stdout.flush()
 
     def on_tool(name: str) -> None:
+        live = ui.LIVE_AREA
+        if live is not None and live.enabled:
+            live.set_activity(f"→ {name}")   # in the status line, not on the transcript
+            return
         sys.stderr.write(f"\r{C.DIM}  → {name}{C.RESET}" + " " * 20)
         sys.stderr.flush()
 
@@ -492,14 +508,16 @@ def call_llm(
             return _pop_mock_response()
 
         if config["backend"] == "ollama" and config.get("use_streaming", True):
-            text, count = _ollama_stream_chat(
-                config, messages, token_key, label=label, json_format=json_format)
+            with _status_activity(label):
+                text, count = _ollama_stream_chat(
+                    config, messages, token_key, label=label, json_format=json_format)
             _TOKEN_ESTIMATOR.observe(len(text), count)
             return text, count
 
         if config["backend"] == "openai" and config.get("use_streaming", True):
-            text, count = _openai_stream_chat(
-                config, messages, token_key, label=label, json_format=json_format)
+            with _status_activity(label):
+                text, count = _openai_stream_chat(
+                    config, messages, token_key, label=label, json_format=json_format)
             _TOKEN_ESTIMATOR.observe(len(text), count)
             return text, count
 
