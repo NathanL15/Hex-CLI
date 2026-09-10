@@ -7,6 +7,7 @@ lists) rather than calling back into the data/backend layer.
 """
 from __future__ import annotations
 
+import contextlib
 import msvcrt
 import os
 import re
@@ -82,6 +83,21 @@ LIVE_AREA: Any = None
 def _live_area() -> Any:
     live = LIVE_AREA
     return live if live is not None and live.enabled else None
+
+
+@contextlib.contextmanager
+def paused_status() -> Any:
+    """Take the status box down for an inline console prompt (a y/N confirm),
+    then restore it. A no-op when there is no box up, and safe to nest."""
+    live = _live_area()
+    if live is None:
+        yield
+        return
+    live.suspend()
+    try:
+        yield
+    finally:
+        live.resume()
 
 
 class Spinner:
@@ -539,11 +555,27 @@ def error_box(message: str, *, file: Any = None) -> None:
 
 def print_banner(model: str, backend: str) -> None:
     title = "HEX CLI"
-    width = max(len(title) + 4, 44)
+    try:
+        cols = os.get_terminal_size().columns
+    except OSError:
+        cols = 80
+    # Fit the box to the window so a narrow terminal does not wrap the rules
+    # into broken fragments. Below the frame's minimum, drop it for a plain
+    # heading.
+    inner = max(len(title) + 4, 44)
+    avail = cols - 6   # side padding + the two border cells, with slack
     print()
-    cprint("┌" + "─" * width + "┐", C.BCYAN)
-    cprint("│" + title.center(width) + "│", C.BOLD + C.BCYAN)
-    cprint("└" + "─" * width + "┘", C.BCYAN)
+    if avail >= inner:
+        cprint("┌" + "─" * inner + "┐", C.BCYAN)
+        cprint("│" + title.center(inner) + "│", C.BOLD + C.BCYAN)
+        cprint("└" + "─" * inner + "┘", C.BCYAN)
+    elif avail >= len(title) + 2:
+        w = max(len(title) + 2, avail)
+        cprint("┌" + "─" * w + "┐", C.BCYAN)
+        cprint("│" + title.center(w) + "│", C.BOLD + C.BCYAN)
+        cprint("└" + "─" * w + "┘", C.BCYAN)
+    else:
+        cprint(title, C.BOLD + C.BCYAN)
     cprint(
         f"  model: {C.BWHITE}{model}{C.RESET}{C.DIM}  backend: {backend}  "
         f"/help for commands  Esc cancels{C.RESET}",
@@ -882,6 +914,14 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
         timeout_s = CONFIRM_TIMEOUT_S
     if not sys.stdin.isatty():
         return False
+    # Take the status box down while we own the console for the y/N read, so
+    # the question is not printed on top of a still-live input box (nested
+    # inside a confirm_* wrapper this is already down, so it is a no-op).
+    with paused_status():
+        return _confirm_or_deny_read(prompt, timeout_s)
+
+
+def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:
     sys.stdout.write(prompt)
     sys.stdout.flush()
     deadline = time.monotonic() + timeout_s
@@ -921,32 +961,35 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
 def confirm_network_fetch(url: str) -> bool:
     """Outbound network access is the exception in an offline-first product;
     require explicit consent per fetch. Denied when non-interactive."""
-    print()
-    cprint("⚠  Agent wants to fetch a URL (the only network access it has):", C.BYELLOW, bold=True)
-    cprint(f"   {url}", C.CYAN)
-    print()
-    return confirm_or_deny("Allow this fetch? [y/N] ")
+    with paused_status():
+        print()
+        cprint("⚠  Agent wants to fetch a URL (the only network access it has):", C.BYELLOW, bold=True)
+        cprint(f"   {url}", C.CYAN)
+        print()
+        return confirm_or_deny("Allow this fetch? [y/N] ")
 
 
 def confirm_sensitive_command(cmd: str) -> bool:
     """Sensitive-data access (keys, credentials, security files, obfuscated
     execution) requires explicit consent; denied when non-interactive."""
-    print()
-    cprint("⚠  Agent wants to access sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
-    cprint(f"   {cmd}", C.RED)
-    cprint("   (credentials / keys / security files: deny unless YOU asked for exactly this)", C.DIM)
-    print()
-    return confirm_or_deny("Allow? [y/N] ")
+    with paused_status():
+        print()
+        cprint("⚠  Agent wants to access sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
+        cprint(f"   {cmd}", C.RED)
+        cprint("   (credentials / keys / security files: deny unless YOU asked for exactly this)", C.DIM)
+        print()
+        return confirm_or_deny("Allow? [y/N] ")
 
 
 def confirm_destructive_command(cmd: str) -> bool:
     """Print a destructive-command warning and return True only if the user types
     y/yes; denied when non-interactive or unanswered."""
-    print()
-    cprint("⚠  Agent wants to run a destructive command:", C.BYELLOW, bold=True)
-    cprint(f"   {cmd}", C.RED)
-    print()
-    return confirm_or_deny("Allow? [y/N] ")
+    with paused_status():
+        print()
+        cprint("⚠  Agent wants to run a destructive command:", C.BYELLOW, bold=True)
+        cprint(f"   {cmd}", C.RED)
+        print()
+        return confirm_or_deny("Allow? [y/N] ")
 
 
 def render_result(title: str, body: str) -> None:

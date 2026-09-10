@@ -43,6 +43,7 @@ a second on a daemon thread that never touches the terminal.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
@@ -246,8 +247,13 @@ class SystemSampler:
     """Background sampler for the status line. ``snapshot()`` is cheap and
     lock-free (one tuple swap); the thread never writes to the terminal."""
 
-    def __init__(self, interval: float = _SAMPLE_INTERVAL_S) -> None:
+    def __init__(self, interval: float = _SAMPLE_INTERVAL_S,
+                 on_update: Callable[[], None] | None = None) -> None:
         self.interval = interval
+        # Called after each fresh sample so the status line can refresh even
+        # when nothing else writes to the terminal (a long tool subprocess
+        # with no spinner). The callback must be cheap and take its own lock.
+        self.on_update = on_update
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         # (npu percent or None, mem used GiB or None, mem total GiB or None)
@@ -288,6 +294,11 @@ class SystemSampler:
             except Exception:  # noqa: BLE001
                 pass
             self._snap = (npu, mem[0] if mem else None, mem[1] if mem else None)
+            if self.on_update is not None:
+                try:
+                    self.on_update()
+                except Exception:  # noqa: BLE001 — never let a repaint kill the sampler
+                    pass
             self._stop.wait(self.interval)
         if counter is not None:
             counter.close()
@@ -402,6 +413,7 @@ class LiveArea:
         self.location = ""
         self._drawn = 0            # rows currently on screen below the transcript
         self._inner: Any = None    # the stream repaints go through (set by install)
+        self._signature: Any = None  # what _draw last put on screen, for repaint skips
 
     # -- content --------------------------------------------------------------
 
@@ -458,14 +470,20 @@ class LiveArea:
         row, height = geo
         return height - 1 - row
 
-    def _draw(self, inner: Any) -> None:
+    def _compose(self) -> tuple[list[str], int]:
+        """The box rows clipped to width, and the blank-row pad that pins it
+        to the window's last rows until the transcript is tall enough."""
         m = self.margin
-        saved = (m.col, m.word, m.word_vis)
         rows = [clip_visible(r, m.usable) for r in self.rows(m.usable)]
-        # Pin to the window's last rows: blank rows between the transcript
-        # and the box until the transcript is long enough to push it there.
         below = self._rows_below_cursor()
         pad = max(0, below - len(rows)) if below is not None else 0
+        return rows, pad
+
+    def _draw(self, inner: Any, rows: list[str] | None = None, pad: int = 0) -> None:
+        m = self.margin
+        if rows is None:
+            rows, pad = self._compose()
+        saved = (m.col, m.word, m.word_vis)
         out = ["\033[?25l", "\n" * pad, "\n", "\n".join(rows), "\r", f"\033[{len(rows) + pad}A"]
         if saved[0]:
             out.append(f"\033[{saved[0]}C")
@@ -473,6 +491,7 @@ class LiveArea:
         inner.write("".join(out))
         m.col, m.word, m.word_vis = saved
         self._drawn = len(rows) + pad
+        self._signature = (tuple(rows), pad, saved[0])
 
     def pad_for_editor(self) -> None:
         """Move the cursor down so the editor's rows land on the window's
@@ -495,10 +514,17 @@ class LiveArea:
             self._draw(inner)
 
     def repaint(self) -> None:
+        """Redraw the box in place (a spinner tick, a metrics sample). Skips
+        the erase and rewrite when nothing visible changed, so a quiet
+        second or an identical sample costs nothing."""
         with self.lock:
-            if self.enabled and self._inner is not None:
-                self._erase(self._inner)
-                self._draw(self._inner)
+            if not (self.enabled and self._inner is not None):
+                return
+            rows, pad = self._compose()
+            if self._drawn and (tuple(rows), pad, self.margin.col) == self._signature:
+                return
+            self._erase(self._inner)
+            self._draw(self._inner, rows, pad)
 
     # -- state ----------------------------------------------------------------
 
@@ -523,6 +549,25 @@ class LiveArea:
             self.activity, self.frame = None, ""
             self.pad_for_editor()
         self.refresh_location()
+
+    def suspend(self) -> None:
+        """Take the box down for an inline prompt (a y/N confirm) without
+        padding to the bottom, so the question prints right where the turn
+        is, not pushed to the last row. resume() puts the box back."""
+        with self.lock:
+            if self._inner is not None:
+                self._erase(self._inner)
+                if self.margin.col:
+                    self._inner.write("\n")
+            self.enabled = False
+
+    def resume(self) -> None:
+        """Put the box back after suspend(), keeping the current activity."""
+        with self.lock:
+            self.enabled = True
+            if self._inner is not None:
+                self._erase(self._inner)
+                self._draw(self._inner)
 
     def set_activity(self, label: str | None) -> None:
         with self.lock:
@@ -590,10 +635,30 @@ def install(config: dict[str, Any], context_percent: Callable[[], int | None]) -
     live._inner = sys.stdout
     sys.stdout = _LiveStream(sys.stdout, live)
     sys.stderr = _LiveStream(sys.stderr, live)
+    # The sampler refreshes the status line once a second even when nothing
+    # else writes (a long tool subprocess with no spinner); the repaint skips
+    # itself when the numbers did not move.
+    live.sampler.on_update = live.repaint
     live.sampler.start()
     ui.LIVE_AREA = live
     _LIVE = live
     return live
+
+
+@contextlib.contextmanager
+def paused() -> Any:
+    """Take the status box down for the duration of an inline console prompt
+    (a y/N confirm), then put it back. A no-op when there is no box or it is
+    already down, so nesting is safe."""
+    live = _LIVE
+    if live is None or not live.enabled:
+        yield
+        return
+    live.suspend()
+    try:
+        yield
+    finally:
+        live.resume()
 
 
 def uninstall() -> None:

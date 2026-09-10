@@ -64,6 +64,30 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Status-bar flow polish
+
+Six interaction issues found by driving the whole flow under a pseudo-console:
+
+* **Resize no longer corrupts the box.** There was no resize handler, so
+  changing the window size left the rules at mismatched widths and one row
+  without its margin. A console window-size event (or a size change caught
+  on the idle tick) now reprints the transcript at the new width and
+  re-pins the box, the same recovery the zoom already used.
+* **One prompt during a confirmation.** A `y/N` confirm used to render on
+  top of the still-live input box, so two prompts showed at once and it was
+  unclear where to type. The box is taken down for the duration of any
+  `confirm_*` read and restored after.
+* **The banner fits narrow windows.** Below about 48 columns the fixed
+  44-wide `HEX CLI` frame split into fragments; it now shrinks to the
+  window, and drops to a plain heading when even that will not fit.
+* **The status line keeps moving during a long tool run.** It repainted
+  only on a spinner tick or a transcript write, so a quiet subprocess froze
+  the numbers; the sampler now refreshes them once a second, and the
+  repaint skips itself when nothing changed.
+* **The label reads `responding` once tokens arrive**, not `thinking` for
+  the whole answer.
+* Redundant box repaints are skipped when the rendered box is unchanged.
+
 ### Windows Terminal by default
 
 The Start Menu shortcut launched `conhost.exe` on purpose (2.2.0, for the

@@ -425,6 +425,11 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
         if not state["started"]:
             sys.stderr.write("\r\033[K")
             state["started"] = True
+            # The answer is now arriving, not being thought about: relabel the
+            # status line (the spinner started by _status_activity keeps ticking).
+            live = ui.LIVE_AREA
+            if live is not None and live.enabled:
+                live.set_activity("responding (Esc to cancel)")
         sys.stdout.write(text)
         sys.stdout.flush()
 

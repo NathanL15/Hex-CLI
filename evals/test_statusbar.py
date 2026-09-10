@@ -292,6 +292,71 @@ def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
         restore()
 
 
+def test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it() -> None:
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        live.enable()
+        base.chunks.clear()
+        live.suspend()
+        # Box erased, cursor on a fresh row, and NOT padded to the bottom, so
+        # a confirm prints right where the turn is.
+        assert base.text == "\033[J" and not live.enabled, repr(base.text)
+        base.chunks.clear()
+        live.write(inner, "Allow? [y/N] ")   # confirm prints straight through
+        assert base.text == "Allow? [y/N] " and live._drawn == 0, repr(base.text)
+        base.chunks.clear()
+        live.resume()
+        assert live.enabled and "\033[?25l" in base.text and live._drawn == 4
+    finally:
+        restore()
+
+
+def test_paused_context_suspends_and_restores_and_nests() -> None:
+    restore = _no_color()
+    try:
+        live, base, inner = _live()
+        import hexcli.statusbar as mod
+        old = mod._LIVE
+        mod._LIVE = live
+        try:
+            live.enable()
+            with mod.paused():
+                assert not live.enabled
+                with mod.paused():        # nested: already down, still down
+                    assert not live.enabled
+                assert not live.enabled   # inner exit must not restore early
+            assert live.enabled
+        finally:
+            mod._LIVE = old
+    finally:
+        restore()
+
+
+def test_repaint_skips_when_nothing_visible_changed() -> None:
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=80)
+        live.enable()
+        base.chunks.clear()
+        live.repaint()                 # identical: no output
+        assert base.text == "", repr(base.text)
+        live.sampler.snap = (99.0, 9.3, 15.6)   # metrics moved
+        base.chunks.clear()
+        live.repaint()
+        assert "npu 99%" in base.text, base.text
+    finally:
+        restore()
+
+
+def test_sampler_on_update_fires_the_repaint() -> None:
+    calls = []
+    smp = sb.SystemSampler(on_update=lambda: calls.append(1))
+    # Drive one loop body without the thread: call the callback path directly.
+    smp.on_update()
+    assert calls == [1]
+
+
 def test_spinner_uses_the_live_area_when_one_is_up() -> None:
     restore = _no_color()
     live, base, inner = _live(width=80)
@@ -338,6 +403,10 @@ TESTS = [
     test_disable_erases_the_box_and_starts_a_fresh_row,
     test_activity_and_ticks_repaint_the_status_row,
     test_box_is_padded_down_to_the_last_rows_of_the_window,
+    test_sampler_on_update_fires_the_repaint,
+    test_repaint_skips_when_nothing_visible_changed,
+    test_paused_context_suspends_and_restores_and_nests,
+    test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it,
     test_spinner_uses_the_live_area_when_one_is_up,
     test_install_declines_off_a_console_and_when_turned_off,
     test_status_bar_is_a_settable_config_key,

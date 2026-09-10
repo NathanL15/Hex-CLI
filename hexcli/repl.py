@@ -370,9 +370,17 @@ def run_repl(config: dict[str, Any]) -> int:
     # name at call time, so the gauge follows.
     live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
 
+    def _resize() -> None:
+        """The window was resized while at the prompt: reprint the transcript
+        at the new width and re-pin the box, the same recovery as a zoom."""
+        ui.redraw_transcript(current_session)
+        if live is not None:
+            live.pad_for_editor()
+
     read_line = lineedit.make_reader(
         config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE),
-        on_zoom=_zoom, chrome=live.chrome if live is not None else None,
+        on_zoom=_zoom, on_resize=_resize,
+        chrome=live.chrome if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:

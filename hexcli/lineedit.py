@@ -63,6 +63,7 @@ ZOOM_OUT = "<zoom-out>"      # Ctrl+Minus
 PASTE = "<paste>"            # prefix: the rest of the token is pasted text
 EXHAUSTED = "<exhausted>"    # key source ran out (tests / closed stdin)
 IDLE = "<idle>"              # nothing typed for a while: a chance to repaint
+RESIZE = "<resize>"          # the console window was resized: re-anchor
 
 _ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
 
@@ -169,6 +170,9 @@ def _console_peek() -> Callable[[], str | None] | None:
                 return IDLE
         if not k32.PeekConsoleInputW(handle, ctypes.byref(rec), 1, ctypes.byref(count)) or not count.value:
             return ""
+        if rec.EventType == 4:  # WINDOW_BUFFER_SIZE_EVENT: the window resized
+            consume()
+            return RESIZE
         if rec.EventType != 1:  # not a KEY_EVENT
             consume()
             return ""
@@ -425,6 +429,7 @@ class LineEditor:
         styled: bool | None = None,
         margin: int = 0,
         on_zoom: Callable[[int], Any] | None = None,
+        on_resize: Callable[[], Any] | None = None,
         chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
     ) -> None:
         self.history = history or History()
@@ -439,6 +444,11 @@ class LineEditor:
         # newlines — a terminal auto-wrap would start the next row at column 0.
         self.margin = max(0, int(margin or 0))
         self.on_zoom = on_zoom
+        # Called when the console window is resized: the caller reprints the
+        # transcript at the new width and re-pins the box (repl wires this to
+        # ui.redraw_transcript + the status area), then the editor re-anchors.
+        self.on_resize = on_resize
+        self._last_size: tuple[int, int] | None = None
         # Rows drawn above and below the input while editing (the box and
         # the status line, hexcli.statusbar). Called with the usable width
         # on every render; each row must already fit in it. Not part of the
@@ -690,14 +700,23 @@ class LineEditor:
         self._hist_index, self._hist_prefix, self._saved_draft = None, "", ""
         self._rendered_rows, self._cursor_row = 0, 0
         self._last_text = None
+        self._last_size = (self.usable, self.height)
         try:
             self.render(prompt)
             while True:
                 key = self._read_key()
                 if key == "":
                     continue
+                if key == RESIZE:
+                    self._handle_resize(prompt)
+                    continue
                 if key == IDLE:
-                    self.render(prompt, if_changed=True)
+                    # A resize event can be missed (WT sends it late, or the
+                    # peek dropped it); catch it by size comparison too.
+                    if (self.usable, self.height) != self._last_size:
+                        self._handle_resize(prompt)
+                    else:
+                        self.render(prompt, if_changed=True)
                     continue
                 result = self._handle(key, prompt)
                 if result is not None:
@@ -714,6 +733,29 @@ class LineEditor:
         finally:
             if self.styled:
                 self._write("\033[?25h")
+
+    def _handle_resize(self, prompt: str) -> None:
+        """Recover the display after the window was resized. The old rows the
+        terminal reflowed no longer match our anchor, so start clean: let the
+        caller reprint the transcript at the new width and re-pin the box,
+        then re-anchor and render. Without a caller hook, clear the screen and
+        re-pad the box to the new bottom ourselves."""
+        self._cursor_row = 0
+        self._rendered_rows = 0
+        self._last_text = None
+        if self.on_resize is not None:
+            try:
+                self.on_resize()
+            except Exception:
+                pass
+        elif self.chrome is not None:
+            self._write("\033[2J\033[H")
+            rows = self._layout(prompt)[1]
+            self._write("\n" * max(0, self.height - rows))
+        else:
+            self._write("\r\033[J")
+        self._last_size = (self.usable, self.height)
+        self.render(prompt)
 
     def _handle(self, key: str, prompt: str) -> str | None:
         """Apply one key. Returns the finished line, or None to keep editing."""
@@ -818,6 +860,7 @@ def make_reader(
     commands: Sequence[str],
     config_keys: Callable[[], Iterable[str]] | None = None,
     on_zoom: Callable[[int], Any] | None = None,
+    on_resize: Callable[[], Any] | None = None,
     chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
@@ -845,6 +888,7 @@ def make_reader(
         completer=default_completer(commands, config_keys),
         margin=int(config.get("side_padding", 0) or 0),
         on_zoom=on_zoom,
+        on_resize=on_resize,
         chrome=chrome,
     )
     return editor.read
