@@ -65,6 +65,9 @@ jobs:
       - name: Unit tests — workspace write-scoping
         run: python evals/test_write_scope.py
 
+      - name: Unit tests — the "run the tests" nudge
+        run: python evals/test_tests_nudge.py
+
       - name: Unit tests — product shell (diffs, AGENTS.md, doctor)
         run: python evals/test_product_shell.py
 

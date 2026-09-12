@@ -306,6 +306,28 @@ EXTENSION_CASES: list[Case] = [
          ),
          max_steps=6, tag="missing_file",
          expected_tools=("edit_file", "list_directory")),
+    # The live failure had context: the previous exchange had edited a file
+    # in this folder. With that history the model reached for the file it
+    # had touched before and reported success on a request about a file
+    # that does not exist.
+    Case("missing-file-2", "agentic",
+         "In the file missing.py, change the word alpha to beta.",
+         setup={"notes.txt": "alpha\n", "test_processor.py": "assert value_range([4, 9, 1]) == 8\n"},
+         history=[
+             {"role": "user", "content": "rename the function spread to value_range in test_processor.py"},
+             {"role": "assistant", "content": "The function spread has been renamed to value_range in "
+                                              "test_processor.py. The change was verified."},
+         ],
+         verify=ck.all_of(
+             ck.file_absent("missing.py"),
+             ck.file_contains("notes.txt", "alpha"),
+             ck.file_contains("test_processor.py", "value_range"),
+             ck.message_contains_any("not exist", "does not exist", "doesn't exist", "no such file",
+                                     "not found", "couldn't find", "could not find", "no file",
+                                     "isn't", "is not present", "?"),
+         ),
+         max_steps=6, tag="missing_file",
+         expected_tools=("edit_file", "list_directory")),
 
     # ---- Filler breadth ----
     Case("casual-4", "casual", "lol nice",

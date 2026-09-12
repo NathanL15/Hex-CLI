@@ -132,6 +132,28 @@ sometimes echoes its own prompt scaffolding ("Request: …", the workspace
 line). That is the prompt's shape, which changes only through the A/B
 gate, not the terminal.
 
+### "Run the tests" is now enforced by the loop, not the prompt (2026-09-12)
+
+Two model behaviours from the live tour were turned into eval cases and
+taken through the A/B gate (`evals/results/persona/` has every log).
+
+* `tests-claim-1`: "fix the median and run the tests". Baseline 0/5, the
+  test file never executed, the answer said it would pass. A rule-14
+  sentence made it worse in a new way: the 4B copied the prompt's own
+  tool examples ("Get-Process | Sort CPU", "script.py") — 1/5. Replaced
+  by a harness nudge: when the request asks to run tests and no run tool
+  executed a test this turn, the finish is sent back once, naming the
+  test file. With it the tests ran in 5/5 attempts (pass 1/5: the
+  remaining misses are wrong fixes, reported honestly with the exit
+  code). Gate on the nudge-only arm: PASS (self-correct-1 5/6 on
+  re-check); 30/44 pass^k, 167/221 run-level; scoreboard updated.
+* `missing-file-1/2`: "in missing.py change alpha to beta" when the file
+  does not exist. Alone: 5/5 already. With a prior edit in the history
+  (`missing-file-2`, the live shape): 1/5 — the model edits another file
+  and reports success. A rule-11 sentence lifted it to 4/5 but broke
+  agentic-3 (5/5 → 3/5, 4/6 on re-check): gate FAIL, reverted. The case
+  stays in the suite as a watch item (3/5 on the shipped arm).
+
 ### Walkthroughs by kind of user (2026-09-12)
 
 The same live method, this time as the people who meet the tool: someone
