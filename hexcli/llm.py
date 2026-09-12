@@ -444,8 +444,9 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
             if live is not None and live.enabled:
                 live.set_activity("responding")
             # One blank line between whatever came before (the question, a
-            # tool card) and the answer.
-            sys.stdout.write("\n")
+            # tool card) and the answer. A pipe gets the answer alone.
+            if sys.stdout.isatty():
+                sys.stdout.write("\n")
         sys.stdout.write(markdown.feed(text))
         sys.stdout.flush()
 

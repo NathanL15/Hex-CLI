@@ -265,7 +265,7 @@ def run(
     def _finish(kind: str, message: str, outcome: str) -> str:
         memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome=outcome)
         if session:
-            agent._SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = turn_snapshots
+            agent._record_undo_snapshots(session, turn_snapshots)
         if ephemeral_shell:
             sh.close()
         agent._probe(probe, "on_end", kind, message)
@@ -387,7 +387,7 @@ def run(
         return _finish("step_limit", last_tool_output or "Hit the step limit without finishing.", "step_limit")
     except (agent.UserCancelled, KeyboardInterrupt):
         if session:
-            agent._SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = turn_snapshots
+            agent._record_undo_snapshots(session, turn_snapshots)
         if ephemeral_shell:
             sh.close()
         raise

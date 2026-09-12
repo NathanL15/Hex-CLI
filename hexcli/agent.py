@@ -387,7 +387,34 @@ _looks_like_botched_action = parsing._looks_like_botched_action
 # first mutation of each path in a given agentic turn.  None = file was created
 # fresh (undo = delete).  Stored in-process only — not persisted to history.json
 # because snapshots are only useful within the current session.
-_SESSION_UNDO_SNAPSHOTS: dict[str, dict[str, str | None]] = {}
+_SESSION_UNDO_SNAPSHOTS: dict[str, dict[str, str | None]] = {}   # the last turn's, for /diff
+# One entry per completed turn (empty when it changed no file), newest last,
+# so /undo can put files back exchange by exchange, not just the latest.
+_SESSION_UNDO_STACK: dict[str, list[dict[str, str | None]]] = {}
+_UNDO_STACK_MAX = 20
+
+
+def _record_undo_snapshots(session: dict[str, Any], snapshots: dict[str, str | None]) -> None:
+    sid = session.get("id", "")
+    _SESSION_UNDO_SNAPSHOTS[sid] = snapshots
+    stack = _SESSION_UNDO_STACK.setdefault(sid, [])
+    stack.append(snapshots)
+    del stack[:-_UNDO_STACK_MAX]
+
+
+def pop_undo_snapshots(session: dict[str, Any]) -> dict[str, str | None]:
+    """The file snapshots of the exchange being undone; /diff then shows
+    the turn before it."""
+    sid = session.get("id", "")
+    stack = _SESSION_UNDO_STACK.get(sid)
+    if stack:
+        snapshots = stack.pop()
+        if stack:
+            _SESSION_UNDO_SNAPSHOTS[sid] = stack[-1]
+        else:
+            _SESSION_UNDO_SNAPSHOTS.pop(sid, None)
+        return snapshots
+    return _SESSION_UNDO_SNAPSHOTS.pop(sid, {})
 
 # The config in force for the current turn. File tools are called from many
 # places (dispatch, batch, delegate, /undo) with no config parameter, so the
@@ -1304,13 +1331,13 @@ def _run_autopilot_turn(
             result = msg or last_tool_output or "Done."
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
             if session:
-                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+                _record_undo_snapshots(session, _turn_snapshots)
             _probe(probe, "on_end", "finish", result)
             return result
 
         if action["action"] != "tool" or not action.get("tool"):
             if session:
-                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+                _record_undo_snapshots(session, _turn_snapshots)
             fallthrough = action.get("message", "") or last_tool_output or "Done."
             _probe(probe, "on_end", "fallthrough", fallthrough)
             return fallthrough
@@ -1358,7 +1385,7 @@ def _run_autopilot_turn(
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
         except (UserCancelled, KeyboardInterrupt):
             if session:
-                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+                _record_undo_snapshots(session, _turn_snapshots)
             raise
         except Exception as exc:
             tool_output = f"Error: {exc}"
@@ -1435,7 +1462,7 @@ def _run_autopilot_turn(
                     print()
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="error_loop")
             if session:
-                _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+                _record_undo_snapshots(session, _turn_snapshots)
             _probe(probe, "on_end", "loop_stop", last_tool_output or "Done.")
             return last_tool_output or "Done."
         messages.append({"role": "assistant", "content": strip_thinking(raw)})
@@ -1446,7 +1473,7 @@ def _run_autopilot_turn(
         cprint("\n  ⚠ Stopped at the step limit.", C.BYELLOW)
         _mark_turn_stopped("step_limit")
     if session:
-        _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
+        _record_undo_snapshots(session, _turn_snapshots)
     _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
     return last_tool_output or "Done."
 
@@ -1547,7 +1574,10 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)
     if last_streamed_matches(message) or last_turn_stopped():
-        print()
+        if sys.stdout.isatty():
+            print()
+    elif not sys.stdout.isatty():
+        print(message)   # a script or a pipe gets the answer alone
     else:
         render_result("Result", message)
     return 0

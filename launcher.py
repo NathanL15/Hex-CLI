@@ -508,8 +508,12 @@ def run_npurun_path(conda: Path | None = None) -> int:
         if not _wait_npurun(timeout=60):
             return _fail("The model server did not start within 60 s.", f"Log: {NPURUN_LOG}")
 
+    # The REPL gets the server's environment too: an in-session restart
+    # (/undo a dead server, "Restart the model server? [Y/n]") then brings
+    # up the same SDK and Rewind settings, not whatever the shell had.
     return subprocess.run(
-        [sys.executable, str(SHELLAI_SCRIPT), "--config", str(NPURUN_CONFIG)]
+        [sys.executable, str(SHELLAI_SCRIPT), "--config", str(NPURUN_CONFIG)],
+        env=_npurun_env(),
     ).returncode
 
 # ---------------------------------------------------------------------------

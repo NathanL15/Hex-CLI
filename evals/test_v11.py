@@ -60,6 +60,33 @@ def test_undo_snapshots_dict_keyed_by_session_id() -> None:
     sa._SESSION_UNDO_SNAPSHOTS.pop(fake_id, None)
 
 
+def test_undo_snapshots_stack_one_entry_per_turn() -> None:
+    """Live tour 2026-09-12: the second /undo removed the exchange from the
+    history but left its file change in place, because only the last turn's
+    snapshots were kept. Every turn now pushes its own (empty when it
+    changed nothing), and /undo pops them exchange by exchange; /diff
+    keeps seeing the latest remaining turn."""
+    session = {"id": "test-undo-stack"}
+    sa._SESSION_UNDO_STACK.pop(session["id"], None)
+    sa._SESSION_UNDO_SNAPSHOTS.pop(session["id"], None)
+    sa._record_undo_snapshots(session, {"a.py": "A0"})
+    sa._record_undo_snapshots(session, {})
+    sa._record_undo_snapshots(session, {"b.py": None})
+    assert sa._SESSION_UNDO_SNAPSHOTS[session["id"]] == {"b.py": None}
+    assert sa.pop_undo_snapshots(session) == {"b.py": None}
+    assert sa._SESSION_UNDO_SNAPSHOTS[session["id"]] == {}
+    assert sa.pop_undo_snapshots(session) == {}
+    assert sa.pop_undo_snapshots(session) == {"a.py": "A0"}
+    assert session["id"] not in sa._SESSION_UNDO_SNAPSHOTS
+    assert sa.pop_undo_snapshots(session) == {}
+    # Bounded: the oldest entries fall off.
+    for i in range(sa._UNDO_STACK_MAX + 5):
+        sa._record_undo_snapshots(session, {f"f{i}": "x"})
+    assert len(sa._SESSION_UNDO_STACK[session["id"]]) == sa._UNDO_STACK_MAX
+    sa._SESSION_UNDO_STACK.pop(session["id"], None)
+    sa._SESSION_UNDO_SNAPSHOTS.pop(session["id"], None)
+
+
 def test_undo_restores_edited_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "target.py"
@@ -164,6 +191,7 @@ TESTS = [
     test_strip_thinking_preserves_clean_content,
     test_strip_thinking_nested_tags_not_present,
     test_undo_snapshots_dict_keyed_by_session_id,
+    test_undo_snapshots_stack_one_entry_per_turn,
     test_undo_restores_edited_file,
     test_undo_deletes_created_file,
     test_lint_code_registration,

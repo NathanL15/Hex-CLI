@@ -278,6 +278,22 @@ def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
             sa.cprint("  Restart failed. Relaunch Hex CLI.", sa.C.YELLOW)
 
 
+def _newest_qairt_root() -> str:
+    """The newest QAIRT install under the stack folder, for a restart when
+    the launcher's choice is not in the environment (a bare `python -m
+    hexcli.agent`). Same rule as the launcher: newest version wins."""
+    stack = Path(r"C:\Qualcomm\AIStack")
+
+    def key(p: Path) -> tuple[int, ...]:
+        try:
+            return tuple(int(x) for x in p.name.split("_", 1)[1].split("."))
+        except (IndexError, ValueError):
+            return (0,)
+
+    candidates = sorted(stack.glob("QAIRT_*"), key=key, reverse=True) if stack.exists() else []
+    return str(candidates[0]) if candidates else str(stack / "QAIRT_2.50.0")
+
+
 def restart_backend(config: dict[str, Any]) -> bool:
     """Stop and respawn the local npurun server. Returns True when healthy."""
     model = str(config.get("_npurun_model") or "")
@@ -292,7 +308,7 @@ def restart_backend(config: dict[str, Any]) -> bool:
     except Exception:
         pass
     time.sleep(2)
-    sdk = Path(os.environ.get("QNN_SDK_ROOT", r"C:\Qualcomm\AIStack\QAIRT_2.47.0"))
+    sdk = Path(os.environ.get("QNN_SDK_ROOT") or _newest_qairt_root())
     env = os.environ.copy()
     env["QNN_SDK_ROOT"] = str(sdk)
     env["ADSP_LIBRARY_PATH"] = str(sdk / "lib" / "hexagon-v73" / "unsigned")
@@ -634,7 +650,7 @@ def run_repl(config: dict[str, Any]) -> int:
                 current_session["messages"] = msgs[:-2]
                 sa.touch_session(current_session)
                 # Restore any files mutated during the last agentic turn.
-                snapshots = sa._SESSION_UNDO_SNAPSHOTS.pop(current_session.get("id", ""), {})
+                snapshots = sa.pop_undo_snapshots(current_session)
                 if snapshots:
                     restored: list[str] = []
                     failed: list[str] = []
@@ -661,7 +677,7 @@ def run_repl(config: dict[str, Any]) -> int:
             elif len(msgs) == 1:
                 current_session["messages"] = []
                 sa.touch_session(current_session)
-                sa._SESSION_UNDO_SNAPSHOTS.pop(current_session.get("id", ""), None)
+                sa.pop_undo_snapshots(current_session)
                 sa.cprint("  Last message removed.", sa.C.DIM)
             else:
                 sa.cprint("  Nothing to undo.", sa.C.DIM)

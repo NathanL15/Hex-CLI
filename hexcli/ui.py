@@ -615,6 +615,9 @@ def tool_error(message: str) -> None:
     """A failed tool call, on one dim red line under its card. The model
     still receives the full error text; the transcript gets the first line."""
     first = str(message).strip().splitlines()[0] if str(message).strip() else "failed"
+    # A first line that introduces detail on later lines ("...(similarity
+    # 48%):") would end on a bare colon here; the detail is for the model.
+    first = first.rstrip().rstrip(":").rstrip()
     cprint(f"{C.RED}▸ error{C.RESET} {first}", file=sys.stderr)
 
 
