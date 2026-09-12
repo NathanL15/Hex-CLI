@@ -515,10 +515,7 @@ class LiveArea:
         return changed
 
     def _rows_below_cursor(self) -> int | None:
-        try:
-            geo = self._geometry()
-        except Exception:  # noqa: BLE001
-            return None
+        geo = self._geo()
         if geo is None:
             return None
         row, height = geo
@@ -535,7 +532,19 @@ class LiveArea:
     # pad rows (ESC[L) at the pad's top, which is the cursor row when there
     # is no pad yet, so the banner above never moves.
 
+    def _flush_base(self) -> None:
+        """Cursor moves are escape sequences with no newline; a line-buffered
+        stdout still holds them, so the console would report the cursor
+        from before the move. Flush before every geometry read."""
+        inner = self._inner
+        base = getattr(inner, "_base", inner)
+        try:
+            base.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _geo(self) -> tuple[int, int] | None:
+        self._flush_base()
         try:
             return self._geometry()
         except Exception:  # noqa: BLE001
@@ -610,6 +619,25 @@ class LiveArea:
         m.col, m.word, m.word_vis = saved
         self._drawn = len(rows)
         self._signature = (tuple(rows), saved[0])
+
+    def make_room(self, n: int) -> int:
+        """The editor's entry is about to run past the bottom: delete up to
+        `n` pad rows at the pad's top so the rows below (the conversation and
+        the editor) move up and the window need not scroll. Returns how many
+        rows were freed; the banner keeps its place for those."""
+        with self.lock:
+            if self._inner is None or n <= 0:
+                return 0
+            return self._delete_pad_rows(self._inner, n)
+
+    def give_room(self, n: int) -> int:
+        """The entry shrank again: put up to `n` rows back into the pad, so
+        the conversation and the editor move down to where they were."""
+        with self.lock:
+            if self._inner is None or n <= 0 or self._pad_top is None:
+                return 0
+            self._insert_pad_rows(self._inner, n)
+            return n
 
     def pad_for_editor(self) -> None:
         """Put the cursor on the row where the editor's first row must go for

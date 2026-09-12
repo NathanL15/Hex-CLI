@@ -120,6 +120,44 @@ def _wrap_visible(text: str, width: int) -> str:
     return "".join(out)
 
 
+def _wrap_words_visible(text: str, width: int) -> str:
+    """Like _wrap_visible, but a row that would end mid-word breaks at the
+    last space on it instead (the space is dropped); a word wider than the
+    row still breaks hard. For finished lines, where no cursor arithmetic
+    depends on the break positions."""
+    out: list[str] = []
+    col = 0
+    space_at: int | None = None   # index in `out` of the last space on this row
+    col_after_space = 0
+    i = 0
+    while i < len(text):
+        m = _ANSI_RE.match(text, i)
+        if m:
+            out.append(m.group())
+            i = m.end()
+            continue
+        ch = text[i]
+        w = _cell_width(ch)
+        if col + w > width:
+            if space_at is not None and ch != " ":
+                out[space_at] = "\n"
+                col -= col_after_space
+            else:
+                out.append("\n")
+                col = 0
+            space_at = None
+            if ch == " " and col == 0:
+                i += 1   # a break at a space: the space is the break
+                continue
+        out.append(ch)
+        col += w
+        if ch == " ":
+            space_at = len(out) - 1
+            col_after_space = col
+        i += 1
+    return "".join(out)
+
+
 # ── key source ──────────────────────────────────────────────────────────────
 
 _VK_ZOOM_IN = frozenset({0xBB, 0x6B})    # VK_OEM_PLUS, VK_ADD
@@ -455,6 +493,8 @@ class LineEditor:
         finish_style: Callable[[str, int], str] | None = None,
         geometry: Callable[[], tuple[int, int] | None] | None = None,
         on_grow: Callable[[int], Any] | None = None,
+        make_room: Callable[[int], int] | None = None,
+        give_room: Callable[[int], int] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -489,8 +529,15 @@ class LineEditor:
         # (cursor row, height)), so a multi-row entry that would run past
         # the bottom can tell the caller how far the window scrolled
         # (`on_grow(rows)`): the caller keeps its own row bookkeeping right.
+        # Before scrolling, `make_room(n)` asks the caller to free rows above
+        # (blank pad rows under the banner are deleted, so the banner keeps
+        # its place; returns how many it freed); `give_room(n)` puts them
+        # back when the entry shrinks again.
         self.geometry = geometry
         self.on_grow = on_grow
+        self.make_room = make_room
+        self.give_room = give_room
+        self._borrowed = 0
         self._anchor_row: int | None = None
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
@@ -536,16 +583,21 @@ class LineEditor:
     def _rows(self, visible: int) -> int:
         return visible // self.usable + 1
 
-    def _fit(self, text: str) -> str:
+    def _fit(self, text: str, words: bool = False) -> str:
         """With a margin, break rows with explicit newlines (see __init__)."""
-        return _wrap_visible(text, self.usable) if self.margin else text
+        if not self.margin:
+            return text
+        return (_wrap_words_visible if words else _wrap_visible)(text, self.usable)
 
     # -- rendering ----------------------------------------------------------
 
-    def _layout(self, prompt: str, chrome: bool = True, pad: bool = True) -> tuple[str, int, int, int]:
+    def _layout(self, prompt: str, chrome: bool = True, pad: bool = True,
+                words: bool = False) -> tuple[str, int, int, int]:
         """Return (text_to_write, total_rows, cursor_row, cursor_col).
         `pad=False` skips the deferred-wrap spare row: the finished line
-        needs no cursor arithmetic, and a styled spare row would show."""
+        needs no cursor arithmetic, and a styled spare row would show.
+        `words=True` breaks rows at spaces (the finished echo); the cursor
+        figures are then meaningless."""
         prompt_lines = prompt.split("\n")
         buf_lines = self.buffer.split("\n")
         above: list[str] = []
@@ -585,7 +637,7 @@ class LineEditor:
         for i, (text, vis) in enumerate(logical):
             if i == cursor_logical:
                 cursor_row = total_rows + cursor_vis // self.usable
-            pieces.append(self._fit(text + (self._pad(vis) if pad else "")))
+            pieces.append(self._fit(text + (self._pad(vis) if pad else ""), words))
             total_rows += self._rows(vis)
         return "\n".join(pieces), total_rows, cursor_row, cursor_vis % self.usable
 
@@ -598,8 +650,13 @@ class LineEditor:
 
     def _read_anchor(self) -> None:
         self._anchor_row = None
+        self._borrowed = 0
         if self.geometry is None:
             return
+        # The caller's last cursor moves (the box coming down, the pad) are
+        # escape sequences with no newline: a line-buffered stdout still
+        # holds them, and the console would report the row from before.
+        self._write("")
         try:
             geo = self.geometry()
         except Exception:
@@ -608,19 +665,59 @@ class LineEditor:
             self._anchor_row = geo[0]
 
     def _note_growth(self, total_rows: int) -> None:
-        """More rows than fit below the anchor scroll the window; report the
-        new scroll distance once and move the anchor up with it."""
-        if self._anchor_row is None or self.on_grow is None:
+        """More rows than fit below the anchor: first take blank rows from
+        above (`make_room`, the content shifts up and the banner stays), and
+        only then let the window scroll, reporting that distance once. The
+        anchor moves up either way."""
+        if self._anchor_row is None:
             return
-        # The anchor already moved up with every scroll reported so far, so
-        # whatever still hangs past the bottom is new scrolling.
+        # The anchor already moved up with every row freed or scrolled so
+        # far, so whatever still hangs past the bottom is new.
         overflow = self._anchor_row + total_rows - self.height
-        if overflow > 0:
-            self._anchor_row -= overflow
+        if overflow <= 0:
+            return
+        made = 0
+        if self.make_room is not None:
             try:
-                self.on_grow(overflow)
+                made = max(0, min(overflow, int(self.make_room(overflow))))
+            except Exception:
+                made = 0
+        self._borrowed += made
+        self._anchor_row -= made
+        rest = overflow - made
+        if rest > 0 and self.on_grow is not None:
+            self._anchor_row -= rest
+            try:
+                self.on_grow(rest)
             except Exception:
                 pass
+
+    def _note_shrink(self, total_rows: int) -> None:
+        """The entry shrank after growth had pushed rows out: give borrowed
+        pad rows back (`give_room`, the content shifts down again) and, for
+        rows the window scrolled away, move the anchor down over blank rows
+        so the box keeps the window's last rows. Writes directly: the old
+        rows are cleared first, or the insert would push them (and the
+        cursor) past the bottom, where the console clamps it."""
+        if self._anchor_row is None or not (0 < total_rows < self._rendered_rows):
+            return
+        slack = self.height - (self._anchor_row + total_rows)
+        if slack <= 0:
+            return
+        self._write(self._move_to_anchor() + "\033[J")
+        self._cursor_row = 0
+        given = 0
+        if self.give_room is not None and self._borrowed:
+            try:
+                given = max(0, min(slack, self._borrowed, int(self.give_room(min(slack, self._borrowed)))))
+            except Exception:
+                given = 0
+        self._borrowed -= given
+        self._anchor_row += given
+        rest = slack - given
+        if rest > 0:
+            self._write("\n" * rest)
+            self._anchor_row += rest
 
     def render(self, prompt: str, if_changed: bool = False) -> None:
         text, total_rows, cursor_row, cursor_col = self._layout(prompt)
@@ -628,6 +725,7 @@ class LineEditor:
             return   # an idle tick with nothing new on the status line
         self._last_text = text
         self._note_growth(total_rows)
+        self._note_shrink(total_rows)
         out = [self._move_to_anchor(), "\033[J", text]
         # We are now at the end of the last row; walk back to the anchor and
         # down to the cursor. Both legs are computed, so the next redraw's
@@ -656,7 +754,7 @@ class LineEditor:
         cursor below it. The line stays where it was typed: the caller keeps
         the conversation anchored above the input, so the echo is already
         in place."""
-        text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False, pad=False)
+        text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False, pad=False, words=True)
         if self.finish_style is not None:
             text = "\n".join(self.finish_style(row, self.usable) for row in text.split("\n"))
         self._write(self._move_to_anchor() + "\033[J" + text + "\n")
@@ -971,6 +1069,8 @@ def make_reader(
     finish_style: Callable[[str, int], str] | None = None,
     geometry: Callable[[], tuple[int, int] | None] | None = None,
     on_grow: Callable[[int], Any] | None = None,
+    make_room: Callable[[int], int] | None = None,
+    give_room: Callable[[int], int] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
@@ -1004,5 +1104,7 @@ def make_reader(
         finish_style=finish_style,
         geometry=geometry,
         on_grow=on_grow,
+        make_room=make_room,
+        give_room=give_room,
     )
     return editor.read

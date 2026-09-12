@@ -430,6 +430,55 @@ def test_geometry_change_during_a_turn_relays_out_and_replays_the_turn() -> None
         restore()
 
 
+def test_make_room_takes_pad_rows_and_give_room_returns_them() -> None:
+    """The editor borrows blank pad rows for a growing entry (deleted at the
+    pad's top, everything below shifts up) and returns them on a shrink."""
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        geo = {"row": 5, "height": 30}
+        live._geometry = lambda: (geo["row"], geo["height"])
+        live.enable()                       # pad_top 5, pad_above 20
+        live.disable()
+        top, above = live._pad_top, live._pad_above
+        geo["row"] = 26
+        base.chunks.clear()
+        assert live.make_room(2) == 2
+        assert f"\033[{top + 1};1H\033[2M\033[25;3H" in base.text, repr(base.text)
+        assert (live._pad_top, live._pad_above) == (top, above - 2)
+        base.chunks.clear()
+        assert live.give_room(2) == 2
+        assert f"\033[{top + 1};1H\033[2L\033[29;3H" in base.text, repr(base.text)
+        assert (live._pad_top, live._pad_above) == (top, above)
+        # No pad at all: nothing to lend or take back.
+        live.reset_pad()
+        assert live.make_room(3) == 0 and live.give_room(3) == 0
+    finally:
+        restore()
+
+
+def test_geometry_reads_flush_the_base_stream_first() -> None:
+    """The pad's cursor moves carry no newline, so a line-buffered stdout
+    holds them; reading the console cursor before a flush gave the row from
+    before the move, the editor's anchor sat too high, the scroll it later
+    reported fell short and a pad delete removed the echo's first row."""
+    live, base, inner = _live(width=40, pad=2)
+    flushes: list[int] = []
+    base.flush = lambda: flushes.append(len(base.chunks))
+    reads: list[int] = []
+
+    def geometry() -> tuple[int, int]:
+        reads.append(len(flushes))
+        return (5, 30)
+
+    live._geometry = geometry
+    live.enable()
+    live.write(inner, "x\n")
+    live.pad_for_editor()
+    assert reads and all(n >= 1 for n in reads), reads
+    assert len(flushes) >= len(reads), (flushes, reads)
+
+
 def test_cells_not_characters_for_wide_glyphs() -> None:
     assert sb.visible_len("日本語") == 6
     clipped = sb.clip_visible("日本語のパス", 5)          # never split a wide cell
@@ -554,6 +603,8 @@ TESTS = [
     test_pad_delete_returns_to_the_column_before_the_write,
     test_pad_bookkeeping_survives_scrolls_clears_and_stale_tops,
     test_geometry_change_during_a_turn_relays_out_and_replays_the_turn,
+    test_geometry_reads_flush_the_base_stream_first,
+    test_make_room_takes_pad_rows_and_give_room_returns_them,
     test_cells_not_characters_for_wide_glyphs,
     test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it,
     test_spinner_uses_the_live_area_when_one_is_up,

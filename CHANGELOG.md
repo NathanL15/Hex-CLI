@@ -105,6 +105,32 @@ Two code reviews over the diff and a live edge-case pass, fixed together:
   output so far (the question, tool cards, the partial answer), then
   streaming carries on at the new width. Verified live in Windows
   Terminal, resizing once before the first token and once mid-answer.
+
+### Live tour of the whole flow (2026-09-12)
+
+Every command and key driven in a real Windows Terminal window, with the
+console buffer dumped after each step. Fixed what it turned up:
+
+* A multi-row question (Shift+Enter, or one line wrapping) lost its first
+  row after Enter once the screen was full. The box's cursor moves carry
+  no newline, so a line-buffered stdout still held them when the editor
+  asked the console where the cursor was; its anchor sat too high, the
+  scroll it reported fell short, and a later pad delete took the echo's
+  first row. Every geometry read now flushes first.
+* A long question's echo broke mid-word ("a sem / aphore"); it now breaks
+  at spaces, and the transcript redraw echoes it the same way.
+* Clearing or shortening an entry that had grown left the box a row or
+  two above the bottom with blank rows under it. The box drops back to
+  the last rows.
+* A growing entry scrolled the whole window, banner included, even while
+  blank rows still sat under the banner. It now takes those rows first
+  (the banner stays put) and gives them back when the entry shrinks; the
+  window scrolls only once the rows are gone.
+
+Seen and left alone: on a nonsense or one-word question the model
+sometimes echoes its own prompt scaffolding ("Request: …", the workspace
+line). That is the prompt's shape, which changes only through the A/B
+gate, not the terminal.
 * Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
   `/setup` over a pipe works again. The non-streaming spinner and the
   delegate token counter no longer print alongside the status line.

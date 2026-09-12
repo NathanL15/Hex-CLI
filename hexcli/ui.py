@@ -521,9 +521,13 @@ def user_row(row: str, width: int) -> str:
 def user_echo(content: str, width: int) -> str:
     """The full echo for a stored user message: `> first line`, then
     continuation rows prefixed like the editor's, each on a band."""
+    from hexcli.lineedit import _wrap_words_visible  # lazy: lineedit imports ui
     lines = content.split("\n") or [""]
-    rows = [f"{C.BOLD}>{C.RESET} {lines[0]}"]
-    rows += [f"...  {line}" for line in lines[1:]]
+    logical = [f"{C.BOLD}>{C.RESET} {lines[0]}"]
+    logical += [f"...  {line}" for line in lines[1:]]
+    # Broken at spaces, exactly as the editor leaves a finished line, so a
+    # redraw reproduces the echo row for row.
+    rows = [r for line in logical for r in _wrap_words_visible(line, width).split("\n")]
     return "\n".join(user_row(r, width) for r in rows)
 
 

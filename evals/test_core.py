@@ -1291,6 +1291,8 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
                                  clear=False, pending="next")
         out = buf.getvalue()
         assert out == "\n> hi\n\nhello\n\n> next\n", repr(out)
+        # A long question is echoed broken at spaces, as the editor left it.
+        assert ui.user_echo("one two three four", 9) == "> one two\nthree\nfour"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             ui.clear_screen(scrollback=False)

@@ -455,6 +455,8 @@ def run_repl(config: dict[str, Any]) -> int:
         # pad bookkeeping with it.
         geometry=statusbar.console_geometry if live is not None else None,
         on_grow=live.note_scroll if live is not None else None,
+        make_room=live.make_room if live is not None else None,
+        give_room=live.give_room if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:

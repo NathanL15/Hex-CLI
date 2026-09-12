@@ -593,7 +593,11 @@ def test_margin_wraps_rows_with_explicit_newlines() -> None:
     assert ed.usable == 10
     assert ed.read("you> ") == "abcdefghijklmno"
     final = out[-1]
-    assert "you> abcde\nfghijklmno\n" in final, repr(final)
+    # The finished line breaks at spaces like the answers do: a word that
+    # does not fit after the prompt moves to its own row, then breaks hard.
+    assert "you>\nabcdefghij\nklmno\n" in final, repr(final)
+    # While editing, rows break exactly at the width (cursor arithmetic).
+    assert "you> abcde\nfghijklmno" in "".join(out[:-1]), repr(out[-2])
     # 20 visible chars is an exact multiple of the usable width, so the
     # deferred-wrap pad adds a third row and the cursor sits at its start.
     text, rows, cursor_row, cursor_col = ed._layout("you> ")
@@ -807,6 +811,91 @@ def test_clear_screen_uses_the_resize_hook_when_there_is_one() -> None:
     assert le.visible_len("日本") == 4 and le._wrap_visible("日本語", 4) == "日本\n語"
 
 
+def test_finished_line_breaks_at_spaces_and_the_box_drops_back_after_a_shrink() -> None:
+    """Live tour 2026-09-12: a long question's echo broke mid-word ("a sem /
+    aphore"), and clearing a two-row history entry left the box one row
+    above the bottom with a blank row under it."""
+    from hexcli import lineedit as le
+    assert le._wrap_words_visible("aaa bbb ccc", 7) == "aaa bbb\nccc"
+    assert le._wrap_words_visible("aaaaaaaaaa bb", 7) == "aaaaaaa\naaa bb"      # a word wider than the row
+    assert le._wrap_words_visible("\033[1maaa\033[0m bbb ccc", 7) == "\033[1maaa\033[0m bbb\nccc"
+    assert le._wrap_words_visible("aaa bbb ccc", 8) == "aaa bbb\nccc"          # the break space is dropped
+    ed, out = editor(typed("one two three four five six") + [le.ENTER], width=20, margin=2,
+                     finish_style=lambda r, w: f"[{r}]")
+    ed.read("> ")
+    assert out[-1].endswith("[> one two three]\n[four five six]\n"), repr(out[-1][-60:])
+    # Growth scrolled the window (anchor 7 of 10, chrome 2 rows: a second
+    # input row overflows by one); deleting that row again re-anchors.
+    grown: list[int] = []
+    keys = typed("a") + [le.NEWLINE, le.BACKSPACE] + typed("b") + [le.ENTER]
+    ed, out = editor(keys, width=40, height=10, chrome=lambda w: (["top"], ["bot"]),
+                     geometry=lambda: (7, 10), on_grow=grown.append)
+    ed.read("> ")
+    assert grown == [1], grown
+    assert ed._anchor_row == 7, ed._anchor_row
+    joined = "".join(out)
+    assert "\033[J" + "\n" in joined, "no re-anchor newline written"
+
+
+def test_growth_borrows_pad_rows_before_scrolling_and_a_shrink_returns_them() -> None:
+    """With blank pad rows under the banner, a growing entry takes those
+    (the banner stays put, nothing scrolls); deleting the rows again gives
+    them back. Only what the pad cannot cover is reported as a scroll."""
+    from hexcli import lineedit as le
+    calls: list[tuple[str, int]] = []
+    pad = {"rows": 1}
+
+    def make_room(n: int) -> int:
+        got = min(n, pad["rows"])
+        pad["rows"] -= got
+        calls.append(("make", n))
+        return got
+
+    def give_room(n: int) -> int:
+        pad["rows"] += n
+        calls.append(("give", n))
+        return n
+
+    grown: list[int] = []
+    # Anchor 7 of 10 with 2 chrome rows: the 2nd input row overflows by one
+    # (the pad covers it), the 3rd by one more (the window scrolls).
+    keys = (typed("a") + [le.NEWLINE] + typed("b") + [le.NEWLINE] + typed("c")
+            + [le.BACKSPACE, le.BACKSPACE, le.BACKSPACE] + typed("x") + [le.ENTER])
+    ed, out = editor(keys, width=40, height=10, chrome=lambda w: (["top"], ["bot"]),
+                     geometry=lambda: (7, 10), on_grow=grown.append,
+                     make_room=make_room, give_room=give_room)
+    assert ed.read("> ") == "a\nx"
+    assert calls[:2] == [("make", 1), ("make", 1)] and grown == [1], (calls, grown)
+    # Shrinking by one row: the scrolled row cannot come back (blank row
+    # re-anchor); the borrowed one is returned to the pad.
+    assert ("give", 1) in calls and pad["rows"] == 1, (calls, pad)
+    # Anchor 6 + 4 rows = the window's bottom: pinned, nothing scrolled back.
+    assert ed._anchor_row == 6 and ed._borrowed == 0, (ed._anchor_row, ed._borrowed)
+
+
+def test_anchor_is_read_after_flushing_the_writer() -> None:
+    """The caller's last cursor moves may still sit in a line-buffered
+    stdout; the editor writes an empty chunk (which its writer flushes)
+    before asking where the cursor is."""
+    from hexcli import lineedit as le
+    order: list[str] = []
+    out: list[str] = []
+
+    def write(s: str) -> None:
+        out.append(s)
+        order.append("flush" if s == "" else "write")
+
+    def geometry() -> tuple[int, int]:
+        order.append("geometry")
+        return (6, 10)
+
+    stream = iter([le.ENTER])
+    ed = le.LineEditor(read_key=lambda: next(stream, le.EXHAUSTED), write=write, width=40,
+                       height=10, styled=False, geometry=geometry)
+    ed.read("> ")
+    assert order.index("flush") < order.index("geometry"), order
+
+
 def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
     from hexcli import lineedit as le
     ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
@@ -901,6 +990,9 @@ TESTS = [
     test_finish_style_wraps_each_row_of_the_finished_line,
     test_finished_line_has_no_spare_row_and_growth_is_reported,
     test_clear_screen_uses_the_resize_hook_when_there_is_one,
+    test_anchor_is_read_after_flushing_the_writer,
+    test_finished_line_breaks_at_spaces_and_the_box_drops_back_after_a_shrink,
+    test_growth_borrows_pad_rows_before_scrolling_and_a_shrink_returns_them,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 
