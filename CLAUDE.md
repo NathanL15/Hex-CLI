@@ -351,6 +351,7 @@ From `docs/V2X_ROADMAP.md` and `docs/RESEARCH_NEXT_LEVERS.md` §7:
 - Append-only raw history across turns (every turn a prefix extension). Largest open lever; changes what the model reads, so full pass^5 + multiturn with think time.
 - Compaction prompt sharing the warm prefix (less urgent at an 850-token budget).
 - Harness-side auto-paging for `bigfile-2`. `"Update the file."` still 0/5 on the ask-don't-give-up case.
+- `missing-file-2` (edit a file the user did not name when the named one is missing, with a prior edit in the history): 1-3/5. A rule-11 sentence fixed it (4/5) but broke `agentic-3` (gate FAIL, 2026-09-12) and cost 160 prompt tokens; the next attempt should be loop mechanics, not prose — the way the "run the tests" nudge (shipped 2026-09-12, `_tests_requested` in `run_autopilot`) replaced a rule-14 sentence that made the 4B copy the prompt's tool examples literally.
 - Server should mark its cache stale after `finish_reason=length` (Rewind −1 otherwise). Fork-side.
 - Capabilities, each flag-gated and A/B'd: plan ledger, memory v2 (files + ripgrep), git-snapshot undo, background commands / steering, AST command classifier + policy files.
 - Optional dedent of the prompt (+13 % history room, no speed) via the 5-run gate.
