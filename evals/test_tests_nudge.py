@@ -70,6 +70,9 @@ def test_loop_sends_the_finish_back_once_when_tests_were_requested() -> None:
             json.dumps({"action": "finish", "message": "Fixed; the tests will now pass."}),
             json.dumps({"action": "run_code", "args": {"path": "test_processor.py"}}),
             json.dumps({"action": "finish", "message": "Ran the tests: exit 1 (median still wrong)."}),
+            # The failing run is sent back once (retest nudge); a second
+            # honest finish is then accepted.
+            json.dumps({"action": "finish", "message": "Ran the tests again: still exit 1."}),
         ])
 
         def fake_llm(config, messages, *args, **kw):
@@ -91,10 +94,71 @@ def test_loop_sends_the_finish_back_once_when_tests_were_requested() -> None:
             sa.call_llm, sa.tools._HOME = orig_call, orig_home
             os.chdir(orig_cwd)
         assert any("The tests were not run. Run test_processor.py" in m for m in seen), seen
-        assert "Ran the tests" in out, out
+        assert sum(m.startswith("The tests ran and FAILED") for m in seen) == 1, seen
+        assert "still exit 1" in out, out
+
+
+def test_failure_tail_and_retest_nudge() -> None:
+    assert sa._test_failure_tail("Exit code: 0\n\nall tests passed\n") is None
+    assert sa._test_failure_tail("no exit line here") is None
+    tail = sa._test_failure_tail("Exit code: 1\n\nTraceback\n  File x\nAssertionError: 3 != 3.5\n")
+    assert tail and tail.endswith("AssertionError: 3 != 3.5"), tail
+    assert sa._test_failure_tail("Exit code: TIMEOUT (10s exceeded)\n") is not None
+    text = sa._retest_nudge_text("AssertionError: 3 != 3.5")
+    assert "FAILED" in text and "run the same test file again" in text and text.endswith("Respond with JSON only.")
+
+
+def test_loop_sends_a_failing_test_result_back_once() -> None:
+    """The model runs the tests, they fail, it finishes anyway: the loop
+    sends the failure back once; the second finish after a passing run is
+    accepted. A real python run in a sandbox provides the exit codes."""
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "processor.py").write_text("def median(d):\n    return sorted(d)[len(d) // 2]\n",
+                                           encoding="utf-8")
+        (root / "test_processor.py").write_text("from processor import median\n"
+                                                "assert median([1, 2, 5, 6]) == 3.5\n"
+                                                "print('ok')\n", encoding="utf-8")
+        seen: list[str] = []
+        replies = iter([
+            json.dumps({"action": "run_code", "args": {"path": "test_processor.py"}}),
+            json.dumps({"action": "finish", "message": "Done; the tests were run."}),
+            json.dumps({"action": "edit_file", "args": {
+                "path": "processor.py", "old_string": "    return sorted(d)[len(d) // 2]",
+                "new_string": "    s = sorted(d); n = len(s)\n"
+                              "    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2"}}),
+            json.dumps({"action": "run_code", "args": {"path": "test_processor.py"}}),
+            json.dumps({"action": "finish", "message": "Fixed; tests exit 0."}),
+        ])
+
+        def fake_llm(config, messages, *args, **kw):
+            seen.append(messages[-1]["content"])
+            return next(replies), 0
+
+        orig_cwd = Path.cwd()
+        import os
+        os.chdir(root)
+        orig_call, orig_home = sa.call_llm, sa.tools._HOME
+        sa.call_llm = fake_llm
+        sa.tools._HOME = root
+        try:
+            cfg = {"require_verification": True, "max_agent_steps": 8, "prompt_split": False,
+                   "live_streaming": False, "memory_enabled": False, "chat_log_enabled": False}
+            out = sa.run_autopilot(cfg, [], "fix the median in processor.py and run the tests",
+                                   "powershell.exe", session=None)
+        finally:
+            sa.call_llm, sa.tools._HOME = orig_call, orig_home
+            os.chdir(orig_cwd)
+        assert any(m.startswith("The tests ran and FAILED") for m in seen), seen
+        assert sum(m.startswith("The tests ran and FAILED") for m in seen) == 1
+        assert "exit 0" in out, out
 
 
 TESTS = [
+    test_failure_tail_and_retest_nudge,
+    test_loop_sends_a_failing_test_result_back_once,
     test_request_detection,
     test_ran_tests_recognises_test_files_and_runners_only,
     test_nudge_names_the_test_file_when_one_exists,

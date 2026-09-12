@@ -151,8 +151,22 @@ taken through the A/B gate (`evals/results/persona/` has every log).
   does not exist. Alone: 5/5 already. With a prior edit in the history
   (`missing-file-2`, the live shape): 1/5 — the model edits another file
   and reports success. A rule-11 sentence lifted it to 4/5 but broke
-  agentic-3 (5/5 → 3/5, 4/6 on re-check): gate FAIL, reverted. The case
-  stays in the suite as a watch item (3/5 on the shipped arm).
+  agentic-3 (5/5 → 3/5, 4/6 on re-check): gate FAIL, reverted. The loop
+  now guards it instead: when the request asks to change a file it
+  names, that file is not there, and the model reaches for a different
+  file (or creates the named one without being asked to), the call is
+  refused with the reason and the directory listing, and the model is
+  told to say the file was not found. missing-file-2 3/5 → 5/5. The
+  first cut of the guard read "correct" out of "saved correctly" and
+  refused agentic-1's create (0/5); whole-word intent matching and a
+  create-intent exemption fixed that (5/5), with agentic-1's wording
+  pinned in the guard's tests.
+* A second loop step for the same request shape: when the tests ran and
+  failed and the model finishes anyway, the failing output is sent back
+  once with "fix, run again, report". tests-claim-1 1/5 → 3/5; the
+  remaining misses are fixes the 4B cannot get right in two tries.
+  Gate on the guard arm (with this nudge, which no gated case can
+  trigger): 30/44 pass^k, run-level 176/220 vs 167/221 on the nudge arm.
 
 ### Walkthroughs by kind of user (2026-09-12)
 

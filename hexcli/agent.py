@@ -1190,6 +1190,10 @@ def _run_autopilot_turn(
     _tests_requested = _asks_to_run_tests(query)
     _tests_nudge_used = False
     _run_targets: list[str] = []
+    # The last test run's failure output (None once a run passes), so a
+    # finish right after a failing run can be sent back once more.
+    _last_test_failure: str | None = None
+    _retest_nudge_used = False
     # Local escalation (docs/V2_PLAN.md §4 ladder): consult the bigger local
     # model at hard moments. At most one consult per turn; every failure path
     # degrades to the pre-escalation behaviour.
@@ -1320,6 +1324,14 @@ def _run_autopilot_turn(
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({"role": "user", "content": _tests_nudge_text(cwd)})
                 continue
+            # Retest nudge — the tests ran and failed, and the model is
+            # finishing anyway. One more round: fix, run again, report.
+            if (_tests_requested and _last_test_failure is not None and not _retest_nudge_used
+                    and config.get("require_verification", True)):
+                _retest_nudge_used = True
+                messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                messages.append({"role": "user", "content": _retest_nudge_text(_last_test_failure)})
+                continue
             # Escalation trigger B — the verification nudge was ignored: the
             # model finished a second time without checking its own mutation.
             if (_unverified_mutation and _verify_nudge_used
@@ -1401,6 +1413,9 @@ def _run_autopilot_turn(
         if live is not None:
             live.set_activity(f"▸ {tool_name}")   # the status line names the running tool
         try:
+            guard = _named_file_guard(query, cwd, tool_name, action.get("args") or {})
+            if guard:
+                raise RuntimeError(guard)
             tool_output = execute_tool_call(
                 {**config, "tool_output_limit": step_limit}, action, shell_exe)
             if turn:
@@ -1438,6 +1453,8 @@ def _run_autopilot_turn(
 
         last_tool_output = tool_output
         _turn_events.append(f"{tool_name}: {tool_output[:220]}")
+        if _run_targets and tool_name in ("run_code", "run_command") and _ran_tests(_run_targets[-1:]):
+            _last_test_failure = _test_failure_tail(tool_output)
         _is_error = tool_output.lstrip().startswith("Error:")
         if tool_name in {"edit_file", "write_file", "append_file"} and not _is_error:
             _unverified_mutation = True
@@ -1578,6 +1595,78 @@ def _compose_piped_query(query: str, piped: str, truncated: bool) -> str:
     )
 
 
+_NAMED_FILE_RE = re.compile(
+    r"(?<![\w/\\.-])[\w\-./\\]+\.(?:py|txt|md|json|js|ts|tsx|jsx|ps1|psm1|yaml|yml|toml|cfg|ini|csv|html|css|sh|bat|cmd)\b",
+    re.IGNORECASE,
+)
+_MUTATING_TOOLS = frozenset({"edit_file", "write_file", "append_file"})
+# Whole words only: the substring test in _EDIT_INTENT_KW is fine for choosing
+# prompt rules, but a guard that refuses tool calls must not read "correct"
+# out of "read it back to confirm it saved correctly" (agentic-1, 0/5 on the
+# first guard arm).
+_GUARD_EDIT_RE = re.compile(
+    r"\b(fix|edit|update|change|modify|refactor|improve|rename|rewrite|patch|correct|replace|tidy)\b",
+    re.IGNORECASE)
+_GUARD_CREATE_RE = re.compile(
+    r"\b(create|make|write|generate|new file|add a file|save (?:it |this )?(?:as|to))\b", re.IGNORECASE)
+
+
+def _named_files(query: str) -> list[str]:
+    """File names the request itself mentions, in order, without duplicates."""
+    seen: list[str] = []
+    for m in _NAMED_FILE_RE.finditer(query or ""):
+        name = m.group().strip(".")
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _named_file_guard(query: str, cwd: str, tool_name: str, args: dict[str, Any]) -> str | None:
+    """The request asks to change a file it names, that file is not here,
+    and the model is about to change (or create) a file instead. Refuse
+    with the reason and what is here. Live tour 2026-09-12: "in missing.py
+    change alpha to beta" ended with notes.txt edited and success
+    reported; a prompt rule against it broke another gated case, so the
+    loop enforces it. Returns the error text, or None to let the call run."""
+    if tool_name not in _MUTATING_TOOLS:
+        return None
+    q = query or ""
+    if not _GUARD_EDIT_RE.search(q):
+        return None
+    named = _named_files(query)
+    if not named:
+        return None
+    root = Path(cwd)
+
+    def exists(name: str) -> bool:
+        p = Path(name)
+        try:
+            return (p if p.is_absolute() else root / p).exists()
+        except OSError:
+            return False
+
+    missing = [n for n in named if not exists(n)]
+    if not missing:
+        return None
+    target = str(args.get("path") or "")
+    target_name = Path(target).name.lower() if target else ""
+    named_names = {Path(n).name.lower() for n in named}
+    missing_names = {Path(n).name.lower() for n in missing}
+    if target_name in named_names and target_name not in missing_names:
+        return None   # editing a named file that does exist
+    if target_name in missing_names and _GUARD_CREATE_RE.search(q):
+        return None   # the request asks for that file to be created
+    try:
+        present = sorted(p.name for p in root.iterdir() if not p.name.startswith("."))[:12]
+    except OSError:
+        present = []
+    what = "create" if target_name in {Path(n).name.lower() for n in missing} else "edit"
+    return (f"{missing[0]} does not exist here, so there is nothing to change in it; do not "
+            f"{what} {Path(target).name or 'another file'} in its place. Files present: "
+            f"{', '.join(present) or 'none'}. Finish by telling the user that {missing[0]} was "
+            "not found (name the similar files, or ask which file they meant).")
+
+
 _RUN_TESTS_RE = re.compile(
     r"\b(run|running|execute|rerun|re-run)\s+(the\s+|all\s+|its\s+|my\s+)?(unit\s+)?tests?\b"
     r"|\b(make|until|so)\s+(the\s+)?tests?\s+pass\b|\bpytest\b",
@@ -1609,6 +1698,26 @@ def _test_files_in(cwd: str) -> list[str]:
     for pattern in ("test_*.py", "*_test.py", "*_tests.py", "tests/test_*.py", "tests/*_test.py"):
         found.extend(sorted(root.glob(pattern)))
     return [str(p.relative_to(root)) for p in found[:5]]
+
+
+_EXIT_CODE_RE = re.compile(r"Exit code:\s*(-?\d+|TIMEOUT)")
+
+
+def _test_failure_tail(tool_output: str) -> str | None:
+    """The failing part of a test run's output, or None when it passed or
+    the exit code is not stated."""
+    m = _EXIT_CODE_RE.search(tool_output or "")
+    if not m or m.group(1) == "0":
+        return None
+    lines = [ln for ln in (tool_output or "").strip().splitlines() if ln.strip()]
+    return "\n".join(lines[-8:])
+
+
+def _retest_nudge_text(failure: str) -> str:
+    return (f"The tests ran and FAILED:\n{failure}\n"
+            "Do not finish with this result. Read the assertion, fix the code with edit_file, "
+            "run the same test file again with run_code, and finish quoting the new exit code. "
+            "Respond with JSON only.")
 
 
 def _tests_nudge_text(cwd: str) -> str:

@@ -68,6 +68,9 @@ jobs:
       - name: Unit tests — the "run the tests" nudge
         run: python evals/test_tests_nudge.py
 
+      - name: Unit tests — the named-file guard
+        run: python evals/test_named_file_guard.py
+
       - name: Unit tests — product shell (diffs, AGENTS.md, doctor)
         run: python evals/test_product_shell.py
 
