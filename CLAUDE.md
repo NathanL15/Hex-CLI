@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.7.0 release on 2026-09-12 (code at
-`__version__ = "2.7.0"`). When this file and the code disagree, the code
+to date through the 2.7.1 release on 2026-09-12 (code at
+`__version__ = "2.7.1"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`

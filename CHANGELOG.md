@@ -6,6 +6,23 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.7.1 — 2026-09-12
+
+A release that exists to fix the previous one, so by RELEASING.md's own
+words a gate was skipped: 2.7.0 was tagged on a green local run without
+waiting for the remote CI run on `main`, which went red.
+
+* The named-file guard read file names out of the request with a pattern
+  that could not cross `~` or `:`. On the GitHub runner the temp folder is
+  `C:\Users\RUNNER~1\...`, so a request naming an absolute path there
+  yielded the fragment `1\AppData\...\app.py`, which does not exist, and
+  the guard refused an edit to a file that was present
+  (`test_escalation` red on CI, green locally where the path has neither
+  character). Whole path tokens are captured now; drive letters, short
+  names and `..` segments are pinned in the guard's tests.
+* RELEASING.md: the tag waits for the remote CI run on `main` to be
+  green; the runner's environment is not the development machine's.
+
 ## 2.7.0 — 2026-09-12
 
 ### Input box and status line
