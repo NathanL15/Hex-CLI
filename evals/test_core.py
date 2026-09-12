@@ -1281,6 +1281,16 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
         with contextlib.redirect_stdout(buf):
             ui.redraw_transcript({"messages": [{"role": "user", "content": "hi"}]}, clear=False)
         assert "\033[2J" not in buf.getvalue() and "> hi" in buf.getvalue()
+        # Mid-turn: the running turn's question is echoed last, and the
+        # spacing is the live flow's (one blank row between an answer and
+        # the next echo, never two).
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.redraw_transcript({"messages": [{"role": "user", "content": "hi"},
+                                               {"role": "assistant", "content": "hello"}]},
+                                 clear=False, pending="next")
+        out = buf.getvalue()
+        assert out == "\n> hi\n\nhello\n\n> next\n", repr(out)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             ui.clear_screen(scrollback=False)

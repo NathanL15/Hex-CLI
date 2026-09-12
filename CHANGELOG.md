@@ -100,6 +100,11 @@ Two code reviews over the diff and a live edge-case pass, fixed together:
   top, the conversation anchored above the box, blank rows between, with
   the banner scrolling off only when the conversation needs the room.
   Verified in a real Windows Terminal window at five sizes.
+* The same during a turn: a resize while the model is thinking or the
+  answer is streaming lays the screen out again and replays the turn's
+  output so far (the question, tool cards, the partial answer), then
+  streaming carries on at the new width. Verified live in Windows
+  Terminal, resizing once before the first token and once mid-answer.
 * Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
   `/setup` over a pipe works again. The non-streaming spinner and the
   delegate token counter no longer print alongside the status line.

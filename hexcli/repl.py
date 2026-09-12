@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -361,6 +362,7 @@ def run_repl(config: dict[str, Any]) -> int:
     # reads the name at call time, so the gauge follows.
     live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
     npu_model = str(config.get("_npurun_model", "") or "")
+    pending_query: str | None = None   # the question of the turn now running (see _reprint)
 
     def _banner() -> None:
         ui.print_banner(npu_model or str(config.get("model", "?")),
@@ -397,10 +399,21 @@ def run_repl(config: dict[str, Any]) -> int:
             return
         ui.clear_screen()
         live.screen_cleared()
-        _banner()
-        live.enable()                                       # box at the bottom, pad under the banner
-        ui.redraw_transcript(current_session, clear=False)  # grows upward into the pad
+        _reprint(live.enable)                               # box at the bottom, pad under the banner
         live.disable()                                      # box down; cursor where the editor starts
+
+    def _reprint(pin: Callable[[], None]) -> None:
+        """Banner, then the box (`pin` puts it on the last rows, the pad
+        under the banner), then the conversation growing upward into the
+        pad. Also the live area's hook for a resize during a turn: it
+        replays the turn's own output after this, and the question of the
+        running turn is not in the session yet, so it is echoed here."""
+        _banner()
+        pin()
+        ui.redraw_transcript(current_session, clear=False, pending=pending_query)
+
+    if live is not None:
+        live.on_relayout = _reprint
 
     def _zoom(delta: int) -> bool:
         """Ctrl+Plus / Ctrl+Minus. Returns True when the screen was redrawn."""
@@ -709,10 +722,12 @@ def run_repl(config: dict[str, Any]) -> int:
         turn = tel.start_turn("autopilot", query)
         probe = clog.turn_start(len(tel.turns), query, history,
                                 sa.context_fill_percent(current_session, config))
+        pending_query = query
         try:
             sa.clear_turn_stop()
             message = sa.run_autopilot(config, history, query, shell_exe,
                                        session=current_session, turn=turn, probe=probe)
+            pending_query = None
             if sa.last_streamed_matches(message) or sa.last_turn_stopped():
                 # Streamed already, or the turn ended on a stop notice: the
                 # message is on screen (or is raw tool output kept for the
@@ -769,4 +784,6 @@ def run_repl(config: dict[str, Any]) -> int:
             clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
             if sa.DEBUG:
                 raise
+        finally:
+            pending_query = None
 

@@ -411,6 +411,15 @@ class LiveArea:
         self._pad_top: int | None = None   # first row of the blank pad above the conversation
         self._pad_above = 0                # how many pad rows there are
         self._last_shape: tuple[Any, int] | None = None   # (window height, usable width) at the last draw
+        # A resize while a turn runs: the owner reprints the banner and the
+        # stored conversation (calling the `pin` it is handed in between,
+        # which puts the box up and the pad under the banner); the turn's
+        # own output so far is then replayed from `_turn_log`.
+        self.on_relayout: Callable[[Callable[[], None]], None] | None = None
+        self._turn_log: list[str] = []
+        self._turn_log_len = 0
+        self._in_turn = False
+        self._relaying = False
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
@@ -619,6 +628,10 @@ class LiveArea:
         it carries consume pad rows first, so the text appears above the box
         and the conversation grows upward."""
         with self.lock:
+            if self.enabled and not self._relaying and self._geometry_changed():
+                self._relayout(inner)
+            if self._in_turn and not self._relaying:
+                self._log_turn(text)
             if self.enabled:
                 self._erase(inner)
             # The column to come back to after a pad delete is where the
@@ -644,6 +657,51 @@ class LiveArea:
     def _drawn_rows_needed(self) -> int:
         return len(self.rows(self.margin.usable))
 
+    _TURN_LOG_MAX = 400_000   # characters kept for a replay; the oldest go first
+
+    def _log_turn(self, text: str) -> None:
+        self._turn_log.append(text)
+        self._turn_log_len += len(text)
+        while self._turn_log_len > self._TURN_LOG_MAX and len(self._turn_log) > 1:
+            self._turn_log_len -= len(self._turn_log.pop(0))
+
+    def _relayout(self, inner: Any) -> None:
+        """The window changed shape while the box is up. The terminal
+        re-wrapped the rows; the ones that no longer fit went into its
+        scrollback (Windows Terminal), out of reach. Clear, let the owner
+        reprint the banner and the conversation, then replay this turn's
+        output so far, all through the pad-consuming path, so the layout
+        is what it would have been at this size from the start."""
+        if self.on_relayout is None:
+            self.reset_pad()
+            return
+        self._relaying = True
+        try:
+            inner._base.write("\033[2J\033[3J\033[H\r")
+            m = self.margin
+            m.col, m.word, m.word_vis = 0, "", 0
+            self._drawn = 0
+            self._signature = None
+            self.reset_pad()
+            # The box stays down while the banner prints: a write with the
+            # box up pins it under the cursor, and the pad would land
+            # between the banner's rows instead of under them.
+            self.enabled = False
+
+            def pin() -> None:
+                self.enabled = True
+                self._draw(inner)
+
+            try:
+                self.on_relayout(pin)
+            finally:
+                self.enabled = True
+            replay = "".join(self._turn_log)
+            if replay:
+                self.write(inner, replay)
+        finally:
+            self._relaying = False
+
     def repaint(self) -> None:
         """Redraw the box in place (a spinner tick, a metrics sample). Skips
         the erase and rewrite when nothing visible changed, so a quiet
@@ -652,8 +710,9 @@ class LiveArea:
             if not (self.enabled and self._inner is not None):
                 return
             rows = self._compose()
-            if self._geometry_changed():
-                self.reset_pad()   # and never skip: the box must move with the window
+            if not self._relaying and self._geometry_changed():
+                self._relayout(self._inner)   # and never skip: the box must move with the window
+                rows = self._compose()
             elif self._drawn and (tuple(rows), self.margin.col) == self._signature:
                 return
             self._erase(self._inner)
@@ -668,6 +727,7 @@ class LiveArea:
             self.enabled = True
             self.activity, self.frame = None, ""
             self._activity_since = None
+            self._turn_log, self._turn_log_len, self._in_turn = [], 0, True
             if self._inner is not None:
                 self._erase(self._inner)
                 self._draw(self._inner)
@@ -682,6 +742,7 @@ class LiveArea:
                     self._inner.write("\n")
             self.enabled = False
             self.activity, self.frame = None, ""
+            self._turn_log, self._turn_log_len, self._in_turn = [], 0, False
             self.pad_for_editor()
         self.refresh_location()
 

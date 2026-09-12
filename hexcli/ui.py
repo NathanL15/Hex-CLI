@@ -534,7 +534,8 @@ def clear_screen(scrollback: bool = True) -> None:
     sys.stdout.flush()
 
 
-def redraw_transcript(session: dict[str, Any], clear: bool = True) -> None:
+def redraw_transcript(session: dict[str, Any], clear: bool = True,
+                      pending: str | None = None) -> None:
     """Reprint the conversation at the current width, after clearing the
     screen unless the caller already laid out something above it.
 
@@ -543,17 +544,29 @@ def redraw_transcript(session: dict[str, Any], clear: bool = True) -> None:
     continuation rows at column 0, losing the margin. Reprinting through
     the margin layer lays every row out fresh. Tool banners and spinner
     lines are not part of the session and do not come back; the questions
-    and answers do.
+    and answers do. `pending` is the question of a turn still running,
+    which joins the session only when the turn ends; it is echoed last.
+
+    Spacing matches the live flow: an answer ends on a blank row, so only
+    the first echo needs one above it.
     """
     if clear:
         clear_screen()
+    first = True
     for msg in session.get("messages", []):
         role, content = msg.get("role"), str(msg.get("content", ""))
         if role == "user":
-            print()
+            if first:
+                print()
             print(user_echo(content, _usable_width()))
+            first = False
         elif role == "assistant":
             render_result("Result", content)
+            first = False
+    if pending is not None:
+        if first:
+            print()
+        print(user_echo(pending, _usable_width()))
 
 
 def apply_saved_console_font() -> None:

@@ -369,6 +369,67 @@ def test_pad_bookkeeping_survives_scrolls_clears_and_stale_tops() -> None:
         restore()
 
 
+def test_geometry_change_during_a_turn_relays_out_and_replays_the_turn() -> None:
+    """A resize while the box is up: the owner's hook reprints the banner
+    and conversation (pinning the box in between), then the turn's own
+    output so far is replayed, so nothing that Windows Terminal pushed
+    into its scrollback is lost. Nothing is logged while replaying, and
+    the log starts fresh with each enable/disable."""
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        geo = {"row": 5, "height": 30}
+        live._geometry = lambda: (geo["row"], geo["height"])
+        calls: list[int] = []
+
+        def reprint(pin: Any) -> None:
+            calls.append(1)
+            assert not live.enabled          # box down: the banner gets no box under it
+            live.write(inner, "BANNER\n")
+            assert live._drawn == 0, "the banner write pinned the box"
+            pin()
+            assert live.enabled and live._drawn == 4
+            live.write(inner, "> old question\n")
+
+        live.on_relayout = reprint
+        live.enable()
+        live.write(inner, "partial answer\n")
+        live.write(inner, "more")
+        assert live._turn_log == ["partial answer\n", "more"]
+        geo["height"] = 20
+        base.chunks.clear()
+        live.write(inner, " text")
+        text = base.text
+        assert calls == [1], calls
+        i_clear = text.find("\033[2J\033[3J\033[H\r")
+        i_banner, i_old = text.find("BANNER"), text.find("> old question")
+        i_partial, i_more = text.find("partial answer"), text.find("more")
+        i_text = text.find(" text", max(i_more, 0))
+        assert 0 <= i_clear < i_banner < i_old < i_partial < i_more < i_text, repr(text)
+        # The replay is not logged twice; the new write is.
+        assert live._turn_log == ["partial answer\n", "more", " text"], live._turn_log
+        # A repaint (the sampler thread) that sees the change does the same.
+        geo["height"] = 25
+        base.chunks.clear()
+        live.repaint()
+        assert calls == [1, 1] and "\033[2J" in base.text
+        assert live._turn_log == ["partial answer\n", "more", " text"]
+        # Without a hook the pad is simply forgotten, as before.
+        live.on_relayout = None
+        geo["height"] = 22
+        base.chunks.clear()
+        live.write(inner, "\n")
+        assert "\033[2J" not in base.text
+        # disable() ends the turn's log; enable() starts a new one.
+        live.disable()
+        assert live._turn_log == [] and not live._in_turn
+        live.enable()
+        live.write(inner, "next turn")
+        assert live._turn_log == ["next turn"]
+    finally:
+        restore()
+
+
 def test_cells_not_characters_for_wide_glyphs() -> None:
     assert sb.visible_len("日本語") == 6
     clipped = sb.clip_visible("日本語のパス", 5)          # never split a wide cell
@@ -492,6 +553,7 @@ TESTS = [
     test_paused_context_suspends_and_restores_and_nests,
     test_pad_delete_returns_to_the_column_before_the_write,
     test_pad_bookkeeping_survives_scrolls_clears_and_stale_tops,
+    test_geometry_change_during_a_turn_relays_out_and_replays_the_turn,
     test_cells_not_characters_for_wide_glyphs,
     test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it,
     test_spinner_uses_the_live_area_when_one_is_up,
