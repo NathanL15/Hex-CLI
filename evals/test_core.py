@@ -1287,6 +1287,10 @@ def test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour() -> None
         row = ui.user_row("> hi", 10)
         assert row.startswith("\033[48;5;237m> hi") and row.endswith("      \033[0m"), repr(row)
         assert ui._visible_cells(row) == 10
+        # A reset inside the row (the bold prompt marker) must not end the
+        # band: the background is re-armed right after it.
+        styled = ui.user_row("\033[1m>\033[0m hi", 10)
+        assert "\033[0m\033[48;5;237m hi" in styled, repr(styled)
         # Wider than the width: band on the text only, no negative padding.
         assert ui.user_row("> " + "x" * 20, 10) == "\033[48;5;237m> " + "x" * 20 + "\033[0m"
         echo = ui.user_echo("one\ntwo", 12)

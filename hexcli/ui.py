@@ -509,14 +509,17 @@ def user_row(row: str, width: int) -> str:
     if not _COLOR_ON:
         return row
     fill = max(0, width - _visible_cells(row))
-    return f"{_USER_BG}{row}{' ' * fill}{C.RESET}"
+    # The prompt's own reset ("\033[1m>\033[0m") would end the band after the
+    # marker; re-arm the background after every reset inside the row.
+    body = row.replace(C.RESET, C.RESET + _USER_BG)
+    return f"{_USER_BG}{body}{' ' * fill}{C.RESET}"
 
 
 def user_echo(content: str, width: int) -> str:
     """The full echo for a stored user message: `> first line`, then
     continuation rows prefixed like the editor's, each on a band."""
     lines = content.split("\n") or [""]
-    rows = [f"{C.BOLD}>{C.RESET}{_USER_BG if _COLOR_ON else ''} {lines[0]}"]
+    rows = [f"{C.BOLD}>{C.RESET} {lines[0]}"]
     rows += [f"...  {line}" for line in lines[1:]]
     return "\n".join(user_row(r, width) for r in rows)
 
