@@ -106,7 +106,7 @@ untouched.
   quiet when the server is already up, shows a spinner only while starting
   it, and stops with the log path on failure instead of falling through to
   the unmaintained DirectML and Ollama tiers. The REPL banner reads
-  `qwen3-4b-instruct-2507 on the Hexagon NPU · /help · Esc cancels`; the
+  `qwen3-4b-instruct-2507 on the Hexagon NPU · /help · press Esc to cancel`; the
   old `backend: openai` told NPU users they were on OpenAI.
 * **`/help` regrouped** into Session, Status, Setup and Keys, wrapped to 76
   columns, Shift+Enter and Ctrl+L added, the DirectML/Ollama "NPU note"
@@ -136,9 +136,9 @@ untouched.
   block as `/context` instead of a second format of the same numbers.
   `/resume` reprints the conversation it reopened.
 * **Status line** labels are `thinking`, `responding`, `▸ tool` with the
-  turn's elapsed seconds, and `Esc cancels` sits at the right edge while a
-  turn runs, so the location no longer blinks off at 80 columns. The empty
-  input shows a dim `ask, or / for commands` hint.
+  turn's elapsed seconds; the cancel hint is in the banner only, so the
+  location stays at the right edge during a turn. The empty input shows a
+  dim `ask, or / for commands` hint.
 * **Doctor, setup, update, uninstall** copy brought in line: no em-dash
   asides, `All checks passed.`, `N failed, M warnings.`, `Saved …`,
   `Cancelled. Nothing written.`; the wizard now reads through the same

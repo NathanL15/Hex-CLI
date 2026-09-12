@@ -437,17 +437,15 @@ class LiveArea:
         except Exception:  # noqa: BLE001
             pct = None
         activity = self.activity
-        right = self.location
         if activity:
-            # While a turn runs: the label with its elapsed time, and the
-            # cancel hint where the location normally sits.
+            # While a turn runs: the label with its elapsed time. The cancel
+            # hint lives in the banner only (the owner asked for one, not two).
             elapsed = int(time.monotonic() - (self._activity_since or time.monotonic()))
             activity = f"{activity} {elapsed}s" if elapsed >= 1 else activity
-            right = "Esc cancels"
         return status_line(
             width, context_percent=pct, npu_percent=npu, mem_used_gb=used,
             mem_total_gb=total, activity=activity, frame=self.frame,
-            right=right,
+            right=self.location,
         )
 
     def chrome(self, width: int) -> tuple[list[str], list[str]]:

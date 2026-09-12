@@ -624,7 +624,7 @@ def print_banner(model: str, backend: str, engine: str | None = None) -> None:
     else:
         cprint(title, C.BOLD + C.BCYAN)
     where = f"on the {engine}" if engine else f"via {backend}"
-    cprint(f"  {C.BWHITE}{model}{C.RESET}{C.DIM} {where}  ·  /help  ·  Esc cancels{C.RESET}", C.DIM)
+    cprint(f"  {C.BWHITE}{model}{C.RESET}{C.DIM} {where}  ·  /help  ·  press Esc to cancel{C.RESET}", C.DIM)
     print()
 
 
