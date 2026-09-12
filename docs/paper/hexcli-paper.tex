@@ -33,7 +33,7 @@
 
 \title{\textbf{Hex CLI: A Measurement-First Coding Agent\\ on a 4-Billion-Parameter Model and a Laptop NPU}}
 \author{Nathan L.\\ \small\texttt{github.com/NathanL15/Hex-CLI}}
-\date{August 2026 \,\textperiodcentered\, v2.2.0}
+\date{September 2026 \,\textperiodcentered\, v2.7.1}
 
 \begin{document}
 \maketitle
@@ -631,6 +631,23 @@ with no regression (91/117 $\to$ 97/117). The context floor is then traced
 to two undocumented constants and removed: quality is flat to 3,697 input
 tokens, the server budget follows the compiled window, and multi-turn
 sessions go from 25/48 to 34/48 once silent empty rewinds are caught. \\
+Sep 5--7 & A CPU-versus-NPU study settles the backend question with
+measurements (the NPU wins follow-up turns and coexistence; a new
+conversation pays a 9\,s rebuild); the fork gains host-polling control,
+async init and a request watchdog (v2.6.0--2.6.2); the prompt-length lever
+is measured at zero and closed. \\
+Sep 10--12 & The terminal becomes the product surface: Windows Terminal, an
+input box pinned to the last rows with a status line (context, NPU, memory),
+a conversation that grows upward into the banner's space, and resizes
+that survive the terminal's own reflow. A live walkthrough as five kinds of
+user (scripting, developer in a repo, server failure, returning, first
+install) fixes what each one hits. Two model behaviours become eval cases
+and go through the gate: a loop nudge makes ``run the tests'' mean a test
+actually ran (0/5 $\to$ 5/5 runs execute it), and a loop guard stops an
+edit landing on a file the request did not name (1/5 $\to$ 5/5); a prompt
+sentence tried for each broke a gated case and was reverted. v2.7.0--2.7.1
+ship on a 44-case suite at 30/44 pass\textsuperscript{5}, and the project
+becomes an installable package (\texttt{pip install .} gives \texttt{hex}). \\
 \bottomrule
 \end{tabular}
 \caption{Project milestones.}
@@ -692,5 +709,25 @@ afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
 (X1E78100), 16\,GB RAM, Windows 11 ARM, with Qwen3-4B-Instruct-2507 (w4a16) on
 the Qualcomm Hexagon NPU. Methodology and full run-level data:
 \code{docs/V2\_PLAN.md} \S14 and \code{evals/} in the repository.}
+
+\paragraph{State at v2.7.1 (September 2026).} The measurements above stand;
+what changed since is the surface and the loop's discipline, not the model.
+The agent now runs in Windows Terminal with a pinned input box and status
+line, survives the terminal's reflow on resize, prints only the answer when
+its output is a pipe, and installs as a package whose \texttt{hex} command
+starts the server and the REPL. Two behaviours found by walking through the
+tool as different users were turned into eval cases and taken through the
+gate: when a request asks for the tests to run, the loop sends a finish back
+until a test file has actually executed (it ran in 0 of 5 attempts before,
+5 of 5 after; the model's fix is still wrong in about half of them, now
+reported with the exit code), and when a request names a file that does not
+exist, the loop refuses to let the edit land on another file (1/5 to 5/5).
+In both cases a prompt sentence was tried first and broke a gated case: at
+this scale, mechanics in the loop beat instructions in the prompt, which is
+lesson~1 again. The headline number at v2.7.1 is 30 of 44 cases at
+pass\textsuperscript{5} on a fresh server, with the three new cases counted;
+the multi-turn suite loses one run in three at about 3{,}100 tokens to a
+platform stall the server's watchdog now ends, which the instrument counts
+as a backend failure rather than a model one.
 
 \end{document}

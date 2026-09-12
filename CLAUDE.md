@@ -57,7 +57,7 @@ Hard numbers that shape every decision:
 | Per-user config | `~/.shellai/shellai.json`; per-project `.shellai/config.json` deep-merged over it |
 | Session state | `<cwd>/.shellai/` (audit.log, logs/, vector_store/, shellai.lock) and `~/.shellai/` (history.json, chatlog/, input_history, commands/, global_vector_store/) |
 | Server log | `~/.shellai/npurun_server.log`, truncated on every start |
-| Eval results | `evals/results/` (gitignored). Gate baselines: `ask_rule_r5_20260905.json` + `baseline_20260905.json`; scoreboard `LATEST.md` |
+| Eval results | `evals/results/` (gitignored except the tracked few). Gate baselines: `ask_rule_r5_20260905.json` + `persona_guard2_r5_20260912.json` (the 2.7.x arm, 30/44); multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
 | Study data | `docs/backend_study/{data,data_npu_ab}/` (gitignored), summaries tracked |
 | Claude Code memory for this project | `~/.claude/projects/C--Users-Natha/memory/` (hexcli_*.md, project_local_shell_ai.md) — historical detail beyond this file |
 
@@ -224,7 +224,7 @@ Live suites (`evals/`), all through `runner.run_suite_cli`:
 | Suite | Cases | Purpose | Typical command |
 |---|---|---|---|
 | `cases_smoke.py` | 10 | merge gate | `python evals/cases_smoke.py` → 10/10 |
-| `cases_extended.py` | 41 | headline adversarial + regression | `python evals/cases_extended.py --runs 3 --seed 20260905` (~45 min) |
+| `cases_extended.py` | 44 | headline adversarial + regression (tests-claim-1, missing-file-1/2 added 2026-09-12) | `evals\run_arm.cmd <name> <seed> <baseline> [baseline2]` detached (5 runs/case, ~40 min, then gate + compare into `evals/results/<name>.log`); or `python evals/cases_extended.py --runs 5 --seed <n>` by hand |
 | `cases_multiturn.py` | 3 scenarios, 16 turns | long-context, injection (uc3), REPL-parity history | `python evals/cases_multiturn.py --runs 3 --think-time 15` |
 | `cases_everyday.py` | 30 | machine-truth questions (RAM, CPU, dates, arithmetic) | `--runs 3` default |
 | `cases_cliff.py` | 6 families × size buckets | quality vs input size | own parser |

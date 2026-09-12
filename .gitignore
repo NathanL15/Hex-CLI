@@ -3,7 +3,14 @@ history.json
 shellai.json
 shellai_npurun.json
 *.log
-evals/results/
+# Eval results are per-machine, except the scoreboard and the arms the gate
+# and the release procedure compare against (RELEASING.md).
+evals/results/*
+!evals/results/LATEST.md
+!evals/results/ask_rule_r5_20260905.json
+!evals/results/persona_guard2_r5_20260912.json
+!evals/results/multiturn_prewarm_off_20260905.json
+!evals/results/multiturn_r3_20260912.json
 # Legacy root-level result files from pre-restructure runs
 eval_results.json
 eval_extended_results.json
@@ -26,6 +33,14 @@ __pycache__/
 *.pyc
 .venv/
 .venv-qnn/
+
+# LaTeX build products (the PDF itself is tracked)
+docs/paper/*.aux
+docs/paper/*.fdb_latexmk
+docs/paper/*.fls
+docs/paper/*.out
+docs/paper/*.log
+docs/paper/*.toc
 
 # Editor/OS cruft
 .DS_Store

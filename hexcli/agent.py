@@ -100,8 +100,9 @@ call_llm = llm.call_llm
 # and braille glyphs this script and hexcli.ui print. Force UTF-8 so output
 # doesn't crash regardless of the caller's console codepage (mirrors launcher.py).
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):   # not a StringIO under a test's redirect
+            _stream.reconfigure(encoding="utf-8")
 
 from . import paths  # noqa: E402
 

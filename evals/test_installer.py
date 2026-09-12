@@ -296,7 +296,26 @@ def test_npurun_outdated_compares_against_required() -> None:
         assert launcher.npurun_outdated(version=()) is None, "unknown is not outdated"
 
 
+def test_hex_answers_no_server_flags_without_starting_anything() -> None:
+    """`hex --version` used to ignore its arguments, write the runtime config
+    and start the REPL. Flags the REPL answers on its own go straight to it."""
+    import contextlib
+    import io
+    import sys
+    import unittest.mock
+
+    from hexcli import launcher
+    buf = io.StringIO()
+    with unittest.mock.patch.object(sys, "argv", ["hex", "--version"]), \
+         unittest.mock.patch.object(launcher, "_start_npurun_server", side_effect=AssertionError("server started")), \
+         unittest.mock.patch.object(launcher, "_write_npurun_config", side_effect=AssertionError("config written")), \
+         contextlib.redirect_stdout(buf):
+        rc = launcher.main()
+    assert rc == 0 and "Hex CLI" in buf.getvalue(), (rc, buf.getvalue())
+
+
 TESTS = [
+    test_hex_answers_no_server_flags_without_starting_anything,
     test_rewind_runtime_needs_both_new_sdk_and_new_npurun,
     test_install_ps1_parses_as_valid_powershell,
     test_install_ps1_references_only_existing_repo_files,

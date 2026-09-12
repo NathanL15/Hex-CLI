@@ -23,8 +23,9 @@ from pathlib import Path
 # Windows consoles often default to cp1252, which can't encode the arrows/
 # checkmarks this script prints. Force UTF-8 so it works regardless of caller.
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -444,11 +445,20 @@ def run_npurun_path() -> int:
     # (/undo a dead server, "Restart the model server? [Y/n]") then brings
     # up the same SDK and Rewind settings, not whatever the shell had.
     return subprocess.run(
-        [sys.executable, "-m", "hexcli.agent", "--config", str(NPURUN_CONFIG)],
+        [sys.executable, "-m", "hexcli.agent", "--config", str(NPURUN_CONFIG), *sys.argv[1:]],
         env=_npurun_env(),
     ).returncode
 
+
+# Flags the REPL answers on its own; no server needed, so `hex --version`
+# must not start one (or write the runtime config) first.
+_NO_SERVER_FLAGS = frozenset({"-h", "--help", "--version", "--doctor", "--update",
+                              "--uninstall", "--print-config"})
+
 def main() -> int:
+    if any(a in _NO_SERVER_FLAGS for a in sys.argv[1:]):
+        from . import agent
+        return agent.main()
     try:
         _dress_console_window()
     except Exception:
