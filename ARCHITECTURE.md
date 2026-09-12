@@ -251,7 +251,7 @@ backend flag.
 
 ### Hexagon NPU recovery — FastRPC skeleton hang and BSOD
 
-The nominal inference path is `shellai.py → npurun serve → GenieDialog_create() → CDSP`. Every
+The nominal inference path is `hex (hexcli.launcher) → npurun serve → GenieDialog_create() → CDSP`. Every
 `npurun serve` invocation creates a Qualcomm FastRPC skeleton process — `QcSkExt8380` — that
 bridges Windows user-mode to the Compute DSP (CDSP) via a shared DMA buffer. Under clean
 shutdown this process exits with npurun. Under force-kill (Task Manager, `pkill`, or an eval

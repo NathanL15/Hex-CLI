@@ -331,9 +331,14 @@ Write-Ok "$shellaiDir ready."
 $configSrc  = Join-Path $InstallDir "shellai.example.json"
 $configDest = Join-Path $shellaiDir "shellai.json"
 $configOld  = Join-Path $InstallDir "shellai.json"   # where older versions kept it
-if ((Test-Path $configSrc) -and -not (Test-Path $configDest) -and -not (Test-Path $configOld)) {
-    Copy-Item $configSrc $configDest
-    Write-Ok "Created $configDest from the template."
+if (-not (Test-Path $configDest)) {
+    if (Test-Path $configOld) {
+        Copy-Item $configOld $configDest
+        Write-Ok "Moved your settings to $configDest (from the checkout's shellai.json)."
+    } elseif (Test-Path $configSrc) {
+        Copy-Item $configSrc $configDest
+        Write-Ok "Created $configDest from the template."
+    }
 }
 
 # ---------------------------------------------------------------------------

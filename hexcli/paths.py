@@ -51,31 +51,33 @@ def _first_existing(*candidates: Path | None) -> Path | None:
     return None
 
 
-def user_config_path() -> Path:
-    """``~/.shellai/shellai.json``; a checkout's ``shellai.json`` if only that exists."""
-    home = data_dir() / "shellai.json"
-    checkout = CHECKOUT_DIR / "shellai.json" if CHECKOUT_DIR else None
-    return _first_existing(home, checkout) or home
-
-
-def runtime_config_path() -> Path:
-    """The config the launcher writes for the npurun server (backend wiring)."""
-    home = data_dir() / "shellai_npurun.json"
-    checkout = CHECKOUT_DIR / "shellai_npurun.json" if CHECKOUT_DIR else None
-    return _first_existing(home, checkout) or home
-
-
-def history_path() -> Path:
-    """Session history. Migrated once from a checkout's ``history.json``."""
-    home = data_dir() / "history.json"
+def _migrated(name: str) -> Path:
+    """``~/.shellai/<name>``, copied once from a checkout's ``<name>`` when
+    only the checkout has it (older versions kept these files there)."""
+    home = data_dir() / name
     if not home.exists() and CHECKOUT_DIR is not None:
-        old = CHECKOUT_DIR / "history.json"
+        old = CHECKOUT_DIR / name
         if old.exists():
             try:
                 shutil.copy2(old, home)
             except OSError:
                 return old
     return home
+
+
+def user_config_path() -> Path:
+    """``~/.shellai/shellai.json`` (migrated once from a checkout's copy)."""
+    return _migrated("shellai.json")
+
+
+def runtime_config_path() -> Path:
+    """The config the launcher writes for the npurun server (backend wiring)."""
+    return _migrated("shellai_npurun.json")
+
+
+def history_path() -> Path:
+    """Session history. Migrated once from a checkout's ``history.json``."""
+    return _migrated("history.json")
 
 
 def npurun_log_path() -> Path:

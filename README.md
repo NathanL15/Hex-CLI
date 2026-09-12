@@ -6,6 +6,8 @@ and edits files, runs commands, and checks its own work. The model is
 Qwen3-4B, served by [npurun](https://github.com/bpbonker/npurun). After
 setup it works offline.
 
+![A live-state question, then a small edit verified by running the tests](docs/demo.gif)
+
 ```
 > the median calc in processor.py is wrong for even-length lists, fix it
 
