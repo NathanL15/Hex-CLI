@@ -115,10 +115,19 @@ class Spinner:
             live = _live_area()
             if live is not None:
                 live.tick(frame)
-            else:
+            elif self._on_terminal():
                 sys.stderr.write(f"\r{C.BCYAN}{frame}{C.RESET} {C.DIM}{self.label}...{C.RESET}")
                 sys.stderr.flush()
             i += 1
+
+    @staticmethod
+    def _on_terminal() -> bool:
+        """A pipe or a log gets no animation: the frames would land in the
+        captured output as a smear of carriage returns."""
+        try:
+            return sys.stderr.isatty()
+        except Exception:  # noqa: BLE001
+            return False
 
     def __enter__(self) -> Spinner:
         live = _live_area()
@@ -137,8 +146,9 @@ class Spinner:
             if not (live.activity or "").startswith("▸ "):
                 live.set_activity(None)
             return
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
+        if self._on_terminal():
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
 
 
 # ---------------------------------------------------------------------------

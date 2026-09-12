@@ -7,19 +7,33 @@ Qwen3-4B, served by [npurun](https://github.com/bpbonker/npurun). After
 setup it works offline.
 
 ```
-you ▸ the median calc in processor.py is wrong for even-length lists, fix it
-  → read_file
-  → edit_file
+> the median calc in processor.py is wrong for even-length lists, fix it
+
+◆ read_file
+▸ [read] processor.py  (lines 1-40 of 40)
+
+◆ edit_file
+▸ [edit] processor.py  (+2 lines)
 ~ processor.py  (+3 −1)
 @@ -12,4 +12,6 @@
 -    return sorted(data)[len(data) // 2]
 +    mid = len(data) // 2
 +    if len(data) % 2 == 0:
 +        return (sorted(data)[mid - 1] + sorted(data)[mid]) / 2
-  → run_code
-Fixed: even-length lists now average the two middle values. Verified, the
-test file prints 3.5 for [1, 2, 5, 6].
+
+◆ run_code
+
+Fixed: even-length lists now average the two middle values. The test file
+prints 3.5 for [1, 2, 5, 6].
+
+──────────────────────────────────────────────────────────────────
+> ask, or / for commands
+──────────────────────────────────────────────────────────────────
+context ◔ 21%   npu 0%   mem 12.5/15.6 GB              ~\proj (main)
 ```
+
+Your messages sit on a light band, the input box and status line stay on
+the last rows, and the answer streams in above them.
 
 ## Requirements
 

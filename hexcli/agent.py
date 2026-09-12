@@ -529,20 +529,26 @@ def parse_args() -> argparse.Namespace:
         prog="shellai",
         description="Local coding and system agent for Windows PowerShell.",
     )
-    parser.add_argument("query", nargs="*", help="Question or task.")
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
-    parser.add_argument("--backend", choices=["ollama", "openai"])
-    parser.add_argument("--model")
-    parser.add_argument("--print-config", action="store_true")
-    parser.add_argument("--version", action="store_true", help="Print version and exit.")
+    parser.add_argument("query", nargs="*",
+                        help="Question or task. Piped stdin is added as context, or used as the "
+                             "request when there is no argument. Without one, the REPL starts.")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="Config file (default: shellai.json in the home folder).")
+    parser.add_argument("--backend", choices=["ollama", "openai"],
+                        help="Server protocol; the launcher sets openai for npurun.")
+    parser.add_argument("--model", help="Model name to request from the server.")
+    parser.add_argument("--print-config", action="store_true", help="Print the merged config and exit.")
+    parser.add_argument("--version", action="store_true", help="Print the version and exit.")
     parser.add_argument("--doctor", action="store_true",
-                        help="Diagnose the installation (SDK, models, server) and exit.")
-    parser.add_argument("--debug", action="store_true", help="Verbose error output (full tracebacks).")
-    parser.add_argument("--fast", action="store_true", help="Trim spinner/streaming overhead for quicker turnaround.")
-    parser.add_argument("--raw", action="store_true", help="Disable ANSI colour/styling; plain stdout only.")
-    parser.add_argument("--yolo", action="store_true", help="Skip destructive-command confirmation (CI/automation use only).")
-    parser.add_argument("--update", action="store_true", help="Pull latest source + refresh npurun binary, then exit.")
-    parser.add_argument("--uninstall", action="store_true", help="Remove Start Menu shortcut, optionally purge .shellai/, then exit.")
+                        help="Check the install (SDK, npurun, models, server) and exit.")
+    parser.add_argument("--debug", action="store_true", help="Full tracebacks on errors.")
+    parser.add_argument("--fast", action="store_true", help="Answer without streaming.")
+    parser.add_argument("--raw", action="store_true", help="No colour or styling; plain text only.")
+    parser.add_argument("--yolo", action="store_true",
+                        help="Skip the confirm before destructive commands (automation only).")
+    parser.add_argument("--update", action="store_true", help="Pull the latest source, refresh npurun, and exit.")
+    parser.add_argument("--uninstall", action="store_true",
+                        help="Remove the Start Menu shortcut and Terminal profile, optionally .shellai/, and exit.")
     return parser.parse_args()
 
 
@@ -1182,7 +1188,7 @@ def _run_autopilot_turn(
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
-        if ui._live_area() is None:   # with the status bar up, the status line carries the label
+        if ui._live_area() is None and sys.stderr.isatty():   # the status line carries the label; a pipe gets none
             cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
 
         # Up to 2 retries on bad JSON

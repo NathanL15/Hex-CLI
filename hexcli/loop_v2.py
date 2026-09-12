@@ -274,7 +274,8 @@ def run(
     try:
         for step in range(max_steps):
             step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
-            agent.cprint(f"\n  {step_label}...", agent.C.DIM, file=sys.stderr)
+            if sys.stderr.isatty():
+                agent.cprint(f"\n  {step_label}...", agent.C.DIM, file=sys.stderr)
 
             parsed = None
             raw = ""

@@ -131,6 +131,18 @@ class _TokenEstimator:
 _TOKEN_ESTIMATOR = _TokenEstimator()
 
 
+def _clear_progress_row() -> None:
+    """Wipe the "label... N tokens" row. Only on a terminal: a pipe or a
+    log never got the row, and the erase would land in the capture."""
+    try:
+        if not sys.stderr.isatty():
+            return
+    except Exception:  # noqa: BLE001
+        return
+    sys.stderr.write("\r\033[K")
+    sys.stderr.flush()
+
+
 def estimate_tokens(text: str) -> int:
     """Estimated token count of `text` for budget decisions."""
     return _TOKEN_ESTIMATOR.estimate(len(text))
@@ -207,7 +219,7 @@ def _ollama_stream_chat(
                     if chunk:
                         parts.append(chunk)
                         tok += 1
-                        if ui._live_area() is None:   # with the bar up the status line shows progress
+                        if ui._live_area() is None and sys.stderr.isatty():   # the bar shows progress; a pipe gets none
                             sys.stderr.write(
                                 f"\r{C.DIM}  {label}... {tok} tokens{C.RESET}"
                             )
@@ -225,8 +237,7 @@ def _ollama_stream_chat(
 
         return "".join(parts), eval_count
     finally:
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
+        _clear_progress_row()
 
 
 def ollama_chat_non_stream(
@@ -367,7 +378,7 @@ def _openai_stream_chat(
                         tok += 1
                         if renderer is not None:
                             renderer.feed(delta)
-                        elif ui._live_area() is None:   # with the bar up the status line shows progress
+                        elif ui._live_area() is None and sys.stderr.isatty():
                             sys.stderr.write(
                                 f"\r{C.DIM}  {label}... {tok} tokens{C.RESET}"
                             )
@@ -388,8 +399,7 @@ def _openai_stream_chat(
         if renderer is not None:
             _end_live_render(renderer)
         else:
-            sys.stderr.write("\r\033[K")
-            sys.stderr.flush()
+            _clear_progress_row()
 
 
 def _status_activity(label: str) -> Any:
@@ -426,7 +436,7 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
 
     def emit(text: str) -> None:
         if not state["started"]:
-            sys.stderr.write("\r\033[K")
+            _clear_progress_row()
             state["started"] = True
             # The answer is now arriving, not being thought about: relabel the
             # status line (the spinner started by _status_activity keeps ticking).
@@ -463,8 +473,7 @@ def _end_live_render(renderer: Any) -> None:
         sys.stdout.write(tail + "\n")
         sys.stdout.flush()
     else:
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
+        _clear_progress_row()
 
 
 # What the most recent model call streamed to the screen. Reset at the start
