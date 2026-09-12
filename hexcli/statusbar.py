@@ -406,7 +406,8 @@ class LiveArea:
         self.prompt = prompt
         self._geometry = geometry or console_geometry
         self.editor_rows = 4       # rule, input row, rule, status: what the editor draws
-        self.editor_pad = 0        # blank rows pad_for_editor put above the editor's rows
+        self._pad_top: int | None = None   # first row of the blank pad above the conversation
+        self._pad_above = 0                # how many pad rows there are
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
@@ -480,60 +481,120 @@ class LiveArea:
         row, height = geo
         return height - 1 - row
 
-    def _compose(self) -> tuple[list[str], int]:
-        """The box rows clipped to width, and the blank-row pad that pins it
-        to the window's last rows until the transcript is tall enough."""
-        m = self.margin
-        rows = [clip_visible(r, m.usable) for r in self.rows(m.usable)]
-        below = self._rows_below_cursor()
-        pad = max(0, below - len(rows)) if below is not None else 0
-        return rows, pad
+    # The pad: blank rows between the content at the top of the window (the
+    # banner, or whatever scrolled there) and the conversation, which is
+    # anchored just above the box. New lines appear at the bottom and the
+    # conversation grows UPWARD into the pad: each newline deletes one pad
+    # row at its top (ESC[M) so everything below shifts up one, while the
+    # banner keeps its place. Only when the pad is gone does a newline
+    # scroll the whole window, taking the banner into scrollback. Pinning
+    # the box when the cursor is high (start-up, a taller window) inserts
+    # pad rows (ESC[L) at the pad's top, which is the cursor row when there
+    # is no pad yet, so the banner above never moves.
 
-    def _draw(self, inner: Any, rows: list[str] | None = None, pad: int = 0) -> None:
-        """Draw the box below the transcript. `pad` blank rows go between
-        the transcript and the box so the box sits on the window's last rows
-        while the conversation is short: the banner stays at the top, the
-        box at the bottom. (Inserting the blanks above the transcript
-        instead, so the text hugged the box, was tried and rejected by the
-        owner: the banner belongs at the top.)"""
+    def _geo(self) -> tuple[int, int] | None:
+        try:
+            return self._geometry()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _cursor_col(self) -> int:
+        return int(self.margin.pad) + int(self.margin.col)
+
+    def reset_pad(self) -> None:
+        """Forget the pad after something redrew the screen (a resize, a
+        zoom redraw): its rows are no longer where they were."""
+        self._pad_top = None
+        self._pad_above = 0
+
+    def _insert_pad_rows(self, inner: Any, n: int) -> None:
+        geo = self._geo()
+        if geo is None or n <= 0:
+            return
+        row, _height = geo
+        top = self._pad_top if self._pad_top is not None and self._pad_top <= row else row
+        inner.write(f"\033[{top + 1};1H\033[{n}L\033[{row + n + 1};{self._cursor_col() + 1}H")
+        self._pad_top = top
+        self._pad_above += n
+
+    def _delete_pad_rows(self, inner: Any, n: int) -> int:
+        """Remove up to `n` rows from the top of the pad; returns how many."""
+        geo = self._geo()
+        if geo is None or n <= 0 or self._pad_above <= 0 or self._pad_top is None:
+            return 0
+        row, _height = geo
+        if self._pad_top > row:
+            self.reset_pad()
+            return 0
+        m = min(n, self._pad_above)
+        inner.write(f"\033[{self._pad_top + 1};1H\033[{m}M\033[{row - m + 1};{self._cursor_col() + 1}H")
+        self._pad_above -= m
+        if self._pad_above == 0:
+            self._pad_top = None
+        return m
+
+    def _compose(self) -> list[str]:
+        """The box rows clipped to width."""
+        m = self.margin
+        return [clip_visible(r, m.usable) for r in self.rows(m.usable)]
+
+    def _draw(self, inner: Any, rows: list[str] | None = None) -> None:
+        """Draw the box on the rows below the cursor, at the bottom of the
+        window: pad rows are inserted or removed so it lands there."""
         m = self.margin
         if rows is None:
-            rows, pad = self._compose()
+            rows = self._compose()
+        below = self._rows_below_cursor()
+        if below is not None:
+            if below > len(rows):
+                self._insert_pad_rows(inner, below - len(rows))
+            elif below < len(rows):
+                self._delete_pad_rows(inner, len(rows) - below)   # the rest scrolls
         saved = (m.col, m.word, m.word_vis)
-        out = ["\033[?25l", "\n" * pad, "\n", "\n".join(rows), "\r", f"\033[{len(rows) + pad}A"]
+        out = ["\033[?25l", "\n", "\n".join(rows), "\r", f"\033[{len(rows)}A"]
         if saved[0]:
             out.append(f"\033[{saved[0]}C")
         out.append("\033[?25h")
         inner.write("".join(out))
         m.col, m.word, m.word_vis = saved
-        self._drawn = len(rows) + pad
-        self._signature = (tuple(rows), pad, saved[0])
+        self._drawn = len(rows)
+        self._signature = (tuple(rows), saved[0])
 
     def pad_for_editor(self) -> None:
-        """Move the cursor down so the editor's rows land on the window's
-        last rows. Called with the box down and the cursor on a fresh row.
-        The count is kept in `editor_pad`: when the line is submitted the
-        editor climbs back over exactly these rows, so the echoed message
-        lands right under the transcript and the conversation fills the
-        window from the top, not from the bottom up."""
-        self.editor_pad = 0
-        below = self._rows_below_cursor()
-        if below is None or self._inner is None:
+        """Put the cursor on the row where the editor's first row must go for
+        its rows to land on the window's last rows. Called with the box down
+        and the cursor on a fresh row; the content above stays put."""
+        geo = self._geo()
+        if geo is None or self._inner is None:
             return
-        pad = below - (self.editor_rows - 1)
-        if pad > 0:
-            self._inner.write("\n" * pad)
-            self.editor_pad = pad
+        row, height = geo
+        target = height - self.editor_rows
+        if row < target:
+            self._insert_pad_rows(self._inner, target - row)
 
     def write(self, inner: Any, text: str) -> None:
-        """A transcript write from one of the wrapped streams."""
+        """A transcript write from one of the wrapped streams. The newlines
+        it carries consume pad rows first, so the text appears above the box
+        and the conversation grows upward."""
         with self.lock:
-            if not self.enabled:
-                inner.write(text)
-                return
-            self._erase(inner)
-            inner.write(text)
-            self._draw(inner)
+            if self.enabled:
+                self._erase(inner)
+            rendered = self.margin.render(text)
+            newlines = rendered.count("\n")
+            if newlines and self._pad_above:
+                geo = self._geo()
+                if geo is not None:
+                    row, height = geo
+                    need = newlines + (self._drawn_rows_needed() if self.enabled else 0)
+                    deficit = need - (height - 1 - row)
+                    if deficit > 0:
+                        self._delete_pad_rows(inner, deficit)
+            inner._base.write(rendered)
+            if self.enabled:
+                self._draw(inner)
+
+    def _drawn_rows_needed(self) -> int:
+        return len(self.rows(self.margin.usable))
 
     def repaint(self) -> None:
         """Redraw the box in place (a spinner tick, a metrics sample). Skips
@@ -542,11 +603,11 @@ class LiveArea:
         with self.lock:
             if not (self.enabled and self._inner is not None):
                 return
-            rows, pad = self._compose()
-            if self._drawn and (tuple(rows), pad, self.margin.col) == self._signature:
+            rows = self._compose()
+            if self._drawn and (tuple(rows), self.margin.col) == self._signature:
                 return
             self._erase(self._inner)
-            self._draw(self._inner, rows, pad)
+            self._draw(self._inner, rows)
 
     # -- state ----------------------------------------------------------------
 

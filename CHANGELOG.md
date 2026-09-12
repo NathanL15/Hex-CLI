@@ -64,15 +64,19 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
-### The conversation fills the window from the top
+### The conversation grows upward from the box
 
-The box is pinned to the bottom by blank rows above it, and the echoed
-question used to be written where the box sat, so the conversation started
-at the bottom of the window and the blank rows stayed between it and the
-banner. On Enter the editor now climbs over those rows and clears them, so
-the question lands directly under the last transcript line, the answer
-fills downward, the gap shrinks, and scrolling starts only when the text
-reaches the box.
+The conversation is anchored just above the input box, like a chat window:
+your question stays where you typed it, the answer appears under it, and
+every new line shifts what is above it up into the empty space under the
+banner. The banner keeps the top of the window until that space is used
+up, then scrolls away. Mechanically the blank rows that pin the box are
+now consumed from their top with line deletes (`ESC[M`) as text arrives,
+and inserted at the cursor row (`ESC[L`) when the box must be pinned
+lower, so nothing above the pad ever moves. (An intermediate version
+printed the question at the top under the banner; the owner wanted the
+seamless bottom-anchored flow instead.) The editor writes its own rows
+straight to the console so its cursor moves never count as transcript.
 
 ### A compact window
 

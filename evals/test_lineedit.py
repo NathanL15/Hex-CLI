@@ -758,25 +758,6 @@ def test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom() -> None:
     assert "\033[2J\033[H\n" not in "".join(out), "no chrome: no padding"
 
 
-def test_finished_line_climbs_over_the_pad_rows_above_the_input() -> None:
-    """The caller pinned the input to the bottom with blank rows above it.
-    On Enter the editor climbs over them and clears, so the echoed line
-    lands right under the transcript and the conversation fills the window
-    from the top. With no pad, nothing changes."""
-    from hexcli import lineedit as le
-    ed, out = editor(typed("hi") + [le.ENTER], chrome=lambda w: (["top"], ["bot"]),
-                     rows_above=lambda: 7)
-    assert ed.read("> ") == "hi"
-    finish = out[-1]
-    # Anchor (up 1 over the top chrome row), then up 7 over the pad, clear, echo.
-    assert finish == "\r\033[1A\033[7A\033[J> hi\n", repr(finish)
-    assert ed._pad_above == 0, "consumed by the finish"
-    ed, out = editor(typed("hi") + [le.ENTER], chrome=lambda w: (["top"], ["bot"]),
-                     rows_above=lambda: 0)
-    ed.read("> ")
-    assert out[-1] == "\r\033[1A\033[J> hi\n", repr(out[-1])
-
-
 def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
     from hexcli import lineedit as le
     ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
@@ -868,7 +849,6 @@ TESTS = [
     test_idle_tick_repaints_only_when_the_chrome_changed,
     test_resize_token_clears_only_the_box_rows_and_calls_on_resize,
     test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom,
-    test_finished_line_climbs_over_the_pad_rows_above_the_input,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 

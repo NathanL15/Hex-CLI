@@ -347,12 +347,12 @@ def run_repl(config: dict[str, Any]) -> int:
     # ends. `current_session` is rebound by /new and /resume; the lambda
     # reads the name at call time, so the gauge follows.
     live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
-    if live is not None:
-        live.enable()
     npu_model = str(config.get("_npurun_model", "") or "")
     ui.print_banner(npu_model or str(config.get("model", "?")),
                     str(config.get("backend", "ollama")),
                     engine="Hexagon NPU" if npu_model else None)
+    if live is not None:
+        live.enable()   # after the banner: the banner keeps the top, the conversation grows above the box
     sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
     if config.get("memory_dreaming", False):
         memory.start_dreaming(lambda: config, sa.llm_generate)
@@ -368,6 +368,7 @@ def run_repl(config: dict[str, Any]) -> int:
             return False
         ui.redraw_transcript(current_session)
         if live is not None:
+            live.reset_pad()
             live.pad_for_editor()
         return True
 
@@ -376,6 +377,7 @@ def run_repl(config: dict[str, Any]) -> int:
         cleared its own rows and left the cursor at the box top; the
         transcript above is untouched. Re-pin the box to the new bottom."""
         if live is not None:
+            live.reset_pad()
             live.pad_for_editor()
 
     def _context_brief() -> None:
@@ -394,7 +396,9 @@ def run_repl(config: dict[str, Any]) -> int:
         on_zoom=_zoom, on_resize=_resize,
         chrome=live.chrome if live is not None else None,
         placeholder="ask, or / for commands" if live is not None else "",
-        rows_above=(lambda: live.editor_pad) if live is not None else None,
+        # The editor draws its own rows straight to the console, under the
+        # live area's wrapper: those cursor moves are not transcript output.
+        write=(lambda s: (live._inner.write(s), live._inner.flush()) and None) if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:

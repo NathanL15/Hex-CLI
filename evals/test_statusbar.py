@@ -255,10 +255,13 @@ def test_activity_and_ticks_repaint_the_status_row() -> None:
 
 
 def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
-    """Cursor on row 5 of a 30-row window: 24 rows lie below it, the box
-    takes 4, so 20 blank rows go between the transcript and the box and the
-    cursor walks back up 24. The banner stays at the top of the window.
-    Once the transcript reaches the bottom there is nothing to pad."""
+    """The pad sits ABOVE the conversation. Cursor on row 5 of a 30-row
+    window: 24 rows lie below it and the box takes 4, so 20 blank rows are
+    inserted at the cursor row (there is no pad yet, so the content above
+    stays put) and the cursor is placed 20 rows lower. Text with newlines
+    then deletes pad rows from the pad's top so it appears just above the
+    box and the conversation grows upward; once the pad is gone, nothing is
+    deleted and the window scrolls."""
     restore = _no_color()
     try:
         live, base, inner = _live(width=40, pad=2)
@@ -266,25 +269,33 @@ def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
         live._geometry = lambda: (geo["row"], geo["height"])
         live.enable()
         text = base.text
-        assert text.startswith("\033[?25l" + "\n  " * 20 + "\n  "), repr(text[:80])
-        assert text.endswith("\r  \033[24A\033[?25h") and live._drawn == 24, (repr(text[-30:]), live._drawn)
-        assert "\033[H" not in text, "no insert-at-top: the transcript is not pushed down"
-        geo["row"] = 27
+        assert text.startswith("\033[6;1H\033[20L\033[26;3H\033[?25l\n  "), repr(text[:60])
+        assert text.endswith("\r  \033[4A\033[?25h") and live._drawn == 4, (repr(text[-30:]), live._drawn)
+        assert (live._pad_top, live._pad_above) == (5, 20)
+        # The cursor is now on row 25 with the box on 26..29. A one-line
+        # write needs one more row below: delete one pad row at row 5, move
+        # the cursor up one, write, redraw the box.
+        geo["row"] = 25
+        base.chunks.clear()
+        live.write(inner, "hello\n")
+        assert base.text.startswith("\033[J\033[6;1H\033[1M\033[25;3Hhello\n  "), repr(base.text[:60])
+        assert (live._pad_top, live._pad_above) == (5, 19)
+        # No newline: no pad change, just the redraw.
         base.chunks.clear()
         live.write(inner, "x")
-        assert "\033[?25l\n  " in base.text and "\n  \n" not in base.text, repr(base.text)
-        # Before the editor takes over, the cursor is moved down so the
-        # editor's four rows land on the last four rows of the window.
-        live.write(inner, "\n")   # column 0: no fresh-row newline to add
-        geo["row"] = 3
+        assert "\033[M" not in base.text and "\033[L" not in base.text, repr(base.text)
+        # Pad exhausted: a newline scrolls the window instead.
+        live._pad_above, live._pad_top = 0, None
+        base.chunks.clear()
+        live.write(inner, "y\n")
+        assert "\033[M" not in base.text, repr(base.text)
+        # Before the editor takes over, its four rows must land on the last
+        # four: with the cursor on row 25 that is one inserted pad row.
+        live._pad_top, live._pad_above = 5, 3
         base.chunks.clear()
         live.disable()
-        assert base.text == "\033[J" + "\n  " * 23, repr(base.text)
-        geo["row"] = 28
-        base.chunks.clear()
-        live.enable()
-        live.disable()
-        assert base.text.endswith("\033[J"), repr(base.text)
+        assert base.text.endswith("\033[6;1H\033[1L\033[27;3H"), repr(base.text)
+        assert live._pad_above == 4
         # No console geometry: no padding at all.
         live._geometry = lambda: None
         base.chunks.clear()
