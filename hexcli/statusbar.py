@@ -43,7 +43,6 @@ a second on a daemon thread that never touches the terminal.
 """
 from __future__ import annotations
 
-import contextlib
 import os
 import re
 import sys
@@ -64,7 +63,8 @@ _LUID_RE = re.compile(r"luid_(0x[0-9A-Fa-f]+_0x[0-9A-Fa-f]+).*engtype_(.+)$")
 
 
 def visible_len(text: str) -> int:
-    return len(_ANSI_RE.sub("", text))
+    """Terminal cells, not characters: CJK and other wide glyphs take two."""
+    return ui._visible_cells(text)
 
 
 def clip_visible(text: str, width: int) -> str:
@@ -81,10 +81,12 @@ def clip_visible(text: str, width: int) -> str:
             out.append(m.group())
             i = m.end()
             continue
-        if seen >= width:
+        w = ui._cell_width(text[i])
+        if seen + w > width:
+            seen = width
             break
         out.append(text[i])
-        seen += 1
+        seen += w
         i += 1
     clipped = "".join(out)
     if seen >= width and i < len(text) and C.RESET:
@@ -339,7 +341,7 @@ def status_line(
     left = "   ".join(parts)
     left_vis = visible_len(left)
     if right:
-        gap = width - left_vis - len(right)
+        gap = width - left_vis - visible_len(right)
         if gap >= 2:
             return left + " " * gap + f"{C.DIM}{right}{C.RESET}"
     return clip_visible(left, width)
@@ -408,6 +410,7 @@ class LiveArea:
         self.editor_rows = 4       # rule, input row, rule, status: what the editor draws
         self._pad_top: int | None = None   # first row of the blank pad above the conversation
         self._pad_above = 0                # how many pad rows there are
+        self._last_shape: tuple[Any, int] | None = None   # (window height, usable width) at the last draw
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
@@ -465,9 +468,42 @@ class LiveArea:
     # -- drawing --------------------------------------------------------------
 
     def _erase(self, inner: Any) -> None:
+        # Straight to the base stream: the margin layer would otherwise file
+        # the escape under its current word and replay it on a reflow.
         if self._drawn:
-            inner.write("\033[J")
+            inner._base.write("\033[J")
             self._drawn = 0
+
+    def screen_cleared(self) -> None:
+        """The screen was cleared by someone else (cls, a transcript redraw):
+        nothing of ours is on it any more."""
+        with self.lock:
+            self._drawn = 0
+            self._signature = None
+            self.reset_pad()
+
+    def note_scroll(self, rows: int) -> None:
+        """The window scrolled up by `rows` (the editor grew past the bottom
+        with a multi-line entry): the pad moved up with it, and any part of
+        it that left the window is gone."""
+        with self.lock:
+            if rows <= 0 or self._pad_top is None:
+                return
+            self._pad_top -= rows
+            if self._pad_top < 0:
+                self._pad_above = max(0, self._pad_above + self._pad_top)
+                self._pad_top = 0
+            if self._pad_above == 0:
+                self._pad_top = None
+
+    def _geometry_changed(self) -> bool:
+        """True when the window or the usable width differs from the last
+        draw: the terminal reflowed, so the pad rows are not where we think."""
+        geo = self._geo()
+        now = (geo[1] if geo else None, self.margin.usable)
+        changed = self._last_shape is not None and now != self._last_shape
+        self._last_shape = now
+        return changed
 
     def _rows_below_cursor(self) -> int | None:
         try:
@@ -510,10 +546,12 @@ class LiveArea:
         if geo is None or n <= 0:
             return
         row, _height = geo
-        top = self._pad_top if self._pad_top is not None and self._pad_top <= row else row
+        fresh = self._pad_top is None or self._pad_top > row
+        top = row if fresh else self._pad_top
         inner.write(f"\033[{top + 1};1H\033[{n}L\033[{row + n + 1};{self._cursor_col() + 1}H")
         self._pad_top = top
-        self._pad_above += n
+        # A stale or absent pad is replaced, never added to.
+        self._pad_above = n if fresh else self._pad_above + n
 
     def _delete_pad_rows(self, inner: Any, n: int, col: int | None = None) -> int:
         """Remove up to `n` rows from the top of the pad; returns how many.
@@ -546,6 +584,8 @@ class LiveArea:
         m = self.margin
         if rows is None:
             rows = self._compose()
+        if self._geometry_changed():
+            self.reset_pad()
         below = self._rows_below_cursor()
         if below is not None:
             if below > len(rows):
@@ -587,6 +627,8 @@ class LiveArea:
             col_before = self._cursor_col()
             rendered = self.margin.render(text)
             newlines = rendered.count("\n")
+            if newlines and self._pad_above and self._geometry_changed():
+                self.reset_pad()
             if newlines and self._pad_above:
                 geo = self._geo()
                 if geo is not None:
@@ -610,7 +652,9 @@ class LiveArea:
             if not (self.enabled and self._inner is not None):
                 return
             rows = self._compose()
-            if self._drawn and (tuple(rows), self.margin.col) == self._signature:
+            if self._geometry_changed():
+                self.reset_pad()   # and never skip: the box must move with the window
+            elif self._drawn and (tuple(rows), self.margin.col) == self._signature:
                 return
             self._erase(self._inner)
             self._draw(self._inner, rows)
@@ -618,10 +662,12 @@ class LiveArea:
     # -- state ----------------------------------------------------------------
 
     def enable(self) -> None:
-        """Show the box below the transcript until `disable`."""
+        """Show the box below the transcript until `disable`. A turn's clock
+        starts with its first activity label and runs until disable()."""
         with self.lock:
             self.enabled = True
             self.activity, self.frame = None, ""
+            self._activity_since = None
             if self._inner is not None:
                 self._erase(self._inner)
                 self._draw(self._inner)
@@ -662,9 +708,8 @@ class LiveArea:
         with self.lock:
             if label is None:
                 self.frame = ""
-                self._activity_since = None
-            elif self.activity is None or self._activity_since is None:
-                self._activity_since = time.monotonic()   # the clock runs per turn, not per label
+            elif self._activity_since is None:
+                self._activity_since = time.monotonic()   # per turn: enable() resets it
             self.activity = label
         self.repaint()
 
@@ -737,20 +782,6 @@ def install(config: dict[str, Any], context_percent: Callable[[], int | None]) -
     return live
 
 
-@contextlib.contextmanager
-def paused() -> Any:
-    """Take the status box down for the duration of an inline console prompt
-    (a y/N confirm), then put it back. A no-op when there is no box or it is
-    already down, so nesting is safe."""
-    live = _LIVE
-    if live is None or not live.enabled:
-        yield
-        return
-    live.suspend()
-    try:
-        yield
-    finally:
-        live.resume()
 
 
 def uninstall() -> None:

@@ -132,7 +132,10 @@ class Spinner:
         self._thread.join(timeout=1)
         live = _live_area()
         if live is not None:
-            live.set_activity(None)
+            # A "▸ tool" label set while the stream ran is for the tool
+            # about to execute; leave it. Anything else was ours.
+            if not (live.activity or "").startswith("▸ "):
+                live.set_activity(None)
             return
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
@@ -624,7 +627,14 @@ def print_banner(model: str, backend: str, engine: str | None = None) -> None:
     else:
         cprint(title, C.BOLD + C.BCYAN)
     where = f"on the {engine}" if engine else f"via {backend}"
-    cprint(f"  {C.BWHITE}{model}{C.RESET}{C.DIM} {where}  ·  /help  ·  press Esc to cancel{C.RESET}", C.DIM)
+    usable = _usable_width()
+    for tail in (f"{model} {where}  ·  /help  ·  press Esc to cancel",
+                 f"{model} {where}  ·  /help",
+                 f"{model}  ·  /help"):
+        if len(tail) + 2 <= usable:
+            break
+    styled = tail.replace(model, f"{C.BWHITE}{model}{C.RESET}{C.DIM}", 1)
+    cprint(f"  {styled}", C.DIM)
     print()
 
 
@@ -731,16 +741,19 @@ def render_history_list(sessions: list[dict[str, Any]], current_id: str) -> None
         cprint("  No saved sessions.", C.DIM)
         return
     print()
-    header = f"  {'#':<4}{'Session':<52}{'Modified':<12}{'Created'}"
+    # The summary column takes whatever the window leaves after the fixed
+    # columns (marker, number, two dates), so rows never wrap.
+    width = max(16, _usable_width() - 30)
+    header = f"  {'#':<4}{'Session':<{width + 4}}{'Modified':<12}{'Created'}"
     cprint(header, C.BOLD)
     cprint("  " + "─" * (len(header) - 2), C.DIM)
     for i, s in enumerate(sessions, start=1):
         current = s.get("id") == current_id
         marker = "▸" if current else " "
-        summary = truncate_summary(str(s.get("title", "New session")), 48)
+        summary = truncate_summary(str(s.get("title", "New session")), width)
         modified = format_relative_time(str(s.get("modified_at", "")))
         created = format_relative_time(str(s.get("created_at", "")))
-        cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}", C.BOLD if current else "")
+        cprint(f"{marker} {i:>2}. {summary:<{width}}  {modified:<10}  {created}", C.BOLD if current else "")
     print()
 
 
@@ -965,7 +978,8 @@ def ask_line(prompt: str, timeout_s: float | None = None) -> str | None:
     if not sys.stdin.isatty():
         return None
     with paused_status():
-        return _console_read_line(prompt, timeout_s, cancel_note="  Cancelled.", timeout_suffix=".")
+        # No note of its own: the caller says what a None answer meant.
+        return _console_read_line(prompt, timeout_s, cancel_note="", timeout_suffix=".")
 
 
 def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:

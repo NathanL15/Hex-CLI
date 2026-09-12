@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -85,9 +86,16 @@ _CONTROL = {
 }
 
 
+def _cell_width(ch: str) -> int:
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
 def visible_len(text: str) -> int:
-    """Length ignoring ANSI styling — what the terminal actually shows."""
-    return len(_ANSI_RE.sub("", text))
+    """Cells ignoring ANSI styling — what the terminal actually shows. Wide
+    (CJK, emoji) glyphs count two."""
+    return sum(_cell_width(ch) for ch in _ANSI_RE.sub("", text))
 
 
 def _wrap_visible(text: str, width: int) -> str:
@@ -102,11 +110,12 @@ def _wrap_visible(text: str, width: int) -> str:
             out.append(m.group())
             i = m.end()
             continue
-        if col == width:
+        w = _cell_width(text[i])
+        if col + w > width:
             out.append("\n")
             col = 0
         out.append(text[i])
-        col += 1
+        col += w
         i += 1
     return "".join(out)
 
@@ -444,6 +453,8 @@ class LineEditor:
         chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
         placeholder: str = "",
         finish_style: Callable[[str, int], str] | None = None,
+        geometry: Callable[[], tuple[int, int] | None] | None = None,
+        on_grow: Callable[[int], Any] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -474,6 +485,13 @@ class LineEditor:
         # screen (row text, usable width) -> styled row; the caller uses it
         # to put a light band behind the user's message.
         self.finish_style = finish_style
+        # Where the editor's first row sits in the window (from `geometry`,
+        # (cursor row, height)), so a multi-row entry that would run past
+        # the bottom can tell the caller how far the window scrolled
+        # (`on_grow(rows)`): the caller keeps its own row bookkeeping right.
+        self.geometry = geometry
+        self.on_grow = on_grow
+        self._anchor_row: int | None = None
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
@@ -524,8 +542,10 @@ class LineEditor:
 
     # -- rendering ----------------------------------------------------------
 
-    def _layout(self, prompt: str, chrome: bool = True) -> tuple[str, int, int, int]:
-        """Return (text_to_write, total_rows, cursor_row, cursor_col)."""
+    def _layout(self, prompt: str, chrome: bool = True, pad: bool = True) -> tuple[str, int, int, int]:
+        """Return (text_to_write, total_rows, cursor_row, cursor_col).
+        `pad=False` skips the deferred-wrap spare row: the finished line
+        needs no cursor arithmetic, and a styled spare row would show."""
         prompt_lines = prompt.split("\n")
         buf_lines = self.buffer.split("\n")
         above: list[str] = []
@@ -565,7 +585,7 @@ class LineEditor:
         for i, (text, vis) in enumerate(logical):
             if i == cursor_logical:
                 cursor_row = total_rows + cursor_vis // self.usable
-            pieces.append(self._fit(text + self._pad(vis)))
+            pieces.append(self._fit(text + (self._pad(vis) if pad else "")))
             total_rows += self._rows(vis)
         return "\n".join(pieces), total_rows, cursor_row, cursor_vis % self.usable
 
@@ -576,11 +596,38 @@ class LineEditor:
             out += f"\033[{self._cursor_row}A"
         return out
 
+    def _read_anchor(self) -> None:
+        self._anchor_row = None
+        if self.geometry is None:
+            return
+        try:
+            geo = self.geometry()
+        except Exception:
+            geo = None
+        if geo is not None:
+            self._anchor_row = geo[0]
+
+    def _note_growth(self, total_rows: int) -> None:
+        """More rows than fit below the anchor scroll the window; report the
+        new scroll distance once and move the anchor up with it."""
+        if self._anchor_row is None or self.on_grow is None:
+            return
+        # The anchor already moved up with every scroll reported so far, so
+        # whatever still hangs past the bottom is new scrolling.
+        overflow = self._anchor_row + total_rows - self.height
+        if overflow > 0:
+            self._anchor_row -= overflow
+            try:
+                self.on_grow(overflow)
+            except Exception:
+                pass
+
     def render(self, prompt: str, if_changed: bool = False) -> None:
         text, total_rows, cursor_row, cursor_col = self._layout(prompt)
         if if_changed and text == self._last_text:
             return   # an idle tick with nothing new on the status line
         self._last_text = text
+        self._note_growth(total_rows)
         out = [self._move_to_anchor(), "\033[J", text]
         # We are now at the end of the last row; walk back to the anchor and
         # down to the cursor. Both legs are computed, so the next redraw's
@@ -609,7 +656,7 @@ class LineEditor:
         cursor below it. The line stays where it was typed: the caller keeps
         the conversation anchored above the input, so the echo is already
         in place."""
-        text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False)
+        text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False, pad=False)
         if self.finish_style is not None:
             text = "\n".join(self.finish_style(row, self.usable) for row in text.split("\n"))
         self._write(self._move_to_anchor() + "\033[J" + text + "\n")
@@ -729,6 +776,7 @@ class LineEditor:
         self._rendered_rows, self._cursor_row = 0, 0
         self._last_text = None
         self._last_size = (self.usable, self.height)
+        self._read_anchor()
         try:
             self.render(prompt)
             while True:
@@ -801,6 +849,7 @@ class LineEditor:
             except Exception:
                 pass
         self._last_size = (self.usable, self.height)
+        self._read_anchor()
         self.render(prompt)
 
     def _handle(self, key: str, prompt: str) -> str | None:
@@ -875,10 +924,19 @@ class LineEditor:
         if key == CLEAR_SCREEN:
             self._write("\033[2J\033[H")
             self._cursor_row = 0
-            if self.chrome is not None:
+            self._rendered_rows = 0
+            if self.on_resize is not None:
+                # The caller re-pins the box (and forgets its old pad rows,
+                # which the clear just wiped) exactly as after a resize.
+                try:
+                    self.on_resize()
+                except Exception:
+                    pass
+            elif self.chrome is not None:
                 # Keep the box on the window's last rows after the clear.
                 rows = self._layout(prompt)[1]
                 self._write("\n" * max(0, self.height - rows))
+            self._read_anchor()
             return None
         if key == ESCAPE:
             self.buffer, self.pos = "", 0
@@ -911,6 +969,8 @@ def make_reader(
     placeholder: str = "",
     write: Callable[[str], None] | None = None,
     finish_style: Callable[[str, int], str] | None = None,
+    geometry: Callable[[], tuple[int, int] | None] | None = None,
+    on_grow: Callable[[int], Any] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
@@ -942,5 +1002,7 @@ def make_reader(
         placeholder=placeholder,
         write=write,
         finish_style=finish_style,
+        geometry=geometry,
+        on_grow=on_grow,
     )
     return editor.read

@@ -207,10 +207,11 @@ def _ollama_stream_chat(
                     if chunk:
                         parts.append(chunk)
                         tok += 1
-                        sys.stderr.write(
-                            f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
-                        )
-                        sys.stderr.flush()
+                        if ui._live_area() is None:   # with the bar up the status line shows progress
+                            sys.stderr.write(
+                                f"\r{C.DIM}  {label}... {tok} tokens{C.RESET}"
+                            )
+                            sys.stderr.flush()
                     if data.get("done"):
                         eval_count = data.get("eval_count", tok)
 
@@ -366,9 +367,9 @@ def _openai_stream_chat(
                         tok += 1
                         if renderer is not None:
                             renderer.feed(delta)
-                        else:
+                        elif ui._live_area() is None:   # with the bar up the status line shows progress
                             sys.stderr.write(
-                                f"\r{C.DIM}  {label}... {tok} tokens  (Esc to cancel){C.RESET}"
+                                f"\r{C.DIM}  {label}... {tok} tokens{C.RESET}"
                             )
                             sys.stderr.flush()
 
@@ -571,7 +572,7 @@ def call_llm(
                 error_box["value"] = exc
 
         thread = threading.Thread(target=_work, daemon=True)
-        with _agent().CancelMonitor() as monitor, _agent().Spinner(f"{label} (Esc to cancel)"):
+        with _agent().CancelMonitor() as monitor, _agent().Spinner(label):
             thread.start()
             while thread.is_alive():
                 if monitor.cancelled.is_set():

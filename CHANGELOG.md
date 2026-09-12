@@ -64,6 +64,45 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Review pass over the day's changes
+
+Two code reviews over the diff and a live edge-case pass, fixed together:
+
+* A delegate sub-agent hitting its own five-step cap printed `⚠ Stopped`
+  mid-turn and suppressed the turn's answer box; delegates no longer mark
+  the turn. Each delegate call printed two `◆ delegate` cards; one now.
+* `▸ [run] exit N` was glued onto command output that lacked a trailing
+  newline. The status label now names the running tool while it runs, and
+  the elapsed clock counts the whole turn rather than restarting each
+  model call.
+* Pad bookkeeping: a multi-row entry that scrolled the window, `/clear`,
+  `/resume`, Ctrl+L and a window resize during a turn all left the pad's
+  recorded position stale, so later line deletes could remove conversation
+  rows instead of blank ones. The editor now reports how far the window
+  scrolled, screen clears reset the pad, a stale pad is replaced rather
+  than added to, and a change in window size resets it before the next
+  draw. The erase sequence goes straight to the console so the margin
+  layer never replays it inside a reflowed word.
+* An input of exactly the usable width left a styled empty row under the
+  echo. Wide characters (CJK) are measured in cells in the status line,
+  the chrome and the editor's wrapping.
+* Markdown: a closing fence with trailing spaces or CRLF now closes; bold
+  and code spans continue over a soft line break and end at a blank line.
+  A `**` followed by a space no longer opens bold (`next** x` is literal),
+  so a stray marker cannot bold the rest of an answer.
+* The editor's scroll report counted only the first row a growing entry
+  pushed past the bottom; every later row is reported too, and the status
+  bar redraws on a window-size change even when its text is unchanged.
+* Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
+  `/setup` over a pipe works again. The non-streaming spinner and the
+  delegate token counter no longer print alongside the status line.
+* The launcher's failure exits held a classic-console window open with a
+  prompt so the message can be read; Windows Terminal keeps the pane.
+* Uninstall removes the emptied Terminal fragment folder; one-shot mode
+  skips the answer box after a stop like the REPL does; `/history` fits the
+  window width; the banner tail shortens in a narrow window; the notice
+  after `/clear` lines up with the others.
+
 ### The shortcut starts in the home folder
 
 It used to start inside the Hex CLI checkout, so every session's first

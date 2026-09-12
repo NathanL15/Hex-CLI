@@ -73,8 +73,12 @@ def _mark_turn_stopped(how: str) -> None:
 
 
 def clear_turn_stop() -> None:
+    """Called by the REPL before each turn. Also forgets what the previous
+    turn streamed: a turn that never calls the model (help, small talk)
+    must not match the box-skip against stale text."""
     global _LAST_TURN_STOP
     _LAST_TURN_STOP = None
+    llm._LAST_STREAMED_TEXT = ""
 
 
 def last_turn_stopped() -> str | None:
@@ -693,8 +697,7 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
     _in_delegate = True
     _CURRENT_SESSION_ID = str(uuid4())
 
-    ui.tool_header("delegate")
-    ui.tool_event("delegate", task[:100])
+    ui.tool_event("delegate", task[:100])   # the card was printed by the dispatcher
     delegate_config = dict(config)
     delegate_config["max_agent_steps"] = min(int(config.get("max_agent_steps", 15)), 5)
     try:
@@ -1339,6 +1342,9 @@ def _run_autopilot_turn(
         # Size this tool's result to the room actually left in the window
         # (see _step_tool_output_limit); the configured limit is a ceiling.
         step_limit = _step_tool_output_limit(config, messages)
+        live = ui._live_area()
+        if live is not None:
+            live.set_activity(f"▸ {tool_name}")   # the status line names the running tool
         try:
             tool_output = execute_tool_call(
                 {**config, "tool_output_limit": step_limit}, action, shell_exe)
@@ -1354,6 +1360,9 @@ def _run_autopilot_turn(
             ui.tool_error(str(exc))
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
+        finally:
+            if live is not None:
+                live.set_activity(None)
         _probe(
             probe, "on_tool", step, tool_name, action.get("args", {}) or {},
             tool_output, time.monotonic() - tool_start, tool_status,
@@ -1404,8 +1413,9 @@ def _run_autopilot_turn(
                 _loop_tracker.clear()
                 continue
             what = f"{tool_name} returned the same result" if _identical_trip else f"{tool_name} failed"
-            cprint(f"\n  ⚠ Stopped: {what} three times in a row.", C.BYELLOW)
-            _mark_turn_stopped("loop")
+            if not _in_delegate:   # a sub-agent's stop is its own result, not the turn's
+                cprint(f"\n  ⚠ Stopped: {what} three times in a row.", C.BYELLOW)
+                _mark_turn_stopped("loop")
             if escalate.get_api_key(config):
                 # Same non-interactive hazard as the safety confirms: this sits in
                 # the autopilot path, so an unattended run must not stall here.
@@ -1426,8 +1436,9 @@ def _run_autopilot_turn(
         messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, step_limit)}"})
 
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
-    cprint("\n  ⚠ Stopped at the step limit.", C.BYELLOW)
-    _mark_turn_stopped("step_limit")
+    if not _in_delegate:   # a sub-agent's cap is routine; its text comes back as a tool result
+        cprint("\n  ⚠ Stopped at the step limit.", C.BYELLOW)
+        _mark_turn_stopped("step_limit")
     if session:
         _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
     _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
@@ -1529,7 +1540,7 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     tel.record_turn(turn)
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)
-    if last_streamed_matches(message):
+    if last_streamed_matches(message) or last_turn_stopped():
         print()
     else:
         render_result("Result", message)

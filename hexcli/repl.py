@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.error
 from pathlib import Path
@@ -328,6 +329,18 @@ def _last_error_text(scope: dict[str, Any]) -> str:
     return f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else ""
 
 
+def _editor_writer(live: Any) -> Any:
+    """The line editor's output path when the status area is up."""
+    if live is None:
+        return None
+    target = live._inner if getattr(live.margin, "pad", 0) else live._inner._base
+
+    def write(s: str) -> None:
+        target.write(s)
+        target.flush()
+    return write
+
+
 def run_repl(config: dict[str, Any]) -> int:
     shell_exe = sa.detect_shell(str(config.get("shell_exe", "") or ""))
     sessions = sa.load_history_store(config)
@@ -398,9 +411,17 @@ def run_repl(config: dict[str, Any]) -> int:
         placeholder="ask, or / for commands" if live is not None else "",
         # The editor draws its own rows straight to the console, under the
         # live area's wrapper: those cursor moves are not transcript output.
-        write=(lambda s: (live._inner.write(s), live._inner.flush()) and None) if live is not None else None,
+        # With a side padding the margin layer adds the fill after each
+        # newline; without one it would only reflow words the editor has
+        # already laid out, so go to the base stream.
+        write=_editor_writer(live),
         # A light band behind the echoed message marks the user's turns.
         finish_style=ui.user_row if (live is not None and config.get("user_highlight", True)) else None,
+        # Where the editor sits, and how far the window scrolled when a
+        # multi-line entry grew past the bottom: the live area moves its
+        # pad bookkeeping with it.
+        geometry=statusbar.console_geometry if live is not None else None,
+        on_grow=live.note_scroll if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:
@@ -502,6 +523,8 @@ def run_repl(config: dict[str, Any]) -> int:
             wizard_path = Path(str(config.get("_config_path", "")) or sa.DEFAULT_CONFIG_PATH)
             # Through ask_line, so the status box is lowered for each question.
             def _wizard_ask(prompt: str) -> str:
+                if not sys.stdin.isatty():
+                    return input(prompt)   # piped answers still work
                 answer = ui.ask_line(prompt)
                 if answer is None:
                     raise KeyboardInterrupt
@@ -518,9 +541,12 @@ def run_repl(config: dict[str, Any]) -> int:
         # that keeps the scrollback.
         if norm == "/clear":
             os.system("cls" if os.name == "nt" else "clear")
+            if live is not None:
+                live.screen_cleared()   # the box and its pad rows are gone with the screen
             sa.sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = sa.create_session()
+            sys.stdout.write("\r")   # the clear skipped the margin's fill for this row
             sa.cprint("  Chat history cleared.", sa.C.DIM)
             continue
 
@@ -547,6 +573,8 @@ def run_repl(config: dict[str, Any]) -> int:
             _close_session_resources(current_session)
             current_session = sessions[idx]
             # Show what was resumed: the conversation, reprinted, then the notice.
+            if live is not None:
+                live.screen_cleared()
             ui.redraw_transcript(current_session)
             sa.cprint(f"\n  Resumed session: {current_session['title']}", sa.C.DIM)
             continue

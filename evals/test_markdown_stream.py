@@ -110,6 +110,28 @@ def test_fences_become_rules_and_leave_code_untouched() -> None:
         _color(True)
 
 
+def test_fence_closes_with_trailing_space_or_crlf_and_spans_carry_over_soft_breaks() -> None:
+    """Review findings: a closing fence with trailing whitespace or CRLF
+    must still close; bold and code spans continue over a soft line break
+    and end at a blank line; a carried span never leaves a stray reset."""
+    _color(True)
+    try:
+        rule = f"{D}{RULE}{R}"
+        opener = f"{D}──── py {'─' * (40 - 4 - len(' py '))}{R}"
+        assert both("```py\ncode\n``` \nafter **b**\n") == f"{opener}\ncode\n{rule}\nafter {B}b{R}\n"
+        assert both("```py\r\ncode\r\n```\r\n") == f"{opener}\ncode\r\n{rule}\n"
+        # Bold across one newline: re-armed on the next line, closed by its marker.
+        assert both("**bold\nmore** plain\n") == f"{B}bold{R}\n{B}more{R} plain\n"
+        # A blank line ends the span; the orphan closer is literal.
+        assert both("**open\n\nnext** x\n") == f"{B}open{R}\n\nnext** x\n"
+        assert both("x `y\nz` w\n") == f"x {CY}y{R}\n{CY}z{R} w\n"
+        # Carried at the very end of the text: no trailing reset.
+        assert both("``x\n") == f"{CY}x{R}\n"
+        assert both("**a\n") == f"{B}a{R}\n"
+    finally:
+        _color(True)
+
+
 def test_plain_text_is_unchanged_and_colour_off_keeps_only_substitutions() -> None:
     _color(True)
     try:
@@ -143,6 +165,7 @@ TESTS = [
     test_bullets_become_dots_and_keep_indentation,
     test_bold_and_code_spans,
     test_fences_become_rules_and_leave_code_untouched,
+    test_fence_closes_with_trailing_space_or_crlf_and_spans_carry_over_soft_breaks,
     test_plain_text_is_unchanged_and_colour_off_keeps_only_substitutions,
     test_render_result_applies_markdown,
 ]

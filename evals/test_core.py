@@ -1305,6 +1305,23 @@ def test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour() -> None
         ui.set_color_enabled(orig)
 
 
+def test_history_list_fits_the_window_width() -> None:
+    import contextlib
+    import io
+
+    from hexcli import ui
+    orig = ui._usable_width
+    ui._usable_width = lambda: 60
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.render_history_list([{"id": "a", "title": "t" * 80, "modified_at": "", "created_at": ""}], "a")
+        rows = [r for r in buf.getvalue().splitlines() if r.strip()]
+        assert all(ui._visible_cells(r) <= 60 for r in rows), [ui._visible_cells(r) for r in rows]
+    finally:
+        ui._usable_width = orig
+
+
 def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
     """The Result box repeats the final message. When the final model call
     streamed that exact text (whitespace aside) the REPL skips the box; a
@@ -1350,6 +1367,7 @@ def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
 
 TESTS = [
     test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour,
+    test_history_list_fits_the_window_width,
     test_result_box_is_skipped_when_the_answer_already_streamed,
     test_redraw_transcript_clears_and_reprints_the_conversation,
     test_margin_stream_pads_every_row_and_delegates_the_rest,

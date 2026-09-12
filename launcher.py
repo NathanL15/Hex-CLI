@@ -456,6 +456,26 @@ def _start_npurun_server() -> None:
                       creationflags=0x00000008)
 
 
+def _hold_window() -> None:
+    """In a classic console the window closes with the process, so a failure
+    message would vanish before it could be read. Windows Terminal keeps the
+    pane open on a non-zero exit; nothing to do there."""
+    if os.environ.get("WT_SESSION") or not sys.stdin.isatty():
+        return
+    try:
+        input("  Press Enter to close.")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _fail(*lines: str) -> int:
+    print()
+    for i, line in enumerate(lines):
+        err(line) if i == 0 else print(dim(f"  {line}"))
+    _hold_window()
+    return 1
+
+
 def run_npurun_path(conda: Path | None = None) -> int:
     """npurun setup and launch. Returns the agent's exit code.
 
@@ -476,8 +496,7 @@ def run_npurun_path(conda: Path | None = None) -> int:
             _pull_npurun_model()
             _write_npurun_config()
         except Exception as exc:
-            err(f"Model download failed: {exc}")
-            return 1
+            return _fail(f"Model download failed: {exc}")
     elif not NPURUN_CONFIG.exists():
         _write_npurun_config()
 
@@ -485,12 +504,9 @@ def run_npurun_path(conda: Path | None = None) -> int:
         try:
             _start_npurun_server()
         except Exception as exc:
-            err(f"The model server did not start: {exc}")
-            return 1
+            return _fail(f"The model server did not start: {exc}")
         if not _wait_npurun(timeout=60):
-            err("The model server did not start within 60 s.")
-            print(dim(f"  Log: {NPURUN_LOG}"))
-            return 1
+            return _fail("The model server did not start within 60 s.", f"Log: {NPURUN_LOG}")
 
     return subprocess.run(
         [sys.executable, str(SHELLAI_SCRIPT), "--config", str(NPURUN_CONFIG)]
@@ -652,18 +668,13 @@ def main() -> int:
     # so a missing prerequisite is reported, never silently substituted.
     try:
         if not _npurun_ready():
-            print()
-            err("npurun or the QAIRT SDK was not found.")
-            print(dim("  Run  hexcli --doctor  for the fix."))
-            return 1
+            return _fail("npurun or the QAIRT SDK was not found.", "Run  hexcli --doctor  for the fix.")
         return run_npurun_path()
     except KeyboardInterrupt:
         print()
         return 0
     except Exception as exc:
-        print()
-        err(f"Error: {exc}")
-        return 1
+        return _fail(f"Error: {exc}")
 
 
 if __name__ == "__main__":

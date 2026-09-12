@@ -40,6 +40,7 @@ class MarkdownStream:
         self._bold = False
         self._code = False
         self._heading = False
+        self._restyle = False       # re-emit the open styles after a soft line break
 
     # -- public -------------------------------------------------------------
 
@@ -52,6 +53,11 @@ class MarkdownStream:
         if self._fence_line is not None:
             out += self._fence_marker(self._fence_line)
             self._fence_line = None
+        if self._restyle:
+            # Styles carried over a line break were already reset on screen
+            # and never re-opened: nothing to close.
+            self._bold = self._code = self._heading = False
+            self._restyle = False
         return out + self._close_styles()
 
     # -- styling ------------------------------------------------------------
@@ -84,6 +90,7 @@ class MarkdownStream:
         c = self._c
         if self._fence:
             self._fence = False
+            self._restyle = False
             return f"{c.DIM}{'─' * _FENCE_WIDTH}{c.RESET}"
         self._fence = True
         label = f" {lang.strip()} " if lang.strip() else ""
@@ -103,11 +110,16 @@ class MarkdownStream:
     def _char(self, ch: str) -> str:
         if self._fence_line is not None:
             if ch == "\n":
-                marker = self._fence_marker(self._fence_line)
+                label = self._fence_line.strip()
                 self._fence_line = None
                 self._bol = True
-                return marker + "\n"
-            if ch in _FENCE_LABEL_CHARS and len(self._fence_line) < _FENCE_LABEL_MAX:
+                if not self._fence and " " in label:
+                    return "```" + label + "\n"   # "```this is prose": not a fence
+                return self._fence_marker(label) + "\n"
+            # A closing fence takes anything after the backticks (trailing
+            # spaces, a stray word); an opening one only a language name.
+            ok = self._fence or (ch in _FENCE_LABEL_CHARS and len(self._fence_line) < _FENCE_LABEL_MAX)
+            if ok or ch in " \r":
                 self._fence_line += ch
                 return ""
             # Not a fence after all ("```" followed by prose, or by code the
@@ -117,9 +129,24 @@ class MarkdownStream:
             self._bol = False
             return held + self._inline_char(ch)
         if ch == "\n":
-            out = self._flush_pending() + self._close_styles() + "\n"
+            # Bold and code spans may continue on the next line (a soft
+            # break); a blank line ends them. Headings end with their line.
+            out = self._flush_pending()
+            carry = (self._bold or self._code) and not self._bol
+            already_reset = self._restyle   # a carried span was reset at the previous break
+            open_style = (self._bold or self._code or self._heading) and not already_reset
+            out += (self._c.RESET if open_style else "") + "\n"
+            self._heading = False
+            if carry:
+                self._restyle = True
+            else:
+                self._bold = self._code = False
+                self._restyle = False
             self._bol = True
             return out
+        if self._restyle and ch != "\n":
+            self._restyle = False
+            return self._style() + (self._bol_char(ch) if self._bol else self._inline_char(ch))
         if self._bol:
             return self._bol_char(ch)
         return self._inline_char(ch)
@@ -164,7 +191,8 @@ class MarkdownStream:
             if ch == " ":
                 return self._bullet()
             if p == "*" and ch == "*":
-                return self._toggle_bold()
+                self._pending = "**"   # decided by what follows (see _inline_char)
+                return ""
             return p + self._inline_char(ch)
         self._bol = False
         return self._inline_char(ch)
@@ -173,10 +201,20 @@ class MarkdownStream:
         if self._fence:
             return ch
         p = self._pending
+        if p == "**":
+            # An opening "**" must be followed by something other than a
+            # space (CommonMark's left-flanking rule); "next** x" is literal.
+            self._pending = ""
+            if ch in " \t":
+                return "**" + self._inline_char(ch)
+            return self._toggle_bold() + self._inline_char(ch)
         if p == "*":
             self._pending = ""
             if ch == "*":
-                return self._toggle_bold()
+                if self._bold or self._code:
+                    return self._toggle_bold()   # closing (or literal inside code)
+                self._pending = "**"
+                return ""
             return "*" + self._inline_char(ch)
         if p and set(p) == {"`"}:
             # A run of backticks resolves on the next character: one or two

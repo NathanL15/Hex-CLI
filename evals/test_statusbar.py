@@ -326,6 +326,57 @@ def test_pad_delete_returns_to_the_column_before_the_write() -> None:
         restore()
 
 
+def test_pad_bookkeeping_survives_scrolls_clears_and_stale_tops() -> None:
+    """Review findings on the pad: a scroll moves the pad up (note_scroll),
+    a cleared screen forgets it (screen_cleared), a stale top is replaced
+    rather than added to, and the erase goes to the base stream so the
+    margin never files ESC[J under a word."""
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        geo = {"row": 5, "height": 30}
+        live._geometry = lambda: (geo["row"], geo["height"])
+        live.enable()
+        assert (live._pad_top, live._pad_above) == (5, 20)
+        live.note_scroll(3)
+        assert (live._pad_top, live._pad_above) == (2, 20)
+        live.note_scroll(5)                       # three rows of the pad left the window
+        assert (live._pad_top, live._pad_above) == (0, 17)
+        live.note_scroll(20)
+        assert (live._pad_top, live._pad_above) == (None, 0)
+        # A stale top below the cursor is replaced, not added to.
+        live._pad_top, live._pad_above = 28, 9
+        geo["row"] = 10
+        base.chunks.clear()
+        live._insert_pad_rows(inner, 4)
+        assert (live._pad_top, live._pad_above) == (10, 4), (live._pad_top, live._pad_above)
+        # screen_cleared drops everything.
+        live.screen_cleared()
+        assert live._drawn == 0 and live._pad_top is None and live._pad_above == 0
+        # The erase never touches the margin's word buffer.
+        live.margin.word, live.margin.word_vis = "abc", 3
+        live._drawn = 4
+        live._erase(inner)
+        assert live.margin.word == "abc"
+        # A changed window height resets the pad before drawing.
+        live.enable()
+        live._pad_top, live._pad_above = 5, 3
+        geo["height"] = 40
+        base.chunks.clear()
+        live.repaint()
+        assert live._pad_top != 5 or live._pad_above != 3
+    finally:
+        restore()
+
+
+def test_cells_not_characters_for_wide_glyphs() -> None:
+    assert sb.visible_len("日本語") == 6
+    clipped = sb.clip_visible("日本語のパス", 5)          # never split a wide cell
+    assert clipped.startswith("日本") and sb.visible_len(clipped) == 4, repr(clipped)
+    line = sb.status_line(30, context_percent=1, npu_percent=None, mem_used_gb=None, right="日本語の道")
+    assert sb.visible_len(line) <= 30
+
+
 def test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it() -> None:
     restore = _no_color()
     try:
@@ -350,19 +401,18 @@ def test_paused_context_suspends_and_restores_and_nests() -> None:
     restore = _no_color()
     try:
         live, base, inner = _live()
-        import hexcli.statusbar as mod
-        old = mod._LIVE
-        mod._LIVE = live
+        old = ui.LIVE_AREA
+        ui.LIVE_AREA = live
         try:
             live.enable()
-            with mod.paused():
+            with ui.paused_status():
                 assert not live.enabled
-                with mod.paused():        # nested: already down, still down
+                with ui.paused_status():   # nested: already down, still down
                     assert not live.enabled
-                assert not live.enabled   # inner exit must not restore early
+                assert not live.enabled    # inner exit must not restore early
             assert live.enabled
         finally:
-            mod._LIVE = old
+            ui.LIVE_AREA = old
     finally:
         restore()
 
@@ -441,6 +491,8 @@ TESTS = [
     test_repaint_skips_when_nothing_visible_changed,
     test_paused_context_suspends_and_restores_and_nests,
     test_pad_delete_returns_to_the_column_before_the_write,
+    test_pad_bookkeeping_survives_scrolls_clears_and_stale_tops,
+    test_cells_not_characters_for_wide_glyphs,
     test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it,
     test_spinner_uses_the_live_area_when_one_is_up,
     test_install_declines_off_a_console_and_when_turned_off,

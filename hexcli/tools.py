@@ -237,6 +237,7 @@ def run_command_tool(
 
     parts: list[str] = []
     parts_chars = 0
+    open_row = False   # the last printed output line had no newline
     # Stop buffering once we have 4× the output limit (UTF-8 max 4B/char).
     # Further lines are still printed to the terminal but not buffered.
     _BUF_CAP = output_limit * 4
@@ -257,6 +258,7 @@ def run_command_tool(
                     continue
                 # Dim on screen: command output is evidence, not the answer.
                 print(f"{ui.C.DIM}{line.rstrip(chr(10))}{ui.C.RESET}", end="\n" if line.endswith("\n") else "")
+                open_row = not line.endswith("\n")
                 if parts_chars < _BUF_CAP:
                     parts.append(line)
                     parts_chars += len(line)
@@ -265,6 +267,8 @@ def run_command_tool(
         raise UserCancelled()
     process.wait()
     output = "".join(parts)
+    if open_row:
+        print()   # the command left its last line unterminated; the exit line gets its own row
     ui.tool_event("run", f"exit {process.returncode}")
     return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
 

@@ -776,6 +776,37 @@ def test_finish_style_wraps_each_row_of_the_finished_line() -> None:
     assert "[top]" not in "".join(out), "chrome rows are never styled"
 
 
+def test_finished_line_has_no_spare_row_and_growth_is_reported() -> None:
+    """An input of exactly the usable width used to leave a styled spare
+    row under the echo; a multi-row entry that runs past the bottom reports
+    how far the window scrolled, once per extra row."""
+    from hexcli import lineedit as le
+    ed, out = editor(typed("x" * 34) + [le.ENTER], width=40, margin=2,
+                     chrome=lambda w: (["top"], ["bot"]), finish_style=lambda r, w: f"[{r}]")
+    ed.read("> ")
+    assert out[-1].endswith("[> " + "x" * 34 + "]\n"), repr(out[-1][-60:])
+    grown: list[int] = []
+    keys = (typed("a") + [le.NEWLINE] + typed("b") + [le.NEWLINE] + typed("c")
+            + [le.NEWLINE] + typed("d") + [le.ENTER])
+    ed, out = editor(keys, width=40, height=10, chrome=lambda w: (["top"], ["bot"]),
+                     geometry=lambda: (6, 10), on_grow=grown.append)
+    ed.read("> ")
+    # Anchor row 6 of 10: chrome + one input row is 3 rows (fits), two input
+    # rows fill the window, the third and fourth overflow by one each.
+    assert grown == [1, 1], grown
+
+
+def test_clear_screen_uses_the_resize_hook_when_there_is_one() -> None:
+    from hexcli import lineedit as le
+    calls = []
+    ed, out = editor([le.CLEAR_SCREEN, le.ENTER], height=10, chrome=lambda w: (["top"], ["bot"]),
+                     on_resize=lambda: calls.append(1))
+    ed.read("> ")
+    joined = "".join(out)
+    assert calls == [1] and "\033[2J\033[H" in joined and "\033[2J\033[H\n\n" not in joined, repr(joined)
+    assert le.visible_len("日本") == 4 and le._wrap_visible("日本語", 4) == "日本\n語"
+
+
 def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
     from hexcli import lineedit as le
     ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
@@ -868,6 +899,8 @@ TESTS = [
     test_resize_token_clears_only_the_box_rows_and_calls_on_resize,
     test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom,
     test_finish_style_wraps_each_row_of_the_finished_line,
+    test_finished_line_has_no_spare_row_and_growth_is_reported,
+    test_clear_screen_uses_the_resize_hook_when_there_is_one,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 

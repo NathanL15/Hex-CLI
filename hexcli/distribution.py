@@ -166,6 +166,10 @@ def uninstall(install_dir: Path) -> int:
     if _WT_FRAGMENT.exists():
         try:
             _WT_FRAGMENT.unlink()
+            try:
+                _WT_FRAGMENT.parent.rmdir()   # the fragment folder, if nothing else is in it
+            except OSError:
+                pass
             _print("Removed Windows Terminal profile: Hex CLI")
         except OSError as exc:
             _print(f"Could not remove the Windows Terminal profile: {exc}")
