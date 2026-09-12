@@ -18,16 +18,14 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from hexcli import paths
 from hexcli.ui import C, cprint
 
-# Project root, derived the same way agent.APP_DIR is. Asserted equal in
-# evals/test_core.py so the two definitions cannot drift apart.
-APP_DIR = Path(__file__).resolve().parent.parent
-HISTORY_PATH = APP_DIR / "history.json"
+# ~/.shellai/history.json (a checkout's history.json is migrated once).
+HISTORY_PATH = paths.history_path()
 
 
 def utc_now() -> datetime:

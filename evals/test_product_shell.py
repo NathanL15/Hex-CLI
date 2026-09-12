@@ -649,7 +649,7 @@ def test_doctor_fails_on_an_older_npurun_build() -> None:
     makes that true for an existing install."""
     import unittest.mock
 
-    import launcher
+    from hexcli import launcher
     with tempfile.TemporaryDirectory() as tmp, \
          unittest.mock.patch.object(launcher, "find_npurun_exe", return_value=Path(tmp) / "npurun.exe"), \
          unittest.mock.patch.object(launcher, "_npurun_version", return_value=(0, 2, 0)), \

@@ -144,7 +144,7 @@ def test_launcher_config_rewrite_preserves_user_keys() -> None:
     """launcher._write_npurun_config regenerates the very file /setup writes
     to (after any model re-pull). It must merge, not clobber, or the wizard's
     answers vanish silently."""
-    import launcher
+    from hexcli import launcher
 
     with tempfile.TemporaryDirectory() as tmp:
         cfg_path = Path(tmp) / "shellai_npurun.json"

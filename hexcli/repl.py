@@ -566,7 +566,7 @@ def run_repl(config: dict[str, Any]) -> int:
         # ── doctor: diagnose the installation without leaving the REPL ────
         if norm == "/doctor":
             from . import doctor
-            doctor.run_doctor(config, sa.APP_DIR)
+            doctor.run_doctor(config)
             continue
 
         # ── setup: interactive config wizard ──────────────────────────────

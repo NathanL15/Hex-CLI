@@ -1106,9 +1106,13 @@ def test_history_path_patch_is_not_vacuous() -> None:
 
 
 def test_agent_and_sessions_agree_on_the_project_root() -> None:
-    """sessions.py derives APP_DIR independently; catch the two drifting."""
-    assert sa.APP_DIR == session_store.APP_DIR
+    """Every path comes from hexcli.paths; the agent's APP_DIR is the checkout
+    when there is one, and the history file lives in the data directory."""
+    from hexcli import paths
+    assert sa.APP_DIR == (paths.CHECKOUT_DIR or paths.PACKAGE_DIR)
     assert sa.HISTORY_PATH == session_store.HISTORY_PATH
+    assert session_store.HISTORY_PATH.parent == paths.data_dir(create=False) or (
+        paths.CHECKOUT_DIR is not None and session_store.HISTORY_PATH.parent == paths.CHECKOUT_DIR)
 
 
 class _FakeStream:

@@ -25,7 +25,7 @@ if sys.platform == "win32":
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-import launcher  # noqa: E402
+from hexcli import launcher  # noqa: E402
 
 INSTALL_PS1 = REPO / "install.ps1"
 
@@ -52,7 +52,8 @@ def test_install_ps1_parses_as_valid_powershell() -> None:
 
 def test_install_ps1_references_only_existing_repo_files() -> None:
     """Files the installer expects next to itself must actually be in the repo."""
-    for name in ("Hex CLI.cmd", "shellai.example.json", "hex-cli.ico", "launcher.py"):
+    for name in ("Hex CLI.cmd", "shellai.example.json", "hexcli/assets/hexcli.ico",
+                 "hexcli/assets/hexcli.png", "launcher.py", "hexcli/launcher.py"):
         assert (REPO / name).exists(), f"install.ps1 relies on missing repo file: {name}"
 
 
@@ -60,16 +61,18 @@ def test_installer_and_launcher_agree_on_binary_name() -> None:
     """install.ps1 downloads npurun-arm64.exe; the launcher must look for the
     same filename, or the installed binary is invisible at launch."""
     ps_text = INSTALL_PS1.read_text(encoding="utf-8")
-    py_text = (REPO / "launcher.py").read_text(encoding="utf-8")
+    py_text = (REPO / "hexcli" / "launcher.py").read_text(encoding="utf-8")
     assert "npurun-arm64.exe" in ps_text
-    assert "npurun-arm64.exe" in py_text
+    from hexcli import paths
+    assert paths.NPURUN_ASSET == "npurun-arm64.exe"
+    assert "paths.NPURUN_ASSET" in py_text or "npurun-arm64.exe" in py_text
 
 
 def test_installer_and_launcher_agree_on_qairt_layout() -> None:
     """Both sides must validate the same three QAIRT subdirectories — the
     exact trio whose absence causes the silent DLL/stack-overrun crashes."""
     ps_text = INSTALL_PS1.read_text(encoding="utf-8")
-    py_text = (REPO / "launcher.py").read_text(encoding="utf-8")
+    py_text = (REPO / "hexcli" / "launcher.py").read_text(encoding="utf-8")
     for marker in ("aarch64-windows-msvc", "hexagon-v73"):
         assert marker in ps_text, f"install.ps1 no longer checks {marker}"
         assert marker in py_text, f"launcher.py no longer checks {marker}"
@@ -246,7 +249,7 @@ def test_installer_reads_required_npurun_from_launcher() -> None:
     import re
     pattern = r"REQUIRED_NPURUN\s*=\s*\((\d+),\s*(\d+),\s*(\d+)\)"
     ps_text = INSTALL_PS1.read_text(encoding="utf-8")
-    py_text = (REPO / "launcher.py").read_text(encoding="utf-8")
+    py_text = (REPO / "hexcli" / "launcher.py").read_text(encoding="utf-8")
     assert pattern in ps_text, "install.ps1 no longer parses REQUIRED_NPURUN with the shared pattern"
     m = re.search(pattern, py_text)
     assert m, "launcher.py's REQUIRED_NPURUN line no longer has the shape the installer parses"

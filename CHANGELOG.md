@@ -6,6 +6,24 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+### Installable package
+
+`pip install .` now gives a working product, not a REPL without a
+server: `hex` starts the NPU server and the REPL (the launcher moved into
+the package as `hexcli/launcher.py`; `launcher.py` and `Hex CLI.cmd` in a
+checkout are shims), `hexcli` is the REPL alone. Everything the app
+writes lives in `~\.shellai` (`hexcli/paths.py`): the user config, the
+runtime config the launcher writes, the embedding model, the server log,
+the session history (migrated once from a checkout's `history.json`), a
+downloaded npurun. A checkout keeps working, and its old file locations
+are still found as fallbacks. The icon ships inside the package. The
+DirectML and Ollama tiers, dead code since 2.6, are gone from the
+launcher. The installer runs `pip install .`, points the shortcut and the
+Terminal profile at the installed `hex`, and creates the data directory;
+the doctor's fix hints name real commands. The source distribution holds
+the package, the installer and the two documents worth reading; the eval
+harness, research notes and paper stay in the repository.
+
 ## 2.7.1 — 2026-09-12
 
 A release that exists to fix the previous one, so by RELEASING.md's own

@@ -31,6 +31,7 @@ dependencies = [
 dev = ["ruff>=0.4"]
 
 [project.scripts]
+hex = "hexcli.launcher:main"
 hexcli = "hexcli.agent:main"
 
 [project.urls]
@@ -44,12 +45,21 @@ path = "hexcli/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["hexcli"]
 
+# What a person downloads: the package, the installer and its wrappers, the
+# example config, and the two documents worth reading. The eval harness,
+# the research notes and the paper stay in the repository.
 [tool.hatch.build.targets.sdist]
 include = [
     "hexcli/",
-    "evals/",
+    "launcher.py",
+    "shellai.py",
+    "Hex CLI.cmd",
+    "shellai.cmd",
+    "install.ps1",
     "shellai.example.json",
     "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
 ]
 
 [tool.ruff]

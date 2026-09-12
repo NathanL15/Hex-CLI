@@ -103,8 +103,10 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-APP_DIR = Path(__file__).resolve().parent.parent  # project root (hexcli/ is one level down)
-DEFAULT_CONFIG_PATH = APP_DIR / "shellai.json"
+from . import paths  # noqa: E402
+
+APP_DIR = paths.CHECKOUT_DIR or paths.PACKAGE_DIR   # the checkout when there is one; see hexcli.paths
+DEFAULT_CONFIG_PATH = paths.user_config_path()
 HISTORY_PATH = sessions.HISTORY_PATH  # canonical definition: hexcli/sessions.py
 DEFAULT_TIMEOUT_SECONDS = tools.DEFAULT_TIMEOUT_SECONDS
 VERSION = __version__  # written in hexcli/__init__.py and nowhere else
@@ -1826,10 +1828,10 @@ def main() -> int:
         return 0
 
     if args.update:
-        return distribution.update(APP_DIR)
+        return distribution.update()
 
     if args.uninstall:
-        return distribution.uninstall(APP_DIR)
+        return distribution.uninstall()
 
     if args.raw:
         ui.set_color_enabled(False)
@@ -1859,14 +1861,14 @@ def main() -> int:
 
     if args.doctor:
         from . import doctor
-        return doctor.run_doctor(config, APP_DIR)
+        return doctor.run_doctor(config)
 
     if args.print_config:
         print(json.dumps(config, indent=2))
         return 0
 
-    memory.set_local_model_path(APP_DIR / "onnx" / "model_qint8_arm64.onnx")
-    distribution.first_run_check(APP_DIR)
+    memory.set_local_model_path(paths.embedding_model_path())
+    distribution.first_run_check()
 
     query = " ".join(args.query).strip()
 

@@ -51,10 +51,12 @@ cd Hex-CLI
 .\install.ps1
 ```
 
-The installer checks the machine, downloads npurun, the model and the
-small embedding model that semantic memory uses, and runs `--doctor` when
-it finishes. It skips steps that are already done, so run it
-again after fixing anything it reports.
+The installer checks the machine, installs the package (`pip install .`,
+which gives you the `hex` and `hexcli` commands), downloads npurun, the
+model and the small embedding model that semantic memory uses, and runs
+`--doctor` when it finishes. It skips steps that are already done, so run
+it again after fixing anything it reports. Everything it writes for you
+lives in `~\.shellai`.
 
 It cannot download the QAIRT SDK for you, because Qualcomm does not allow
 redistribution. It prints instructions for that step and picks the SDK up on
@@ -67,31 +69,30 @@ folder; `/cwd <path>` moves into a project, whose `AGENTS.md` then applies. Text
 and paste work there as in any other tab. Without Windows Terminal the
 shortcut uses the classic console, where drag-select is off because Hex
 disables QuickEdit (a click would otherwise freeze output); use the window
-menu's Edit, Mark to copy there. To have `Hex CLI.cmd` itself open in
-Windows Terminal, set it as the default terminal in its Settings, Startup.
+menu's Edit, Mark to copy there. To have `hex` itself open in Windows
+Terminal from any shell, set it as the default terminal in its Settings,
+Startup.
 
 ## Usage
 
 ```powershell
-python launcher.py                   # start the NPU server and the REPL
-python -m hexcli.agent               # REPL only, if the server is already running
-python -m hexcli.agent "what changed in this repo today?"
-git diff | python -m hexcli.agent "review this diff"
-echo "summarize README.md" | python -m hexcli.agent
-python -m hexcli.agent --doctor      # check the install
-python -m hexcli.agent --update      # pull latest source and refresh npurun
+hex                                  # start the NPU server and the REPL
+hexcli                               # REPL only, if the server is already running
+hexcli "what changed in this repo today?"
+git diff | hexcli "review this diff"
+echo "summarize README.md" | hexcli
+hexcli --doctor                      # check the install
+hexcli --update                      # refresh npurun (and pull the source in a checkout)
 ```
+
+In a checkout without the package installed, `python launcher.py` and
+`python -m hexcli.agent` are the same two commands.
 
 Piped input is added to the request as context, or used as the request if
 there is no argument. Long input is trimmed to fit the context window.
 When stdout is not a terminal the answer is printed alone, with no
-progress text, so `hex "..." > answer.txt` and `hex "..." | clip` work.
-
-To get a `hex` command, add this to your PowerShell `$PROFILE`:
-
-```powershell
-function hex { python -m hexcli.agent @Args }
-```
+progress text, so `hexcli "..." > answer.txt` and `hexcli "..." | clip`
+work.
 
 ### Commands
 
@@ -194,10 +195,10 @@ doing so.
 
 ## Configuration
 
-Config is optional. `shellai.json` in the home directory and
-`.shellai/config.json` in a project are merged over the defaults, so you
-only need to write the keys you change. `shellai.example.json` lists every
-key with its default.
+Config is optional. `~\.shellai\shellai.json` and `.shellai/config.json`
+in a project are merged over the defaults, so you only need to write the
+keys you change. `shellai.example.json` lists every key with its default,
+and `/setup` writes the file for you.
 
 | Key | Default | Effect |
 |---|---|---|
@@ -239,10 +240,10 @@ that are included in later prompts. `/memory` shows what is stored.
 
 These are the steps `install.ps1` performs. `--doctor` checks each one.
 
-**1. Python packages**
+**1. The package**
 
 ```powershell
-pip install numpy onnxruntime
+pip install .        # from the checkout: the hex and hexcli commands, numpy, onnxruntime
 ```
 
 `ruff` is optional and enables the `lint_code` tool.
@@ -270,7 +271,8 @@ The NPU server is a fork of npurun, at
 [NathanL15/npurun](https://github.com/NathanL15/npurun) on the
 `hexcli-fork` branch. Each release there has a prebuilt `npurun-arm64.exe`.
 Hex CLI expects one specific build, set by `REQUIRED_NPURUN` in
-`launcher.py`. `--doctor` fails on an older build and `--update` replaces it.
+`hexcli/launcher.py`. `--doctor` fails on an older build and `--update`
+replaces it (the download goes to `~\.shellai\bin`).
 
 To build from source, use the fork. It has the prompt cache rewind, usage
 reporting, exact `max_tokens`, and request watchdog that Hex CLI relies on.
@@ -284,11 +286,12 @@ npurun pull qwen3-4b-instruct-2507      # about 2.5 GB
 
 **4. Embedding model**
 
-About 23 MB. Memory is disabled without it.
+About 23 MB, into `~\.shellai\onnx`. Memory is disabled without it.
 
 ```powershell
-curl -L -o onnx/model_qint8_arm64.onnx https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx
-curl -L -o onnx/tokenizer.json https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
+mkdir ~\.shellai\onnx
+curl -L -o ~\.shellai\onnx\model_qint8_arm64.onnx https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx
+curl -L -o ~\.shellai\onnx\tokenizer.json https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
 ```
 
 ## Limitations

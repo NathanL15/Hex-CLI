@@ -28,8 +28,9 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent.parent  # project root
 sys.path.insert(0, str(APP_DIR))
 import hexcli.agent as sa  # noqa: E402
+from hexcli import paths  # noqa: E402
 
-CONFIG_PATH  = APP_DIR / "shellai_npurun.json"
+CONFIG_PATH  = paths.runtime_config_path()
 RESULTS_PATH = Path(__file__).resolve().parent / "results" / "multiturn_results.json"
 SHELL_EXE    = sa.detect_shell("")
 MAX_STEPS    = 12   # per turn

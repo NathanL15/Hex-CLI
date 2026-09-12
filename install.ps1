@@ -117,18 +117,29 @@ if (-not $pythonExe) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. pip dependencies (optional extras — the core agent is stdlib-only)
+# 3. The package: `pip install .` gives the `hex` and `hexcli` commands and
+#    pulls numpy + onnxruntime (memory's embedder). A checkout keeps working
+#    through Hex CLI.cmd / launcher.py even if this step fails.
 # ---------------------------------------------------------------------------
-Write-Step "Installing optional Python dependencies (numpy, onnxruntime) ..."
+Write-Step "Installing the hexcli package (pip install .) ..."
 # A native command's nonzero exit does NOT throw, even under
 # $ErrorActionPreference = "Stop", so a try/catch here is dead code that
 # reports a failed pip install as success. Check $LASTEXITCODE.
-& $pythonExe -m pip install --quiet numpy onnxruntime
+$hexExe = $null
+& $pythonExe -m pip install --quiet $InstallDir
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "Dependencies installed."
+    $scriptsDir = & $pythonExe -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+    $candidate = Join-Path $scriptsDir "hex.exe"
+    if (Test-Path $candidate) { $hexExe = $candidate }
+    Write-Ok "Package installed$(if ($hexExe) { ": $hexExe" })."
 } else {
-    Write-Warn "pip install failed (exit $LASTEXITCODE)."
-    Write-Warn "The agent still runs without them (semantic memory stays disabled)."
+    Write-Warn "pip install failed (exit $LASTEXITCODE); trying the two dependencies alone."
+    & $pythonExe -m pip install --quiet numpy onnxruntime
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Dependencies installed (the checkout runs through Hex CLI.cmd)."
+    } else {
+        Write-Warn "pip install failed (exit $LASTEXITCODE). The agent still runs without them (semantic memory stays disabled)."
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -309,19 +320,20 @@ if (Test-Path $modelDir) {
 # ---------------------------------------------------------------------------
 # 7. Config scaffold
 # ---------------------------------------------------------------------------
-Write-Step "Creating .shellai/ scaffold ..."
-$shellaiDir = Join-Path $InstallDir ".shellai"
-foreach ($sub in @("", "logs", "checkpoints")) {
+Write-Step "Creating the data directory (~\.shellai) ..."
+$shellaiDir = Join-Path $env:USERPROFILE ".shellai"   # hexcli.paths.data_dir()
+foreach ($sub in @("", "logs", "chatlog")) {
     $p = Join-Path $shellaiDir $sub
     if (-not (Test-Path $p)) { New-Item -ItemType Directory -Path $p | Out-Null }
 }
-Write-Ok ".shellai/ ready."
+Write-Ok "$shellaiDir ready."
 
 $configSrc  = Join-Path $InstallDir "shellai.example.json"
-$configDest = Join-Path $InstallDir "shellai.json"
-if ((Test-Path $configSrc) -and -not (Test-Path $configDest)) {
+$configDest = Join-Path $shellaiDir "shellai.json"
+$configOld  = Join-Path $InstallDir "shellai.json"   # where older versions kept it
+if ((Test-Path $configSrc) -and -not (Test-Path $configDest) -and -not (Test-Path $configOld)) {
     Copy-Item $configSrc $configDest
-    Write-Ok "Created shellai.json from the generated template."
+    Write-Ok "Created $configDest from the template."
 }
 
 # ---------------------------------------------------------------------------
@@ -330,7 +342,7 @@ if ((Test-Path $configSrc) -and -not (Test-Path $configDest)) {
 # said so, after the fact.
 # ---------------------------------------------------------------------------
 Write-Step "Checking the embedding model for memory ..."
-$onnxDir   = Join-Path $InstallDir "onnx"
+$onnxDir   = Join-Path $env:USERPROFILE ".shellai\onnx"   # hexcli.paths.embedding_dir(for_download=True)
 $embedBase = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main"
 $embedFiles = @(
     @{ name = "model_qint8_arm64.onnx"; url = "$embedBase/onnx/model_qint8_arm64.onnx"; min = 1000000 },
@@ -350,9 +362,9 @@ foreach ($f in $embedFiles) {
     }
 }
 if ($embedOk) {
-    Write-Ok "Embedding model ready (onnx/)."
+    Write-Ok "Embedding model ready ($onnxDir)."
 } else {
-    Write-Warn "Semantic memory stays off until both files are in onnx/; --doctor prints the download commands."
+    Write-Warn "Semantic memory stays off until both files are in $onnxDir; --doctor prints the download commands."
 }
 
 # ---------------------------------------------------------------------------
@@ -363,10 +375,13 @@ if (-not $NoStartMenu) {
     $startMenu  = [System.Environment]::GetFolderPath("Programs")
     $lnkPath    = Join-Path $startMenu "Hex CLI.lnk"
     $targetCmd  = Join-Path $InstallDir "Hex CLI.cmd"
-    if (Test-Path $targetCmd) {
+    # The installed `hex` command when pip put it there; the checkout's
+    # wrapper otherwise. Both start the server and the REPL.
+    $launch = if ($hexExe -and (Test-Path $hexExe)) { "`"$hexExe`"" } else { "cmd.exe /c `"$targetCmd`"" }
+    if (($hexExe -and (Test-Path $hexExe)) -or (Test-Path $targetCmd)) {
         try {
-            $icon    = Join-Path $InstallDir "assets\hexcli.ico"
-            $iconPng = Join-Path $InstallDir "assets\hexcli.png"
+            $icon    = Join-Path $InstallDir "hexcli\assets\hexcli.ico"
+            $iconPng = Join-Path $InstallDir "hexcli\assets\hexcli.png"
             # Windows Terminal when it is installed: text selection works
             # there whatever the console mode (Hex turns QuickEdit off, which
             # kills drag-select in the classic console), the status bar's
@@ -386,7 +401,7 @@ if (-not $NoStartMenu) {
                     $fragment = @{
                         profiles = @(@{
                             name                     = "Hex CLI"
-                            commandline              = "cmd.exe /c `"$targetCmd`""
+                            commandline              = $launch
                             # Start where a shell would, not inside the Hex CLI
                             # checkout: its AGENTS.md would otherwise ride along
                             # into every casual session's prompt.
@@ -414,7 +429,7 @@ if (-not $NoStartMenu) {
                 $shortcut.Arguments  = '--size 92,28 -p "Hex CLI"'
             } else {
                 $shortcut.TargetPath = "$env:SystemRoot\System32\conhost.exe"
-                $shortcut.Arguments  = "cmd.exe /c `"$targetCmd`""
+                $shortcut.Arguments  = $launch
             }
             $shortcut.WorkingDirectory = $env:USERPROFILE   # a shell's start, not the checkout
             $shortcut.Description      = "Hex CLI - local NPU terminal agent"
@@ -425,7 +440,7 @@ if (-not $NoStartMenu) {
             Write-Warn "Could not create shortcut: $_"
         }
     } else {
-        Write-Warn "'Hex CLI.cmd' not found at $InstallDir - shortcut skipped."
+        Write-Warn "Neither the hex command nor 'Hex CLI.cmd' was found - shortcut skipped."
     }
 }
 
@@ -467,9 +482,9 @@ if ($remaining.Count -gt 0) {
     } else {
         Write-Host "  Everything is in place. Start Hex CLI from the Start Menu, or run:" -ForegroundColor White
     }
-    Write-Host "    python launcher.py"
+    if ($hexExe) { Write-Host "    hex" } else { Write-Host "    python launcher.py" }
     if (-not $embedOk) {
-        Write-Host "  Semantic memory is off until the embedding model is in onnx/ (see above)." -ForegroundColor Yellow
+        Write-Host "  Semantic memory is off until the embedding model is in $onnxDir (see above)." -ForegroundColor Yellow
     }
 }
 Write-Host ""

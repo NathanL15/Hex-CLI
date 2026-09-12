@@ -67,16 +67,23 @@ def check_packages() -> list[Check]:
     return out
 
 
-def check_embedding_model(app_dir: Path) -> list[Check]:
+def check_embedding_model(app_dir: Path | None = None) -> list[Check]:
     """The silent-failure case that motivated this whole command."""
-    model = app_dir / "onnx" / "model_qint8_arm64.onnx"
-    tok = app_dir / "onnx" / "tokenizer.json"
+    from . import paths
+    if app_dir is not None:   # an explicit location (tests, a custom layout)
+        model = app_dir / "onnx" / paths.EMBEDDING_MODEL_FILE
+        tok = app_dir / "onnx" / paths.EMBEDDING_TOKENIZER_FILE
+        dest = app_dir / "onnx"
+    else:
+        model = paths.embedding_model_path()
+        tok = paths.embedding_tokenizer_path()
+        dest = paths.embedding_dir(for_download=True)
     fix = (
-        "Download both into onnx/ :\n"
-        "      curl -L -o onnx/model_qint8_arm64.onnx https://huggingface.co/"
-        "sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx\n"
-        "      curl -L -o onnx/tokenizer.json https://huggingface.co/"
-        "sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+        f"Download both into {dest} :\n"
+        f"      curl -L -o \"{dest / paths.EMBEDDING_MODEL_FILE}\" "
+        f"{paths.EMBEDDING_BASE_URL}/onnx/{paths.EMBEDDING_MODEL_FILE}\n"
+        f"      curl -L -o \"{dest / paths.EMBEDDING_TOKENIZER_FILE}\" "
+        f"{paths.EMBEDDING_BASE_URL}/{paths.EMBEDDING_TOKENIZER_FILE}"
     )
     checks = []
     if model.exists() and model.stat().st_size > 1_000_000:
@@ -92,7 +99,7 @@ def check_embedding_model(app_dir: Path) -> list[Check]:
 
 def _launcher():
     try:
-        import launcher
+        from . import launcher
         return launcher
     except Exception:
         return None
@@ -142,7 +149,7 @@ def check_npurun() -> list[Check]:
         path = Path(exe) if exe else (local if local.exists() else None)
     if path is None:
         return [Check("npurun", FAIL, "binary not found",
-                      f"python -m hexcli.agent --update\n{_NPURUN_RELEASES}")]
+                      f"hexcli --update\n{_NPURUN_RELEASES}")]
     checks = [Check("npurun", PASS, str(path))]
     if ln is not None:
         version = ln._npurun_version(path)
@@ -151,7 +158,7 @@ def check_npurun() -> list[Check]:
         if ln.npurun_outdated(version=version) is not None:
             checks.append(Check("npurun version", FAIL,
                                 f"{ver}; {need} required",
-                                "python -m hexcli.agent --update"))
+                                "hexcli --update"))
         else:
             checks.append(Check("npurun version", PASS, ver))
         if ln.REWIND_ROOT is not None:
@@ -226,11 +233,11 @@ def check_workspace() -> list[Check]:
     return checks
 
 
-def run_doctor(config: dict[str, Any], app_dir: Path) -> int:
+def run_doctor(config: dict[str, Any], app_dir: Path | None = None) -> int:
     """Print the full report. Returns 1 if any check FAILed."""
     checks: list[Check] = [check_python()]
     checks += check_packages()
-    checks += check_embedding_model(app_dir)
+    checks += check_embedding_model()
     checks += check_qairt()
     checks += check_npurun()
     checks.append(check_server(config))

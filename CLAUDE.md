@@ -49,14 +49,14 @@ Hard numbers that shape every decision:
 | Canonical clone | `C:\Users\Natha\Documents\GitHub\Hex-CLI` (origin `NathanL15/Hex-CLI`, branch `main`) |
 | Old clone (stale, do not develop here) | `C:\Users\Natha\local-shell-ai` (at 2.2.0) |
 | npurun fork source | `C:\Users\Natha\local-shell-ai\npurun`, branch `hexcli-fork`; remotes `origin` = bpbonker/npurun (upstream), `fork` = NathanL15/npurun (releases live here) |
-| Production npurun binary | `~/.cargo/bin/npurun.exe` (0.2.3 = the pin). `<repo>/npurun-arm64.exe` is where the installer/`--update` would put a download; currently absent |
+| Production npurun binary | `~/.cargo/bin/npurun.exe` (0.2.3 = the pin). `~/.shellai/bin/npurun-arm64.exe` is where `--update` puts a download (a checkout's `npurun-arm64.exe` is still found); currently absent |
 | QAIRT SDKs | `C:\Qualcomm\AIStack\QAIRT_2.47.0` and `QAIRT_2.50.0`. Launcher picks the newest valid one; 2.50 enables Rewind |
 | Model bundle | `%LOCALAPPDATA%\npurun\models\qwen3-4b-instruct-2507` (also `-8k` and `qwen3-8b`, both rejected) |
-| Embedding model (memory) | `<repo>/onnx/model_qint8_arm64.onnx` + `tokenizer.json`, gitignored, per machine |
-| Runtime config on the NPU path | `<repo>/shellai_npurun.json` (gitignored, written by the launcher) |
-| Per-user config | `~/shellai.json`; per-project `.shellai/config.json` deep-merged over it |
-| Session state | `<cwd>/.shellai/` (audit.log, logs/, checkpoints/, vector_store/, shellai.lock) and `~/.shellai/` (chatlog/, input_history, commands/) |
-| Server log | `<repo>/npurun_server.log`, truncated on every start |
+| Embedding model (memory) | `~/.shellai/onnx/model_qint8_arm64.onnx` + `tokenizer.json` (the installer downloads them; a checkout's `onnx/` is still found). All of these locations come from `hexcli/paths.py` (2026-09-12 packaging): the data directory is `~/.shellai` (`HEXCLI_HOME` overrides it), a checkout is recognised by `pyproject.toml` next to the package and only supplies fallbacks |
+| Runtime config on the NPU path | `~/.shellai/shellai_npurun.json` (written by the launcher; a checkout's copy is used if only that exists) |
+| Per-user config | `~/.shellai/shellai.json`; per-project `.shellai/config.json` deep-merged over it |
+| Session state | `<cwd>/.shellai/` (audit.log, logs/, vector_store/, shellai.lock) and `~/.shellai/` (history.json, chatlog/, input_history, commands/, global_vector_store/) |
+| Server log | `~/.shellai/npurun_server.log`, truncated on every start |
 | Eval results | `evals/results/` (gitignored). Gate baselines: `ask_rule_r5_20260905.json` + `baseline_20260905.json`; scoreboard `LATEST.md` |
 | Study data | `docs/backend_study/{data,data_npu_ab}/` (gitignored), summaries tracked |
 | Claude Code memory for this project | `~/.claude/projects/C--Users-Natha/memory/` (hexcli_*.md, project_local_shell_ai.md) — historical detail beyond this file |
@@ -65,11 +65,14 @@ Hard numbers that shape every decision:
 
 ## 3. Runtime stack, end to end
 
-`Hex CLI.cmd` / `shellai.cmd` → `python launcher.py` (ignores argv) →
-`python shellai.py --config shellai_npurun.json` → `hexcli.agent.main()`.
+`hex` (console script) / `Hex CLI.cmd` / `python launcher.py` (a shim) →
+`hexcli.launcher.main()` (ignores argv) →
+`python -m hexcli.agent --config ~/.shellai/shellai_npurun.json` →
+`hexcli.agent.main()`. `hexcli` is the REPL alone; `pip install .` provides
+both commands (`pyproject.toml [project.scripts]`).
 
-`launcher.py` does, in order: find npurun (`~/.cargo/bin` first, then
-`<repo>/npurun-arm64.exe`, then PATH; a candidate older than
+`hexcli/launcher.py` does, in order: find npurun (`~/.cargo/bin` first, then
+`~/.shellai/bin/npurun-arm64.exe` or a checkout's, then PATH; a candidate older than
 `REQUIRED_NPURUN` yields to a newer one) → find QAIRT → decide the Rewind
 runtime (QAIRT ≥ 2.50 AND npurun ≥ 0.2.0) → build the server env → start
 `npurun serve --model qwen3-4b-instruct-2507 --bind 127.0.0.1:11435`
@@ -95,7 +98,7 @@ costs a rebuild). Other fork knobs exist (`NPURUN_HTP_THREADS`,
 `NPURUN_HTP_HMX_TIMEOUT_US`, `NPURUN_INPUT_BUDGET`, `NPURUN_OUTPUT_RESERVE`,
 `NPURUN_REWIND_MAX_CACHED`) but the launcher does not set them.
 
-**Fresh server restart** (there is no `--restart` flag; `launcher.py` alone
+**Fresh server restart** (there is no `--restart` flag; the launcher alone
 will not restart a running server):
 
 ```powershell

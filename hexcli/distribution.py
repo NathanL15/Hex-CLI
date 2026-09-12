@@ -54,7 +54,7 @@ def _download(url: str, dest: Path) -> None:
 
 def _launcher():
     try:
-        import launcher
+        from . import launcher
         return launcher
     except Exception:
         return None
@@ -94,16 +94,22 @@ def _git_pull(install_dir: Path) -> bool:
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def update(install_dir: Path) -> int:
+def update(install_dir: Path | None = None) -> int:
     """Pull the latest source and refresh the npurun binary.
 
     Returns an exit code (0 = success, 1 = partial failure, 2 = hard failure).
     """
+    from . import paths
     print("\n  Hex CLI update\n")
 
-    # 1. Update Python source via git.
-    _print("Pulling source...")
-    _git_pull(install_dir)
+    # 1. Update the Python source: git in a checkout, pip for an installed package.
+    install_dir = install_dir or paths.CHECKOUT_DIR
+    if install_dir is not None and (install_dir / ".git").exists():
+        _print("Pulling source...")
+        _git_pull(install_dir)
+    else:
+        _print("Installed as a package; update the code with:\n"
+               "    pip install --upgrade git+https://github.com/NathanL15/Hex-CLI")
 
     # 2. Fetch the fork's latest release metadata from GitHub.
     _print("Checking the latest npurun release...")
@@ -133,8 +139,10 @@ def update(install_dir: Path) -> int:
         _print(f"{tag} has no {_NPURUN_ASSET} asset; binary update skipped.")
         return 0
 
-    existing = install_dir / _NPURUN_ASSET
-    dest_tmp = install_dir / f"{_NPURUN_ASSET}.tmp"
+    bin_dir = paths.npurun_bin_dir()
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    existing = bin_dir / _NPURUN_ASSET
+    dest_tmp = bin_dir / f"{_NPURUN_ASSET}.tmp"
     _print(f"Downloading {_NPURUN_ASSET}...")
     try:
         _download(url, dest_tmp)
@@ -149,8 +157,9 @@ def update(install_dir: Path) -> int:
     return 0
 
 
-def uninstall(install_dir: Path) -> int:
+def uninstall(install_dir: Path | None = None) -> int:
     """Remove the Start Menu shortcut and optionally purge user data."""
+    from . import paths
     print("\n  Hex CLI uninstall\n")
 
     # 1. Remove Start Menu shortcut.
@@ -174,12 +183,13 @@ def uninstall(install_dir: Path) -> int:
         except OSError as exc:
             _print(f"Could not remove the Windows Terminal profile: {exc}")
 
-    # 2. Ask whether to purge per-user data.
-    shellai_dir = install_dir / ".shellai"
+    # 2. Ask whether to purge per-user data (~/.shellai: sessions, memory,
+    #    chat logs, the runtime config, the embedding model).
+    shellai_dir = paths.data_dir(create=False)
     if shellai_dir.exists():
         try:
             answer = input(
-                "\n  Remove .shellai/ with its sessions and memory? [y/N] "
+                f"\n  Remove {shellai_dir} with its sessions and memory? [y/N] "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = "n"
@@ -188,37 +198,37 @@ def uninstall(install_dir: Path) -> int:
                 shutil.rmtree(shellai_dir)
                 _print(f"Removed: {shellai_dir}")
             except OSError as exc:
-                _print(f"Could not remove .shellai/: {exc}")
+                _print(f"Could not remove {shellai_dir}: {exc}")
         else:
-            _print(".shellai/ kept.")
+            _print(f"{shellai_dir} kept.")
 
-    # 3. Remind user to remove the clone / pip package.
-    if (install_dir / "pyproject.toml").exists():
-        _print("\nTo complete uninstall:  pip uninstall hexcli")
-    else:
-        _print(f"\nTo complete uninstall, delete the install directory:\n    Remove-Item -Recurse \"{install_dir}\"")
+    # 3. The code itself.
+    checkout = install_dir or paths.CHECKOUT_DIR
+    _print("\nTo complete uninstall:  pip uninstall hexcli")
+    if checkout is not None:
+        _print(f"and delete the checkout:  Remove-Item -Recurse \"{checkout}\"")
 
     return 0
 
 
-def first_run_check(install_dir: Path) -> None:
+def first_run_check(install_dir: Path | None = None) -> None:
     """Print first-run setup hints when critical dependencies are missing.
 
     Runs once per process on every `hexcli` invocation, but prints nothing
     when everything looks healthy — zero noise for existing installs.
     """
+    from . import paths
     hints: list[str] = []
 
-    # npurun on PATH or in install_dir.
-    npurun_on_path = shutil.which("npurun") or shutil.which("npurun.exe")
-    npurun_local = (install_dir / "npurun-arm64.exe").exists()
-    if not npurun_on_path and not npurun_local:
-        hints.append("  npurun not found. Run:  python -m hexcli.agent --update")
+    # npurun: the launcher's own search (source build, downloaded binary, PATH).
+    ln = _launcher()
+    found = ln.find_npurun_exe() if ln is not None else None
+    if found is None and not (shutil.which("npurun") or shutil.which("npurun.exe")):
+        hints.append("  npurun not found. Run:  hexcli --update")
 
     # ONNX embedding model for memory.
-    onnx_model = install_dir / "onnx" / "model_qint8_arm64.onnx"
-    if not onnx_model.exists():
-        hints.append("  Embedding model missing; memory is off. python -m hexcli.agent --doctor prints the download commands.")
+    if not paths.embedding_model_path().exists():
+        hints.append("  Embedding model missing; memory is off. hexcli --doctor prints the download commands.")
 
     if hints:
         print("\n  First-run setup", flush=True)

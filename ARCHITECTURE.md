@@ -162,7 +162,7 @@ vector database, just a `.npz` array and a `.json` metadata sidecar:
 ```
 
 **Embedding model:** `sentence-transformers/all-MiniLM-L6-v2`, exported to an ARM64-quantized
-ONNX graph (`onnx/model_qint8_arm64.onnx`, int8, ~23 MB) and run via `onnxruntime` on CPU.
+ONNX graph (`~/.shellai/onnx/model_qint8_arm64.onnx`, int8, ~23 MB, downloaded by the installer) and run via `onnxruntime` on CPU.
 This wasn't the first choice — the natural move would be to call the backend's own embeddings
 endpoint — but neither the Ollama nor the npurun backend currently exposes a working
 embeddings API, so a small standalone ONNX model running on CPU was the pragmatic substitute.
