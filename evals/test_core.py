@@ -1279,6 +1279,28 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
         ui._COLOR_ON = orig
 
 
+def test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour() -> None:
+    from hexcli import ui
+    orig = ui._COLOR_ON
+    ui.set_color_enabled(True)
+    try:
+        row = ui.user_row("> hi", 10)
+        assert row.startswith("\033[48;5;237m> hi") and row.endswith("      \033[0m"), repr(row)
+        assert ui._visible_cells(row) == 10
+        # Wider than the width: band on the text only, no negative padding.
+        assert ui.user_row("> " + "x" * 20, 10) == "\033[48;5;237m> " + "x" * 20 + "\033[0m"
+        echo = ui.user_echo("one\ntwo", 12)
+        assert echo.count("\n") == 1 and "...  two" in echo, repr(echo)
+    finally:
+        ui.set_color_enabled(orig)
+    ui.set_color_enabled(False)
+    try:
+        assert ui.user_row("> hi", 10) == "> hi"
+        assert ui.user_echo("one\ntwo", 12) == "> one\n...  two"
+    finally:
+        ui.set_color_enabled(orig)
+
+
 def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
     """The Result box repeats the final message. When the final model call
     streamed that exact text (whitespace aside) the REPL skips the box; a
@@ -1323,6 +1345,7 @@ def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
 
 
 TESTS = [
+    test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour,
     test_result_box_is_skipped_when_the_answer_already_streamed,
     test_redraw_transcript_clears_and_reprints_the_conversation,
     test_margin_stream_pads_every_row_and_delegates_the_rest,

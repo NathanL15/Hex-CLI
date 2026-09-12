@@ -497,6 +497,30 @@ def console_zoom(delta: int) -> int | None:
     return new
 
 
+_USER_BG = "\033[48;5;237m"   # a shade above One Half Dark's background; subtle, not a box
+
+
+def user_row(row: str, width: int) -> str:
+    """One physical row of the user's echoed message with a light background
+    band across `width` cells, the way Claude Code marks the user's turns
+    so the eye finds turn boundaries while scanning. Plain when colour is
+    off. Rows already wider than `width` (terminal auto-wrap) get the band
+    on their text only."""
+    if not _COLOR_ON:
+        return row
+    fill = max(0, width - _visible_cells(row))
+    return f"{_USER_BG}{row}{' ' * fill}{C.RESET}"
+
+
+def user_echo(content: str, width: int) -> str:
+    """The full echo for a stored user message: `> first line`, then
+    continuation rows prefixed like the editor's, each on a band."""
+    lines = content.split("\n") or [""]
+    rows = [f"{C.BOLD}>{C.RESET}{_USER_BG if _COLOR_ON else ''} {lines[0]}"]
+    rows += [f"...  {line}" for line in lines[1:]]
+    return "\n".join(user_row(r, width) for r in rows)
+
+
 def redraw_transcript(session: dict[str, Any]) -> None:
     """Clear the screen and reprint the conversation at the current width.
 
@@ -512,7 +536,7 @@ def redraw_transcript(session: dict[str, Any]) -> None:
         role, content = msg.get("role"), str(msg.get("content", ""))
         if role == "user":
             print()
-            print(f"{C.BOLD}>{C.RESET} {content}")
+            print(user_echo(content, _usable_width()))
         elif role == "assistant":
             render_result("Result", content)
 

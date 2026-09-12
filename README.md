@@ -188,6 +188,7 @@ key with its default.
 | `rich_input` | `true` | history, Tab completion, multi-line paste |
 | `side_padding` | `2` | left margin in columns |
 | `status_bar` | `true` | input box and status line at the bottom |
+| `user_highlight` | `true` | light band behind your messages in the transcript |
 | `show_diffs` | `true` | print a diff after each file change |
 | `workspace_write_scope` | `true` | keep writes inside the working directory |
 | `autopilot_confirm_sensitive` | `true` | ask before touching keys and credentials |

@@ -25,6 +25,7 @@
   "input_history_file": "",
   "input_history_limit": 500,
   "status_bar": true,
+  "user_highlight": true,
   "require_verification": true,
   "workspace_write_scope": true,
   "workspace_write_allow": [],

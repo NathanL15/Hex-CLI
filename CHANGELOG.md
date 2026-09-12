@@ -64,6 +64,15 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Your messages get a light band
+
+The echoed `> question` rows carry a subtle background band across the
+usable width, the way Claude Code marks the user's turns, so turn
+boundaries are easy to find while scanning. Continuation rows of a
+multi-line message are banded too, and the transcript redraw after a
+zoom or `/resume` uses the same style. `user_highlight: false` turns it
+off; it is never applied without colour or outside the boxed layout.
+
 ### The conversation grows upward from the box
 
 The conversation is anchored just above the input box, like a chat window:

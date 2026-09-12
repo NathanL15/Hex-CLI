@@ -64,6 +64,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Input box pinned at the bottom with a status line under it (context
     # fill, NPU load, memory in use). Needs rich_input and a console.
     "status_bar": True,
+    # Light background band behind your echoed messages in the transcript.
+    "user_highlight": True,
     # After an unverified file mutation, deflect the first "done" once and ask
     # the agent to check its work. (Was read from config but declared nowhere,
     # so `/config require_verification false` reported an unknown key.)
@@ -180,6 +182,7 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "input_history_file":             "str",
     "input_history_limit":            "int",
     "status_bar":                     "bool",
+    "user_highlight":                 "bool",
     "telemetry_enabled":              "bool",
     "chat_log_enabled":               "bool",
     "chat_log_dir":                   "str",

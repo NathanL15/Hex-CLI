@@ -443,6 +443,7 @@ class LineEditor:
         on_resize: Callable[[], Any] | None = None,
         chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
         placeholder: str = "",
+        finish_style: Callable[[str, int], str] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -469,6 +470,10 @@ class LineEditor:
         # Dim hint shown after the prompt while nothing is typed; never part
         # of the finished line.
         self.placeholder = placeholder
+        # Applied to each physical row of the finished line as it is left on
+        # screen (row text, usable width) -> styled row; the caller uses it
+        # to put a light band behind the user's message.
+        self.finish_style = finish_style
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
@@ -605,6 +610,8 @@ class LineEditor:
         the conversation anchored above the input, so the echo is already
         in place."""
         text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False)
+        if self.finish_style is not None:
+            text = "\n".join(self.finish_style(row, self.usable) for row in text.split("\n"))
         self._write(self._move_to_anchor() + "\033[J" + text + "\n")
         self._rendered_rows = 0
         self._cursor_row = 0
@@ -903,6 +910,7 @@ def make_reader(
     chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
     placeholder: str = "",
     write: Callable[[str], None] | None = None,
+    finish_style: Callable[[str, int], str] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
@@ -933,5 +941,6 @@ def make_reader(
         chrome=chrome,
         placeholder=placeholder,
         write=write,
+        finish_style=finish_style,
     )
     return editor.read

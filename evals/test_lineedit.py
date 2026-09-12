@@ -758,6 +758,24 @@ def test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom() -> None:
     assert "\033[2J\033[H\n" not in "".join(out), "no chrome: no padding"
 
 
+def test_finish_style_wraps_each_row_of_the_finished_line() -> None:
+    """The caller can style the echoed line row by row (the user-message
+    band); the chrome and the live renders are untouched."""
+    from hexcli import lineedit as le
+    seen = []
+
+    def style(row: str, width: int) -> str:
+        seen.append((row, width))
+        return f"[{row}]"
+
+    ed, out = editor(typed("ab") + [le.NEWLINE] + typed("c") + [le.ENTER], width=40,
+                     chrome=lambda w: (["top"], ["bot"]), finish_style=style)
+    assert ed.read("> ") == "ab\nc"
+    assert out[-1].endswith("[> ab]\n[...  c]\n"), repr(out[-1])
+    assert seen == [("> ab", 40), ("...  c", 40)], seen
+    assert "[top]" not in "".join(out), "chrome rows are never styled"
+
+
 def test_interrupt_drops_the_chrome_and_keeps_the_typed_text() -> None:
     from hexcli import lineedit as le
     ed, out = editor(typed("ab") + [le.INTERRUPT], chrome=lambda w: (["top"], ["status"]))
@@ -849,6 +867,7 @@ TESTS = [
     test_idle_tick_repaints_only_when_the_chrome_changed,
     test_resize_token_clears_only_the_box_rows_and_calls_on_resize,
     test_clear_screen_with_chrome_pads_the_box_back_to_the_bottom,
+    test_finish_style_wraps_each_row_of_the_finished_line,
     test_interrupt_drops_the_chrome_and_keeps_the_typed_text,
 ]
 

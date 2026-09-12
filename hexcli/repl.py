@@ -399,6 +399,8 @@ def run_repl(config: dict[str, Any]) -> int:
         # The editor draws its own rows straight to the console, under the
         # live area's wrapper: those cursor moves are not transcript output.
         write=(lambda s: (live._inner.write(s), live._inner.flush()) and None) if live is not None else None,
+        # A light band behind the echoed message marks the user's turns.
+        finish_style=ui.user_row if (live is not None and config.get("user_highlight", True)) else None,
     ) or (lambda p: input(p))
 
     while True:
