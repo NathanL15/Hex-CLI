@@ -66,12 +66,24 @@ Write-Host ""
 # 1. Architecture
 # ---------------------------------------------------------------------------
 Write-Step "Checking CPU architecture ..."
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
-$isArm64 = ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64)
+# The machine's architecture, not the shell's: an x64 PowerShell (a Git Bash
+# or an x64 VS Code terminal on an ARM64 laptop) would otherwise warn that
+# the NPU path will not work on a machine where it does.
+$isArm64 = $false
+$archText = ""
+try {
+    $cpuArch = (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1).Architecture
+    $isArm64 = ($cpuArch -eq 12)   # 12 = ARM64 in Win32_Processor
+    $archText = "Win32_Processor.Architecture=$cpuArch"
+} catch {
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    $isArm64 = ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64)
+    $archText = "$arch"
+}
 if ($isArm64) {
     Write-Ok "ARM64 confirmed."
 } else {
-    Write-Warn "This machine reports architecture '$arch'."
+    Write-Warn "This machine reports architecture '$archText'."
     Write-Warn "Hex CLI targets Snapdragon X Elite ARM64; the NPU path will not work here."
 }
 
@@ -145,22 +157,33 @@ function Get-QairtVersionKey {
     return [version]::new($digits[0], $digits[1], $digits[2], $digits[3])
 }
 
+# Same rule as the launcher: the newest valid install under the stack folder
+# wins, so an old QNN_SDK_ROOT (pinned before 2.50 shipped) does not hide a
+# newer SDK. QNN_SDK_ROOT is used only when nothing newer is installed.
 $qairtRoot = $null
+$newest = $null
+$stack = "C:\Qualcomm\AIStack"
+if (Test-Path $stack) {
+    $cands = Get-ChildItem $stack -Directory -Filter "QAIRT_*" -ErrorAction SilentlyContinue |
+             Sort-Object { Get-QairtVersionKey $_.Name } -Descending
+    foreach ($c in $cands) {
+        if (Test-QairtRoot $c.FullName) { $newest = $c.FullName; break }
+    }
+}
 if ($env:QNN_SDK_ROOT -and (Test-QairtRoot $env:QNN_SDK_ROOT)) {
-    $qairtRoot = $env:QNN_SDK_ROOT
+    $envKey = Get-QairtVersionKey (Split-Path -Leaf $env:QNN_SDK_ROOT)
+    if ($newest -and ((Get-QairtVersionKey (Split-Path -Leaf $newest)) -gt $envKey)) {
+        $qairtRoot = $newest
+        Write-Warn "QNN_SDK_ROOT points at '$env:QNN_SDK_ROOT'; the launcher uses the newer $(Split-Path -Leaf $newest)."
+    } else {
+        $qairtRoot = $env:QNN_SDK_ROOT
+    }
 } else {
     if ($env:QNN_SDK_ROOT) {
         Write-Warn "QNN_SDK_ROOT is set to '$env:QNN_SDK_ROOT' but lacks the expected"
         Write-Warn "lib/bin aarch64-windows-msvc and lib/hexagon-v73/unsigned layout - ignoring it."
     }
-    $stack = "C:\Qualcomm\AIStack"
-    if (Test-Path $stack) {
-        $cands = Get-ChildItem $stack -Directory -Filter "QAIRT_*" -ErrorAction SilentlyContinue |
-                 Sort-Object { Get-QairtVersionKey $_.Name } -Descending
-        foreach ($c in $cands) {
-            if (Test-QairtRoot $c.FullName) { $qairtRoot = $c.FullName; break }
-        }
-    }
+    $qairtRoot = $newest
 }
 
 if ($qairtRoot) {
@@ -302,6 +325,37 @@ if ((Test-Path $configSrc) -and -not (Test-Path $configDest)) {
 }
 
 # ---------------------------------------------------------------------------
+# 7b. Embedding model for semantic memory (MiniLM, ~23 MB). Without these two
+# files memory is silently off; the doctor used to be the only thing that
+# said so, after the fact.
+# ---------------------------------------------------------------------------
+Write-Step "Checking the embedding model for memory ..."
+$onnxDir   = Join-Path $InstallDir "onnx"
+$embedBase = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main"
+$embedFiles = @(
+    @{ name = "model_qint8_arm64.onnx"; url = "$embedBase/onnx/model_qint8_arm64.onnx"; min = 1000000 },
+    @{ name = "tokenizer.json";         url = "$embedBase/tokenizer.json";             min = 1000 }
+)
+if (-not (Test-Path $onnxDir)) { New-Item -ItemType Directory -Path $onnxDir | Out-Null }
+$embedOk = $true
+foreach ($f in $embedFiles) {
+    $dest = Join-Path $onnxDir $f.name
+    if ((Test-Path $dest) -and ((Get-Item $dest).Length -ge $f.min)) { continue }
+    try {
+        Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
+        if ((Get-Item $dest).Length -lt $f.min) { throw "download too small" }
+    } catch {
+        $embedOk = $false
+        Write-Warn "Could not download $($f.name): $_"
+    }
+}
+if ($embedOk) {
+    Write-Ok "Embedding model ready (onnx/)."
+} else {
+    Write-Warn "Semantic memory stays off until both files are in onnx/; --doctor prints the download commands."
+}
+
+# ---------------------------------------------------------------------------
 # 8. Start Menu shortcut
 # ---------------------------------------------------------------------------
 if (-not $NoStartMenu) {
@@ -408,7 +462,14 @@ if ($remaining.Count -gt 0) {
     $i = 1
     foreach ($r in $remaining) { Write-Host "    $i. $r"; $i++ }
 } else {
-    Write-Host "  Everything is in place. Start Hex CLI from the Start Menu, or run:" -ForegroundColor White
+    if ($NoStartMenu) {
+        Write-Host "  Everything is in place. Run:" -ForegroundColor White
+    } else {
+        Write-Host "  Everything is in place. Start Hex CLI from the Start Menu, or run:" -ForegroundColor White
+    }
     Write-Host "    python launcher.py"
+    if (-not $embedOk) {
+        Write-Host "  Semantic memory is off until the embedding model is in onnx/ (see above)." -ForegroundColor Yellow
+    }
 }
 Write-Host ""

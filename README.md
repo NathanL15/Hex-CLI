@@ -51,8 +51,9 @@ cd Hex-CLI
 .\install.ps1
 ```
 
-The installer checks the machine, downloads npurun and the model, and runs
-`--doctor` when it finishes. It skips steps that are already done, so run it
+The installer checks the machine, downloads npurun, the model and the
+small embedding model that semantic memory uses, and runs `--doctor` when
+it finishes. It skips steps that are already done, so run it
 again after fixing anything it reports.
 
 It cannot download the QAIRT SDK for you, because Qualcomm does not allow

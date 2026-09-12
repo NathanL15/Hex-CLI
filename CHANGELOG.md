@@ -156,6 +156,16 @@ coming back to old sessions, a first-time reader of the docs.
 * Docs: README's opening transcript shows today's screen, every
   command-line flag has a help line, and the scripting behaviour is
   written down.
+* Installer, run in a fresh clone: it warned "architecture X64" from an
+  x64 shell on an ARM64 machine (it checked the shell's architecture, not
+  the machine's); it reported a 2.47 SDK from an old `QNN_SDK_ROOT` while
+  the launcher uses 2.50 (same newest-wins rule now, with a note); it
+  never fetched the MiniLM embedding model, so memory was silently off
+  after a fresh install (downloaded now, ~23 MB); its summary said
+  "Start Hex CLI from the Start Menu" with `-NoStartMenu`. The doctor
+  checked the example config's port 8000 instead of the launcher's
+  server, and passed an `ADSP_LIBRARY_PATH` that pointed at another
+  SDK's libs; both fixed.
 * Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
   `/setup` over a pipe works again. The non-streaming spinner and the
   delegate token counter no longer print alongside the status line.

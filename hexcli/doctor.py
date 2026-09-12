@@ -114,10 +114,18 @@ def check_qairt() -> list[Check]:
                         str(lib) if lib.exists() else "missing aarch64-windows-msvc libs",
                         "" if lib.exists() else "Re-run the QAIRT installer."))
     adsp = Path(os.environ.get("ADSP_LIBRARY_PATH", ""))
+    wanted = sdk / "lib" / "hexagon-v73" / "unsigned"
     if not adsp.exists():
         checks.append(Check("ADSP_LIBRARY_PATH", WARN,
                             "unset; npurun crashes without it",
-                            rf'setx ADSP_LIBRARY_PATH "{sdk}\lib\hexagon-v73\unsigned"'))
+                            rf'setx ADSP_LIBRARY_PATH "{wanted}"'))
+    elif adsp.resolve() != wanted.resolve() and wanted.exists():
+        # Pinned to another SDK's libs (a setx from before 2.50 was installed).
+        # The launcher sets the right value for the server it starts; a
+        # server started by hand would use this one.
+        checks.append(Check("ADSP_LIBRARY_PATH", WARN,
+                            f"{adsp} is not the {sdk.name} SDK's; the launcher overrides it",
+                            rf'setx ADSP_LIBRARY_PATH "{wanted}"'))
     else:
         checks.append(Check("ADSP_LIBRARY_PATH", PASS, str(adsp)))
     return checks
@@ -168,6 +176,12 @@ def check_npurun() -> list[Check]:
 
 def check_server(config: dict[str, Any]) -> Check:
     base = str(config.get("openai_compatible", {}).get("base_url", ""))
+    ln = _launcher()
+    if ln is not None and "_npurun_model" not in config:
+        # Run outside the launcher (the installer, a bare --doctor): the server
+        # that matters is the one the launcher starts, on its port, not the
+        # example config's.
+        base = f"http://127.0.0.1:{ln.NPURUN_PORT}"
     if not base:
         return Check("model server", WARN, "no openai_compatible.base_url configured")
     host = base.split("//")[-1].split("/")[0]
