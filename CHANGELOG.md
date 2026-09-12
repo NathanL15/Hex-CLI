@@ -93,6 +93,13 @@ Two code reviews over the diff and a live edge-case pass, fixed together:
 * The editor's scroll report counted only the first row a growing entry
   pushed past the bottom; every later row is reported too, and the status
   bar redraws on a window-size change even when its text is unchanged.
+* Resizing the window in Windows Terminal lost the banner: the terminal
+  re-wraps every row at the new width, and the rows that no longer fit
+  are dropped into its scrollback, out of the program's reach. A resize
+  (or zoom) at the prompt now lays the screen out again: banner at the
+  top, the conversation anchored above the box, blank rows between, with
+  the banner scrolling off only when the conversation needs the room.
+  Verified in a real Windows Terminal window at five sizes.
 * Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
   `/setup` over a pipe works again. The non-streaming spinner and the
   delegate token counter no longer print alongside the status line.

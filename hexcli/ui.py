@@ -527,17 +527,26 @@ def user_echo(content: str, width: int) -> str:
     return "\n".join(user_row(r, width) for r in rows)
 
 
-def redraw_transcript(session: dict[str, Any]) -> None:
-    """Clear the screen and reprint the conversation at the current width.
-
-    Used after a zoom: the column count changed, and conhost's own reflow
-    of what was already on screen starts continuation rows at column 0,
-    losing the margin. Reprinting through the margin layer lays every row
-    out fresh. Tool banners and spinner lines are not part of the session
-    and do not come back; the questions and answers do.
-    """
-    sys.stdout.write("\033[2J\033[3J\033[H\r")
+def clear_screen(scrollback: bool = True) -> None:
+    """Wipe the window (and, by default, the terminal's scrollback) and put
+    the cursor at the top-left."""
+    sys.stdout.write("\033[2J" + ("\033[3J" if scrollback else "") + "\033[H\r")
     sys.stdout.flush()
+
+
+def redraw_transcript(session: dict[str, Any], clear: bool = True) -> None:
+    """Reprint the conversation at the current width, after clearing the
+    screen unless the caller already laid out something above it.
+
+    Used after a zoom or a resize: the column count changed, and the
+    terminal's own reflow of what was already on screen starts
+    continuation rows at column 0, losing the margin. Reprinting through
+    the margin layer lays every row out fresh. Tool banners and spinner
+    lines are not part of the session and do not come back; the questions
+    and answers do.
+    """
+    if clear:
+        clear_screen()
     for msg in session.get("messages", []):
         role, content = msg.get("role"), str(msg.get("content", ""))
         if role == "user":

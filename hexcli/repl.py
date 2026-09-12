@@ -361,9 +361,13 @@ def run_repl(config: dict[str, Any]) -> int:
     # reads the name at call time, so the gauge follows.
     live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
     npu_model = str(config.get("_npurun_model", "") or "")
-    ui.print_banner(npu_model or str(config.get("model", "?")),
-                    str(config.get("backend", "ollama")),
-                    engine="Hexagon NPU" if npu_model else None)
+
+    def _banner() -> None:
+        ui.print_banner(npu_model or str(config.get("model", "?")),
+                        str(config.get("backend", "ollama")),
+                        engine="Hexagon NPU" if npu_model else None)
+
+    _banner()
     if live is not None:
         live.enable()   # after the banner: the banner keeps the top, the conversation grows above the box
     sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
@@ -375,23 +379,39 @@ def run_repl(config: dict[str, Any]) -> int:
     # Custom commands are discovered once here for Tab completion; dispatch
     # below re-reads the file each use, so edits apply without a restart.
     custom_names = tuple(sorted(custom_commands.discover()))
+    def _relayout() -> None:
+        """Lay the screen out again at the current size: banner at the top,
+        the conversation anchored above the box, blank rows between.
+
+        Called at the prompt after a resize or a zoom, once the editor has
+        taken its own rows down. The terminal re-wraps what was on screen
+        at the new width; when that takes more rows than the window has,
+        Windows Terminal drops the top rows into its scrollback, where
+        nothing the program writes can reach them, so the banner (and a
+        short conversation) would otherwise be gone for good. Reprinting
+        through the same path a turn uses (box up, transcript consumes the
+        pad, box down) reproduces the live layout exactly.
+        """
+        if live is None:
+            ui.redraw_transcript(current_session)
+            return
+        ui.clear_screen()
+        live.screen_cleared()
+        _banner()
+        live.enable()                                       # box at the bottom, pad under the banner
+        ui.redraw_transcript(current_session, clear=False)  # grows upward into the pad
+        live.disable()                                      # box down; cursor where the editor starts
+
     def _zoom(delta: int) -> bool:
         """Ctrl+Plus / Ctrl+Minus. Returns True when the screen was redrawn."""
         if ui.console_zoom(delta) is None:
             return False
-        ui.redraw_transcript(current_session)
-        if live is not None:
-            live.reset_pad()
-            live.pad_for_editor()
+        _relayout()
         return True
 
     def _resize() -> None:
-        """The window was resized while at the prompt. The editor has just
-        cleared its own rows and left the cursor at the box top; the
-        transcript above is untouched. Re-pin the box to the new bottom."""
-        if live is not None:
-            live.reset_pad()
-            live.pad_for_editor()
+        """The window was resized while at the prompt."""
+        _relayout()
 
     def _context_brief() -> None:
         """The numbers that decide the next turn (/context, and the tail of /stats)."""

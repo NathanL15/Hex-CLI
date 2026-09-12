@@ -1275,6 +1275,16 @@ def test_redraw_transcript_clears_and_reprints_the_conversation() -> None:
         out = buf.getvalue()
         assert out.startswith("\033[2J\033[3J\033[H\r"), repr(out[:20])
         assert "> hi" in out and "hello" in out and "never shown" not in out, out
+        # A resize lays the banner out first and replays the transcript
+        # under it: no clear of its own then.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.redraw_transcript({"messages": [{"role": "user", "content": "hi"}]}, clear=False)
+        assert "\033[2J" not in buf.getvalue() and "> hi" in buf.getvalue()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ui.clear_screen(scrollback=False)
+        assert buf.getvalue() == "\033[2J\033[H\r"
     finally:
         ui._COLOR_ON = orig
 
