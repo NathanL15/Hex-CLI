@@ -287,7 +287,11 @@ def openai_chat(
     )
     choices = resp.get("choices") or []
     if not choices:
-        raise RuntimeError("OpenAI-compatible backend returned no choices.")
+        # A 200 with no choices is the server's request watchdog ending a
+        # stalled request (fork 0.2.3). Hand back an empty reply: the loop
+        # retries one of those, which is what it does when the streamed
+        # path produces nothing, instead of ending the turn with an error.
+        return ""
     return str((choices[0].get("message") or {}).get("content", "")).strip()
 
 

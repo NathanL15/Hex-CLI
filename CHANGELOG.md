@@ -168,6 +168,17 @@ taken through the A/B gate (`evals/results/persona/` has every log).
   Gate on the guard arm (with this nudge, which no gated case can
   trigger): 30/44 pass^k, run-level 176/220 vs 167/221 on the nudge arm.
 
+### An empty reply from the server is retried, not fatal
+
+The fork's request watchdog (0.2.3) ends a stalled long-context request
+with a 200 and an empty `choices` array. The non-streaming path raised on
+that and the turn ended with "OpenAI-compatible backend returned no
+choices."; it now hands back an empty reply, which the loop already
+retries once (the streamed path behaved that way all along). The eval
+runner classifies the same shape as a backend failure (INVALID run), as it
+does 5xx and connection loss, so a server stall no longer reads as a model
+regression: found at uc3-t7 (~3.1K tokens) in the 2.7.0 release gate.
+
 ### Walkthroughs by kind of user (2026-09-12)
 
 The same live method, this time as the people who meet the tool: someone

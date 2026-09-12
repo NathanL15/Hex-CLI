@@ -467,6 +467,11 @@ def is_backend_failure(exc: BaseException) -> str | None:
     if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, TimeoutError)):
         return f"backend connection lost: {type(exc).__name__}"
     text = str(exc)
+    # A 200 with an empty `choices` array is the fork's request watchdog
+    # ending a stalled request (0.2.3, long-context HTP hangs): the server,
+    # not the model. Seen at uc3-t7 (~3.1K tokens) on 2026-09-12.
+    if "returned no choices" in text:
+        return "backend empty reply (watchdog)"
     if "ERROR_QUERY_FAILED" in text or "inference_error" in text:
         return "backend inference error (Genie dialog degraded)"
     return None
