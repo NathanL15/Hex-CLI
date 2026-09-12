@@ -6,6 +6,8 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.7.0 — 2026-09-12
+
 ### Input box and status line
 
 The REPL has the Claude Code layout: the transcript scrolls above, and the
@@ -167,6 +169,23 @@ taken through the A/B gate (`evals/results/persona/` has every log).
   remaining misses are fixes the 4B cannot get right in two tries.
   Gate on the guard arm (with this nudge, which no gated case can
   trigger): 30/44 pass^k, run-level 176/220 vs 167/221 on the nudge arm.
+
+### Release gate (RELEASING.md), run 2026-09-12
+
+* Offline: ruff clean, 28 suites, 794 tests.
+* Extended, 5 runs/case, fresh server, gate against
+  `ask_rule_r5_20260905` + `persona_nudge_r5_20260912`: PASS after the
+  six-run re-check (error-recovery-3 6/6, factual-1 6/6,
+  regression-anchor-1 5/6); 30/44 pass^k, run-level 176/220.
+* Multi-turn, 3 runs, think time 15 s, vs `multiturn_prewarm_off_20260905`:
+  no case at 3/3 lost on valid runs. uc3-t7 showed as lost once because a
+  server watchdog reply (empty `choices` at ~3.1K tokens) was graded as a
+  model failure; the runner now marks that shape INVALID, and a uc3 rerun
+  passed t7/t8/t9 on every valid run. One uc3 run in three hits that
+  platform stall.
+* Stall probe, 800 user tokens, n=20, AC: 1 hang (the allowed maximum).
+* Smoke at 1 run/case: 8/10 cold, 9/10 warmed (each miss a different case
+  that is 5/5 in the five-run arms), 10/10 on the third fresh server.
 
 ### An empty reply from the server is retried, not fatal
 
