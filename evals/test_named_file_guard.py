@@ -30,6 +30,24 @@ def test_named_files_are_extracted_from_the_request() -> None:
     assert sa._named_files("fix src/app.js and README.md.") == ["src/app.js", "README.md"]
     assert sa._named_files("what is 2+2") == []
     assert sa._named_files("version 2.5.0 is out") == []          # not a file
+    # Whole path tokens: a drive letter, a "~1" short name, ".." segments.
+    assert sa._named_files(r"fix C:\Users\RUNNER~1\AppData\Local\Temp\x\app.py please") == [r"C:\Users\RUNNER~1\AppData\Local\Temp\x\app.py"]
+    assert sa._named_files("update ../shared/config.json and 'notes.txt'.") == ["../shared/config.json", "notes.txt"]
+
+
+def test_guard_stays_quiet_for_an_existing_absolute_path() -> None:
+    """CI 2026-09-12: the runner's temp folder is C:\\Users\\RUNNER~1\\...;
+    the old regex stopped at '~', the fragment did not exist, and the guard
+    refused the edit of a file that was there (test_escalation went red)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "app.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        for spelled in (str(target), str(target).replace("\\", "/")):
+            q = f"fix the bug in {spelled} and keep the style"
+            assert sa._named_file_guard(q, tmp, "edit_file", {"path": spelled}) is None, spelled
+        short = r"C:\Users\RUNNER~1\AppData\Local\Temp\zz\app.py"   # does not exist: only its own edit is blocked
+        assert sa._named_file_guard(f"fix {short}", tmp, "edit_file", {"path": "other.py"}) is not None
+        assert sa._named_file_guard(f"fix {short}", tmp, "read_file", {"path": "other.py"}) is None
 
 
 def test_guard_fires_only_for_a_mutation_aimed_elsewhere() -> None:
@@ -98,6 +116,7 @@ def test_loop_feeds_the_refusal_back_and_leaves_the_file_alone() -> None:
 
 TESTS = [
     test_named_files_are_extracted_from_the_request,
+    test_guard_stays_quiet_for_an_existing_absolute_path,
     test_guard_fires_only_for_a_mutation_aimed_elsewhere,
     test_loop_feeds_the_refusal_back_and_leaves_the_file_alone,
 ]

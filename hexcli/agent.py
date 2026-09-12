@@ -1595,8 +1595,13 @@ def _compose_piped_query(query: str, piped: str, truncated: bool) -> str:
     )
 
 
+# A whole path token (no spaces or quotes) ending in a code/text extension.
+# Drive letters, "~1" short names and "..\" segments must stay inside the
+# token: a fragment ("1\AppData\...\app.py", seen on a CI runner whose temp
+# folder is C:\Users\RUNNER~1) resolves to nothing and the guard would then
+# refuse an edit to a file that is there.
 _NAMED_FILE_RE = re.compile(
-    r"(?<![\w/\\.-])[\w\-./\\]+\.(?:py|txt|md|json|js|ts|tsx|jsx|ps1|psm1|yaml|yml|toml|cfg|ini|csv|html|css|sh|bat|cmd)\b",
+    r"(?<![^\s'\"`(\[,;])[^\s'\"`(),;\[\]]+\.(?:py|txt|md|json|js|ts|tsx|jsx|ps1|psm1|yaml|yml|toml|cfg|ini|csv|html|css|sh|bat|cmd)\b",
     re.IGNORECASE,
 )
 _MUTATING_TOOLS = frozenset({"edit_file", "write_file", "append_file"})
@@ -1615,7 +1620,7 @@ def _named_files(query: str) -> list[str]:
     """File names the request itself mentions, in order, without duplicates."""
     seen: list[str] = []
     for m in _NAMED_FILE_RE.finditer(query or ""):
-        name = m.group().strip(".")
+        name = m.group().rstrip(".:")
         if name and name not in seen:
             seen.append(name)
     return seen

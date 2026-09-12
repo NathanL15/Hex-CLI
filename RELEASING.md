@@ -70,8 +70,11 @@ degrades and looks like a regression.
 
 1. Move the CHANGELOG `Unreleased` section under `## X.Y.Z — YYYY-MM-DD`.
 2. Set `__version__` in `hexcli/__init__.py`.
-3. Commit `Release X.Y.Z`, tag `vX.Y.Z`, push the branch and the tag. CI
-   must be green on the tag.
+3. Commit `Release X.Y.Z` and push the branch. Wait for the remote CI run
+   on `main` to be green before tagging: the runner is not the development
+   machine (its temp folder is an 8.3 short name, `C:\Users\RUNNER~1\...`,
+   which is how 2.7.0 shipped a path bug that 797 green local tests never
+   saw). Then tag `vX.Y.Z` and push the tag. CI must be green on the tag.
 4. `gh release create vX.Y.Z --title vX.Y.Z --notes-file <the changelog
    section>`. No asset.
 
