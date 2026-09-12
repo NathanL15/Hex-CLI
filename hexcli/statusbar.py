@@ -409,6 +409,7 @@ class LiveArea:
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
+        self._activity_since: float | None = None   # when the current turn's activity began
         self.frame = ""
         self.location = ""
         self._drawn = 0            # rows currently on screen below the transcript
@@ -433,10 +434,18 @@ class LiveArea:
             pct = self._context_percent()
         except Exception:  # noqa: BLE001
             pct = None
+        activity = self.activity
+        right = self.location
+        if activity:
+            # While a turn runs: the label with its elapsed time, and the
+            # cancel hint where the location normally sits.
+            elapsed = int(time.monotonic() - (self._activity_since or time.monotonic()))
+            activity = f"{activity} {elapsed}s" if elapsed >= 1 else activity
+            right = "Esc cancels"
         return status_line(
             width, context_percent=pct, npu_percent=npu, mem_used_gb=used,
-            mem_total_gb=total, activity=self.activity, frame=self.frame,
-            right=self.location,
+            mem_total_gb=total, activity=activity, frame=self.frame,
+            right=right,
         )
 
     def chrome(self, width: int) -> tuple[list[str], list[str]]:
@@ -577,9 +586,12 @@ class LiveArea:
 
     def set_activity(self, label: str | None) -> None:
         with self.lock:
-            self.activity = label
             if label is None:
                 self.frame = ""
+                self._activity_since = None
+            elif self.activity is None or self._activity_since is None:
+                self._activity_since = time.monotonic()   # the clock runs per turn, not per label
+            self.activity = label
         self.repaint()
 
     def tick(self, frame: str) -> None:

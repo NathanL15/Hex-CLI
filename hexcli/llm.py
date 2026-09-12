@@ -217,7 +217,7 @@ def _ollama_stream_chat(
         if "value" in err_box:
             exc = err_box["value"]
             if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-                sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+                sys.stderr.write(f"\r{C.YELLOW}  Stream dropped; retrying.{C.RESET}          \n")
                 sys.stderr.flush()
                 return ollama_chat_non_stream(config, messages, token_key, json_format=json_format), 0
             raise exc
@@ -375,7 +375,7 @@ def _openai_stream_chat(
         if "value" in err_box:
             exc = err_box["value"]
             if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-                sys.stderr.write(f"\r{C.YELLOW}  stream dropped — retrying …{C.RESET}          \n")
+                sys.stderr.write(f"\r{C.YELLOW}  Stream dropped; retrying.{C.RESET}          \n")
                 sys.stderr.flush()
                 return openai_chat(config, messages, token_key, json_format=json_format), 0
             raise exc
@@ -399,7 +399,7 @@ def _status_activity(label: str) -> Any:
     yet. Without the bar this is a no-op, exactly as before."""
     if ui._live_area() is None:
         return contextlib.nullcontext()
-    return _agent().Spinner(f"{label} (Esc to cancel)")
+    return _agent().Spinner(label)
 
 
 def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
@@ -431,16 +431,19 @@ def _make_live_renderer(config: dict[str, Any], label: str) -> Any:
             # status line (the spinner started by _status_activity keeps ticking).
             live = ui.LIVE_AREA
             if live is not None and live.enabled:
-                live.set_activity("responding (Esc to cancel)")
+                live.set_activity("responding")
+            # One blank line between whatever came before (the question, a
+            # tool card) and the answer.
+            sys.stdout.write("\n")
         sys.stdout.write(markdown.feed(text))
         sys.stdout.flush()
 
     def on_tool(name: str) -> None:
         live = ui.LIVE_AREA
         if live is not None and live.enabled:
-            live.set_activity(f"→ {name}")   # in the status line, not on the transcript
+            live.set_activity(f"▸ {name}")   # in the status line, not on the transcript
             return
-        sys.stderr.write(f"\r{C.DIM}  → {name}{C.RESET}" + " " * 20)
+        sys.stderr.write(f"\r{C.DIM}  ▸ {name}{C.RESET}" + " " * 20)
         sys.stderr.flush()
 
     r = StreamRenderer(emit, on_tool)

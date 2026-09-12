@@ -442,6 +442,7 @@ class LineEditor:
         on_zoom: Callable[[int], Any] | None = None,
         on_resize: Callable[[], Any] | None = None,
         chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
+        placeholder: str = "",
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -465,6 +466,9 @@ class LineEditor:
         # on every render; each row must already fit in it. Not part of the
         # transcript: the finished line is written without them.
         self.chrome = chrome
+        # Dim hint shown after the prompt while nothing is typed; never part
+        # of the finished line.
+        self.placeholder = placeholder
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
@@ -536,6 +540,10 @@ class LineEditor:
         prefixes = [last_prompt] + [self.CONT_PROMPT] * (len(buf_lines) - 1)
         for prefix, line in zip(prefixes, buf_lines):
             logical.append((prefix + line, visible_len(prefix) + len(line)))
+        if chrome and self.placeholder and not self.buffer:
+            hint = self.placeholder[: max(0, self.usable - visible_len(last_prompt) - 1)]
+            styled = f"\033[2m{hint}\033[0m" if self.styled else hint
+            logical[-1] = (last_prompt + styled, visible_len(last_prompt) + len(hint))
         for line in below:
             logical.append((line, visible_len(line)))
 
@@ -891,6 +899,7 @@ def make_reader(
     on_zoom: Callable[[int], Any] | None = None,
     on_resize: Callable[[], Any] | None = None,
     chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
+    placeholder: str = "",
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
@@ -919,5 +928,6 @@ def make_reader(
         on_zoom=on_zoom,
         on_resize=on_resize,
         chrome=chrome,
+        placeholder=placeholder,
     )
     return editor.read

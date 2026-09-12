@@ -46,10 +46,7 @@ def acquire(lock_dir: Path) -> str | None:
         try:
             existing_pid = int(lock_path.read_text(encoding="utf-8").strip())
             if existing_pid != os.getpid() and _pid_alive(existing_pid):
-                warning = (
-                    f"⚠ Another shellai instance (PID {existing_pid}) appears to be running. "
-                    "Two instances sharing one npurun backend may interfere with each other."
-                )
+                warning = f"  ⚠ Another Hex CLI is running in this directory, PID {existing_pid}."
         except Exception:
             pass  # stale or unreadable lock — overwrite silently
 

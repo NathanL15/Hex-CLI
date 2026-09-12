@@ -132,9 +132,7 @@ def find_qairt_root(env_value: str | None = None, stack_dir: Path | None = None)
         # An explicitly-set root that fails validation is a user intention we
         # are about to ignore; say so, or the resulting failure gets blamed on
         # the SDK we silently substituted.
-        warn(f"QNN_SDK_ROOT={env_value} is missing the expected "
-             f"lib/bin/aarch64-windows-msvc and lib/hexagon-v73/unsigned "
-             f"layout — ignoring it and searching for another install.")
+        warn(f"QNN_SDK_ROOT={env_value} is not a valid QAIRT install; ignored.")
     stack = stack_dir or Path("C:/Qualcomm/AIStack")
     if stack.exists():
         for candidate in sorted(stack.glob("QAIRT_*"), key=_qairt_version_key, reverse=True):
@@ -232,7 +230,7 @@ def ok(msg: str = "done") -> None:
     print(f"        {green('✓')} {msg}", flush=True)
 
 def warn(msg: str) -> None:
-    print(f"        {yellow('!')} {msg}", flush=True)
+    print(f"        {yellow('⚠')} {msg}", flush=True)
 
 
 # Resolved after the printing helpers exist: find_qairt_root() warns when it
@@ -377,15 +375,19 @@ def _is_npurun_up() -> bool:
         return False
 
 
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # the REPL's frames, so the two spinners match
+
+
 def _wait_npurun(timeout: int = 60) -> bool:
     deadline = time.time() + timeout
-    dots = 0
+    i = 0
     while time.time() < deadline:
-        if _is_npurun_up():
+        if i % 10 == 0 and _is_npurun_up():
+            print("\r" + " " * 40 + "\r", end="", flush=True)
             return True
-        time.sleep(1)
-        dots += 1
-        print(f"\r  Waiting for server{'.' * (dots % 4)}   ", end="", flush=True)
+        print(f"\r  {cyan(_SPINNER[i % len(_SPINNER)])} {dim('starting the model server')}", end="", flush=True)
+        time.sleep(0.1)
+        i += 1
     print()
     return False
 
@@ -454,63 +456,41 @@ def _start_npurun_server() -> None:
                       creationflags=0x00000008)
 
 
-def run_npurun_path(conda: Path | None) -> int:
-    """Full npurun setup and launch. Returns exit code."""
-    print()
-    print(bold("  ─── Qwen3-4B on Hexagon NPU (Genie/QNN) ─────────────────"))
-    print(f"  Model:  {bold('Qwen3-4B-Instruct-2507')}  w4a16  (~2.5 GB, ~15 tok/s)")
-    print(f"  Engine: {bold('npurun')}  (Genie SDK / Hexagon HTP)")
-    print()
+def run_npurun_path(conda: Path | None = None) -> int:
+    """npurun setup and launch. Returns the agent's exit code.
 
+    Quiet on the happy path: when the server is already up nothing is
+    printed and the REPL's banner is the first thing on screen. Progress
+    lines appear only for work that takes time (a model download, a server
+    start), and a failure ends here with the log path rather than a silent
+    fall-through to a tier that is not maintained.
+    """
     outdated = npurun_outdated()
     if outdated:
-        warn(f"npurun {version_str(outdated)} found; this Hex CLI is written for "
-             f"{version_str(REQUIRED_NPURUN)}. Run  hexcli --update  to replace it.")
-        print()
+        warn(f"npurun {version_str(outdated)} is older than the required "
+             f"{version_str(REQUIRED_NPURUN)}. Run  hexcli --update.")
 
     if not _npurun_model_ok():
-        print(f"  Downloading {NPURUN_MODEL} …", flush=True)
+        print(f"  Downloading {NPURUN_MODEL}...", flush=True)
         try:
             _pull_npurun_model()
             _write_npurun_config()
-            print()
         except Exception as exc:
-            err(f"npurun pull failed: {exc}")
-            warn("Falling back to DirectML / Phi-4-mini path.")
-            if conda:
-                return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
+            err(f"Model download failed: {exc}")
+            return 1
     elif not NPURUN_CONFIG.exists():
         _write_npurun_config()
 
     if not _is_npurun_up():
-        print(f"  Starting npurun server on port {NPURUN_PORT} …", flush=True)
         try:
             _start_npurun_server()
         except Exception as exc:
-            err(f"Cannot start npurun server: {exc}")
-            warn("Falling back to DirectML / Phi-4-mini.")
-            if conda:
-                return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
-
+            err(f"The model server did not start: {exc}")
+            return 1
         if not _wait_npurun(timeout=60):
-            print()
-            err("npurun server did not start within 60 s.")
-            print(dim(f"  Check log: {NPURUN_LOG}"))
-            warn("Falling back to DirectML / Phi-4-mini.")
-            if conda:
-                return run_dml_path(conda)
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)], env=_npurun_env()).returncode
-
-        print(f"\r  {green('✓')} npurun server ready on port {NPURUN_PORT}                  ")
-    else:
-        print(f"  {green('✓')} npurun server already running on port {NPURUN_PORT}")
-
-    print()
-    print(dim("  Model: Qwen3-4B · Engine: npurun (Hexagon NPU via Genie)"))
-    print(dim(f"  Server log: {NPURUN_LOG.name}"))
-    print()
+            err("The model server did not start within 60 s.")
+            print(dim(f"  Log: {NPURUN_LOG}"))
+            return 1
 
     return subprocess.run(
         [sys.executable, str(SHELLAI_SCRIPT), "--config", str(NPURUN_CONFIG)]
@@ -666,33 +646,24 @@ def main() -> int:
         _dress_console_window()
     except Exception:
         pass  # cosmetics only; never block launch over them
-    print()
-    print(bold(cyan("  Hex CLI")))
-    print(dim("  Qwen3-4B (Hexagon NPU) → Phi-4-mini (Adreno GPU) → Ollama CPU"))
-    print()
 
-    conda = find_conda()
-
+    # The NPU path is the product. The DirectML and Ollama tiers below are
+    # kept in this file for reference but are not maintained (CLAUDE.md §3),
+    # so a missing prerequisite is reported, never silently substituted.
     try:
-        # Priority 1: Qwen3-4B on Hexagon NPU via npurun (no conda needed)
-        if _npurun_ready():
-            print(f"  {green('✓')} npurun + QAIRT SDK found — using Hexagon NPU path")
-            return run_npurun_path(conda)
-
-        # Priority 2: Phi-4-mini on Adreno GPU (needs conda)
-        print(f"  {yellow('!')} npurun/QAIRT SDK not found — using Phi-4-mini / DirectML")
-        if not conda:
-            print(yellow("  conda not found — falling back to CPU (Ollama) mode."))
-            return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
-        return run_dml_path(conda)
-
+        if not _npurun_ready():
+            print()
+            err("npurun or the QAIRT SDK was not found.")
+            print(dim("  Run  hexcli --doctor  for the fix."))
+            return 1
+        return run_npurun_path()
     except KeyboardInterrupt:
         print()
         return 0
     except Exception as exc:
-        err(f"Unexpected: {exc}")
-        warn("Falling back to CPU Ollama.")
-        return subprocess.run([sys.executable, str(SHELLAI_SCRIPT)]).returncode
+        print()
+        err(f"Error: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

@@ -122,9 +122,9 @@ def test_session_has_messages_after_append() -> None:
 
 def test_append_session_message_sets_title_on_first_user_message() -> None:
     session = sa.create_session()
-    assert session["title"] == "New Chat"
+    assert session["title"] == "New session"
     sa.append_session_message(session, "user", "list my files please")
-    assert session["title"] != "New Chat"
+    assert session["title"] != "New session"
     assert "list" in session["title"].lower() or "files" in session["title"].lower()
 
 
@@ -196,12 +196,12 @@ def test_generate_session_title_strips_specials() -> None:
 
 def test_generate_session_title_empty_input() -> None:
     title = sa.generate_session_title("")
-    assert title == "New Chat"
+    assert title == "New session"
 
 
 def test_generate_session_title_all_specials() -> None:
     title = sa.generate_session_title("!!! ??? ###")
-    assert title == "New Chat"
+    assert title == "New session"
 
 
 def test_generate_session_title_truncates_to_six_words() -> None:
@@ -322,7 +322,7 @@ def test_load_history_store_sets_defaults_on_legacy_sessions() -> None:
         with unittest.mock.patch.object(session_store, "HISTORY_PATH", hp):
             sessions = sa.load_history_store(sa.DEFAULT_CONFIG)
     s = sessions[0]
-    assert s.get("title") == "New Chat"
+    assert s.get("title") == "New session"
     assert "compact_count" in s
 
 
@@ -780,7 +780,7 @@ def test_show_context_warning_fires_at_the_supplied_budget() -> None:
     with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
         ui.show_context(session, config, budget=(400, 500))
     joined = " ".join(printed).lower()
-    assert "budget" in joined or "threshold" in joined, "expected a budget warning"
+    assert "auto-compact" in joined.lower(), "expected the compaction warning at the budget"
 
     # Below the budget: no warning at all.
     printed.clear()
@@ -798,7 +798,7 @@ def test_show_context_critical_fires_at_1600_tokens() -> None:
     with unittest.mock.patch.object(ui, "cprint", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
         ui.show_context(session, config)
     joined = " ".join(printed)
-    assert "past" in joined.lower(), "expected past-threshold (critical) warning at 1600 tokens"
+    assert "auto-compact" in joined.lower(), "expected the compaction warning at 1600 tokens"
 
 
 # ============================================================================

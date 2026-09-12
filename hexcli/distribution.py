@@ -70,7 +70,7 @@ def _git_pull(install_dir: Path) -> bool:
     """Return True if git pull succeeds, False on any failure."""
     git = shutil.which("git")
     if not git:
-        _print("git not found on PATH — skipping source update.")
+        _print("git not found; source update skipped.")
         return False
     try:
         result = subprocess.run(
@@ -81,7 +81,7 @@ def _git_pull(install_dir: Path) -> bool:
             timeout=120,
         )
     except subprocess.TimeoutExpired:
-        _print("git pull timed out after 120 s — skipping source update.")
+        _print("git pull timed out; source update skipped.")
         return False
     if result.returncode == 0:
         _print(result.stdout.strip() or "Already up to date.")
@@ -99,19 +99,19 @@ def update(install_dir: Path) -> int:
 
     Returns an exit code (0 = success, 1 = partial failure, 2 = hard failure).
     """
-    print("\n  Hex CLI — self-update\n")
+    print("\n  Hex CLI update\n")
 
     # 1. Update Python source via git.
-    _print("Pulling latest source …")
+    _print("Pulling source...")
     _git_pull(install_dir)
 
     # 2. Fetch the fork's latest release metadata from GitHub.
-    _print("Checking the latest npurun release …")
+    _print("Checking the latest npurun release...")
     try:
         release = _fetch_latest_release()
     except Exception as exc:
         _print(f"GitHub API error: {exc}")
-        _print("Source update complete; binary update skipped (no network).")
+        _print("Source updated. npurun not checked: no network.")
         return 1
 
     tag = release.get("tag_name", "unknown")
@@ -130,12 +130,12 @@ def update(install_dir: Path) -> int:
     # 3. Download the npurun binary if a matching asset exists.
     url = _find_asset_url(release, _NPURUN_ASSET)
     if not url:
-        _print(f"No '{_NPURUN_ASSET}' asset in {tag} — binary update skipped.")
+        _print(f"{tag} has no {_NPURUN_ASSET} asset; binary update skipped.")
         return 0
 
     existing = install_dir / _NPURUN_ASSET
     dest_tmp = install_dir / f"{_NPURUN_ASSET}.tmp"
-    _print(f"Downloading {_NPURUN_ASSET} …")
+    _print(f"Downloading {_NPURUN_ASSET}...")
     try:
         _download(url, dest_tmp)
         dest_tmp.replace(existing)
@@ -144,14 +144,14 @@ def update(install_dir: Path) -> int:
         _print(f"Download failed: {exc}")
         return 1
 
-    _print(f"npurun updated → {existing}")
+    _print(f"npurun updated: {existing}")
     _print("Update complete.")
     return 0
 
 
 def uninstall(install_dir: Path) -> int:
     """Remove the Start Menu shortcut and optionally purge user data."""
-    print("\n  Hex CLI — uninstall\n")
+    print("\n  Hex CLI uninstall\n")
 
     # 1. Remove Start Menu shortcut.
     shortcut = _START_MENU / _SHORTCUT_NAME
@@ -162,7 +162,7 @@ def uninstall(install_dir: Path) -> int:
         except OSError as exc:
             _print(f"Could not remove shortcut: {exc}")
     else:
-        _print("Start Menu shortcut not found (already removed).")
+        _print("Start Menu shortcut not found.")
     if _WT_FRAGMENT.exists():
         try:
             _WT_FRAGMENT.unlink()
@@ -175,7 +175,7 @@ def uninstall(install_dir: Path) -> int:
     if shellai_dir.exists():
         try:
             answer = input(
-                "\n  Remove .shellai/ (sessions, memory, telemetry, checkpoints)? [y/N] "
+                "\n  Remove .shellai/ with its sessions and memory? [y/N] "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = "n"
@@ -186,7 +186,7 @@ def uninstall(install_dir: Path) -> int:
             except OSError as exc:
                 _print(f"Could not remove .shellai/: {exc}")
         else:
-            _print(".shellai/ kept (run 'Remove-Item -Recurse .shellai' to remove manually).")
+            _print(".shellai/ kept.")
 
     # 3. Remind user to remove the clone / pip package.
     if (install_dir / "pyproject.toml").exists():
@@ -209,21 +209,15 @@ def first_run_check(install_dir: Path) -> None:
     npurun_on_path = shutil.which("npurun") or shutil.which("npurun.exe")
     npurun_local = (install_dir / "npurun-arm64.exe").exists()
     if not npurun_on_path and not npurun_local:
-        hints.append(
-            "  npurun not found. Run:  hexcli --update\n"
-            "  (or build branch hexcli-fork of https://github.com/NathanL15/npurun)"
-        )
+        hints.append("  npurun not found. Run:  hexcli --update")
 
     # ONNX embedding model for memory.
     onnx_model = install_dir / "onnx" / "model_qint8_arm64.onnx"
     if not onnx_model.exists():
-        hints.append(
-            "  Embedding model missing — semantic memory will be disabled.\n"
-            "  Download onnx/model_qint8_arm64.onnx from the release page or README."
-        )
+        hints.append("  Embedding model missing; memory is off. hexcli --doctor prints the download commands.")
 
     if hints:
-        print("\n  ── First-run setup ───────────────────────────────────", flush=True)
+        print("\n  First-run setup", flush=True)
         for h in hints:
             print(h, flush=True)
         print(flush=True)

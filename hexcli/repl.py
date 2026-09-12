@@ -79,7 +79,7 @@ def _handle_config_cmd(query: str, config: dict[str, Any]) -> None:
         return
     key = parts[1]
     if key not in sa._CONFIG_SETTABLE:
-        sa.cprint(f"  Unknown config key: {key!r}. Run /config to see all settable keys.", sa.C.YELLOW)
+        sa.cprint(f"  Unknown config key {key!r}. /config lists the keys.", sa.C.YELLOW)
         return
     if len(parts) == 2:
         sa.cprint(f"  {key} = {config.get(key, '(unset)')!r}  [{sa._CONFIG_SETTABLE[key]}]", sa.C.DIM)
@@ -101,22 +101,22 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
     if sub == "status":
         enabled = bool(config.get("memory_enabled", True))
         if not enabled:
-            sa.cprint("  Memory disabled  (memory_enabled = false).", sa.C.YELLOW)
+            sa.cprint("  Memory is off: memory_enabled = false.", sa.C.YELLOW)
             return
         meta_path = Path.cwd() / ".shellai" / "vector_store" / "metadata.json"
         if not meta_path.exists():
-            sa.cprint("  Memory store: empty (no entries indexed yet).", sa.C.DIM)
+            sa.cprint("  No memory entries.", sa.C.DIM)
             return
         try:
             entries = json.loads(meta_path.read_text(encoding="utf-8"))
             size_kb = meta_path.stat().st_size // 1024
-            sa.cprint(f"  Memory store: {len(entries)} entries, ~{size_kb} KB", sa.C.BCYAN)
+            print(f"  Memory store: {len(entries)} entries, {size_kb} KB")
             if entries:
                 oldest = entries[0].get("created_at", "?")[:16]
                 newest = entries[-1].get("created_at", "?")[:16]
-                sa.cprint(f"  Oldest: {oldest}  →  Newest: {newest}", sa.C.DIM)
+                sa.cprint(f"  Oldest {oldest}, newest {newest}", sa.C.DIM)
         except Exception as exc:
-            sa.cprint(f"  Memory store: error reading metadata ({exc})", sa.C.YELLOW)
+            sa.cprint(f"  Could not read the memory store: {exc}", sa.C.YELLOW)
 
     elif sub == "list":
         n = 10
@@ -143,7 +143,7 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
                     print(f"         tools: {tools}")
             print()
         except Exception as exc:
-            sa.cprint(f"  Error reading memory: {exc}", sa.C.YELLOW)
+            sa.cprint(f"  Could not read the memory store: {exc}", sa.C.YELLOW)
 
     elif sub == "search":
         if len(parts) < 3:
@@ -155,7 +155,7 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
     elif sub == "clear":
         confirm = (ui.ask_line("  Delete all memory entries? [y/N] ") or "").strip().lower()
         if confirm not in ("y", "yes"):
-            print("  Aborted.")
+            sa.cprint("  Cancelled.", sa.C.DIM)
             return
         store_dir = Path.cwd() / ".shellai" / "vector_store"
         deleted: list[str] = []
@@ -168,16 +168,16 @@ def _handle_memory_cmd(query: str, config: dict[str, Any]) -> None:
                 except Exception as exc:
                     sa.cprint(f"  Could not delete {fname}: {exc}", sa.C.YELLOW)
         if deleted:
-            sa.cprint(f"  Cleared: {', '.join(deleted)}", sa.C.BCYAN)
+            sa.cprint("  Memory cleared.", sa.C.DIM)
         else:
-            print("  Nothing to clear.")
+            sa.cprint("  Nothing to clear.", sa.C.DIM)
 
     elif sub == "prune":
         removed = memory.prune_memory_rules()
         if removed:
-            sa.cprint(f"  Pruned {removed} old rule(s) from memory_rules.md.", sa.C.BCYAN)
+            sa.cprint("  Memory rules pruned.", sa.C.DIM)
         else:
-            sa.cprint("  Rules file within cap; nothing pruned.", sa.C.DIM)
+            sa.cprint("  Nothing to prune.", sa.C.DIM)
 
     else:
         print("  Usage: /memory [status|list [n]|search <query>|clear|prune]")
@@ -193,7 +193,7 @@ def _show_stats(config: dict[str, Any], tel: Any, session: dict[str, Any]) -> No
     """
     turns = list(getattr(tel, "turns", []) or [])
     print()
-    sa.cprint("Session stats", sa.C.BOLD)
+    sa.cprint("  Session", sa.C.BOLD)
     if not turns:
         sa.cprint("  No completed turns yet.", sa.C.DIM)
     else:
@@ -213,7 +213,7 @@ def _show_stats(config: dict[str, Any], tel: Any, session: dict[str, Any]) -> No
         print(f"  Avg turn:         {total_time / len(turns):.1f}s")
         print(f"  Tokens generated: ~{tokens:,}")
         if errors:
-            print(f"  Non-clean turns:  {len(errors)}  "
+            print(f"  Turns with errors: {len(errors)}  "
                   f"({', '.join(sorted({str(t.get('completion_status')) for t in errors}))})")
         if tool_counts:
             top = sorted(tool_counts.items(), key=lambda kv: -kv[1])[:6]
@@ -263,19 +263,17 @@ def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
     both cases the fix is the same — a fresh server — so offer it here rather
     than making the user leave the session.
     """
-    sa.cprint(f"\n  The model backend failed: {reason}.", sa.C.BRED)
+    sa.cprint(f"\n  {reason}", sa.C.BRED)
     if str(config.get("backend")) != "openai" or "_npurun_model" not in config:
         sa.cprint("  Restart it, then try again.", sa.C.DIM)
         return
-    sa.cprint("  This usually means the NPU server needs a restart "
-           "(it degrades after a few hours of use).", sa.C.DIM)
-    answer = ui.ask_line("  Restart the model server now? [Y/n] ")
+    answer = ui.ask_line("  Restart the model server? [Y/n] ")
     answer = "n" if answer is None else answer.strip().lower()   # no human: never restart
     if answer in ("", "y", "yes"):
         if restart_backend(config):
-            sa.cprint("  Server restarted. Retry the last request.", sa.C.BGREEN)
+            sa.cprint("  Server restarted. Press Up, then Enter to resend.", sa.C.DIM)
         else:
-            sa.cprint("  Restart failed. Run: python launcher.py", sa.C.YELLOW)
+            sa.cprint("  Restart failed. Relaunch Hex CLI.", sa.C.YELLOW)
 
 
 def restart_backend(config: dict[str, Any]) -> bool:
@@ -315,7 +313,7 @@ def restart_backend(config: dict[str, Any]) -> bool:
         )
     except Exception:
         return False
-    with sa.Spinner("restarting the model server"):
+    with sa.Spinner("restarting"):
         for _ in range(45):
             time.sleep(2)
             if sa.ping_backend(config):
@@ -351,7 +349,10 @@ def run_repl(config: dict[str, Any]) -> int:
     live = statusbar.install(config, lambda: sa.context_fill_percent(current_session, config))
     if live is not None:
         live.enable()
-    ui.print_banner(str(config.get("model", "?")), str(config.get("backend", "ollama")))
+    npu_model = str(config.get("_npurun_model", "") or "")
+    ui.print_banner(npu_model or str(config.get("model", "?")),
+                    str(config.get("backend", "ollama")),
+                    engine="Hexagon NPU" if npu_model else None)
     sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
     if config.get("memory_dreaming", False):
         memory.start_dreaming(lambda: config, sa.llm_generate)
@@ -377,10 +378,22 @@ def run_repl(config: dict[str, Any]) -> int:
         if live is not None:
             live.pad_for_editor()
 
+    def _context_brief() -> None:
+        """The numbers that decide the next turn (/context, and the tail of /stats)."""
+        sys_tokens = sa.estimate_tokens(sa.build_autopilot_prompt(
+            cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
+        msgs = current_session.get("messages", [])
+        hist_tokens = sa._TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in msgs))
+        sa.show_context_brief(current_session, config,
+                              budget=sa._history_budget_tokens(config),
+                              system_prompt_tokens=sys_tokens,
+                              history_tokens=hist_tokens)
+
     read_line = lineedit.make_reader(
         config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE),
         on_zoom=_zoom, on_resize=_resize,
         chrome=live.chrome if live is not None else None,
+        placeholder="ask, or / for commands" if live is not None else "",
     ) or (lambda p: input(p))
 
     while True:
@@ -436,8 +449,7 @@ def run_repl(config: dict[str, Any]) -> int:
             parts = query.split(None, 1)
             term = parts[1].strip() if len(parts) > 1 else ""
             if not term:
-                sa.cprint("  Usage: /search <text>   (searches titles and messages "
-                       "of saved sessions)", sa.C.DIM)
+                sa.cprint("  Usage: /search <text>", sa.C.DIM)
                 continue
             sa.sync_session_store(sessions, current_session)
             sessions = sa.load_history_store(config)
@@ -449,7 +461,7 @@ def run_repl(config: dict[str, Any]) -> int:
         if norm == "/diff":
             snaps = sa._SESSION_UNDO_SNAPSHOTS.get(current_session.get("id", ""), {})
             if not snaps:
-                sa.cprint("  No file changes in this session's last turn.", sa.C.DIM)
+                sa.cprint("  No file changes in the last turn.", sa.C.DIM)
             else:
                 def _read_now(p: str) -> str | None:
                     path_obj = Path(p)
@@ -460,24 +472,13 @@ def run_repl(config: dict[str, Any]) -> int:
 
         # ── context: just the numbers that decide the next turn ───────────
         if norm == "/context":
-            _sys_tokens = sa.estimate_tokens(sa.build_autopilot_prompt(
-                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
-            _msgs = current_session.get("messages", [])
-            _hist_tokens = sa._TOKEN_ESTIMATOR.estimate(sum(len(m.get("content", "")) for m in _msgs))
-            sa.show_context_brief(current_session, config,
-                                  budget=sa._history_budget_tokens(config),
-                                  system_prompt_tokens=_sys_tokens,
-                                  history_tokens=_hist_tokens)
+            _context_brief()
             continue
 
         # ── stats: session summary + context usage ─────────────────────────
         if norm == "/stats" or norm.startswith("/stats "):
             _show_stats(config, tel, current_session)
-            _sys_tokens = sa.estimate_tokens(sa.build_autopilot_prompt(
-                cwd=str(Path.cwd()), max_steps=int(config.get("max_agent_steps", 15))))
-            sa.show_context(current_session, config,
-                         budget=sa._history_budget_tokens(config),
-                         system_prompt_tokens=_sys_tokens)
+            _context_brief()
             if clog.path:
                 sa.cprint(f"  Chat log: {clog.path}", sa.C.DIM)
                 print()
@@ -492,7 +493,13 @@ def run_repl(config: dict[str, Any]) -> int:
         # ── setup: interactive config wizard ──────────────────────────────
         if norm == "/setup":
             wizard_path = Path(str(config.get("_config_path", "")) or sa.DEFAULT_CONFIG_PATH)
-            setup_wizard.run_wizard(config, wizard_path)
+            # Through ask_line, so the status box is lowered for each question.
+            def _wizard_ask(prompt: str) -> str:
+                answer = ui.ask_line(prompt)
+                if answer is None:
+                    raise KeyboardInterrupt
+                return answer
+            setup_wizard.run_wizard(config, wizard_path, ask=_wizard_ask)
             continue
 
         # ── clear screen + context ────────────────────────────────────────
@@ -507,7 +514,7 @@ def run_repl(config: dict[str, Any]) -> int:
             sa.sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = sa.create_session()
-            sa.cprint("Chat history cleared.", sa.C.DIM)
+            sa.cprint("  Chat history cleared.", sa.C.DIM)
             continue
 
         # ── new session ───────────────────────────────────────────────────
@@ -515,7 +522,7 @@ def run_repl(config: dict[str, Any]) -> int:
             sa.sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = sa.create_session()
-            sa.cprint("New session started.", sa.C.DIM)
+            sa.cprint("  New session started.", sa.C.DIM)
             continue
 
         # ── resume ────────────────────────────────────────────────────────
@@ -524,15 +531,17 @@ def run_repl(config: dict[str, Any]) -> int:
             sessions = sa.load_history_store(config)
             parts = norm.split()
             if len(parts) != 2 or not parts[1].isdigit():
-                print("Usage: /resume <number>")
+                sa.cprint("  Usage: /resume <n>", sa.C.DIM)
                 continue
             idx = int(parts[1]) - 1
             if idx < 0 or idx >= len(sessions):
-                sa.cprint("No session with that number.", sa.C.YELLOW)
+                sa.cprint("  No session with that number.", sa.C.YELLOW)
                 continue
             _close_session_resources(current_session)
             current_session = sessions[idx]
-            sa.cprint(f"Resumed: {current_session['title']}", sa.C.BCYAN)
+            # Show what was resumed: the conversation, reprinted, then the notice.
+            ui.redraw_transcript(current_session)
+            sa.cprint(f"\n  Resumed session: {current_session['title']}", sa.C.DIM)
             continue
 
         # ── compact ───────────────────────────────────────────────────────
@@ -541,7 +550,7 @@ def run_repl(config: dict[str, Any]) -> int:
                 sa.compact_history(config, current_session)
                 sa.sync_session_store(sessions, current_session)
             except sa.UserCancelled:
-                print("\nCancelled.\n")
+                sa.cprint("\n  Cancelled.", sa.C.DIM)
             except Exception as exc:  # noqa: BLE001
                 ui.error_box(str(exc))
                 if sa.DEBUG:
@@ -574,18 +583,18 @@ def run_repl(config: dict[str, Any]) -> int:
                         except Exception as exc:
                             failed.append(f"{Path(path_str).name}: {exc}")
                     if restored:
-                        sa.cprint(f"  Files restored: {', '.join(restored)}", sa.C.BCYAN)
+                        sa.cprint(f"  Files restored: {', '.join(restored)}", sa.C.DIM)
                     if failed:
                         sa.cprint(f"  Could not restore: {', '.join(failed)}", sa.C.YELLOW)
                 sa.sync_session_store(sessions, current_session)
-                sa.cprint("Removed last exchange.", sa.C.DIM)
+                sa.cprint("  Last exchange removed.", sa.C.DIM)
             elif len(msgs) == 1:
                 current_session["messages"] = []
                 sa.touch_session(current_session)
                 sa._SESSION_UNDO_SNAPSHOTS.pop(current_session.get("id", ""), None)
-                sa.cprint("Removed last message.", sa.C.DIM)
+                sa.cprint("  Last message removed.", sa.C.DIM)
             else:
-                print("Nothing to undo.")
+                sa.cprint("  Nothing to undo.", sa.C.DIM)
             continue
 
         # ── cwd ───────────────────────────────────────────────────────────
@@ -595,11 +604,11 @@ def run_repl(config: dict[str, Any]) -> int:
                 new_path = parts_cwd[1].strip()
                 try:
                     os.chdir(sa.resolve_path(new_path))
-                    sa.cprint(f"cwd: {Path.cwd()}", sa.C.BCYAN)
+                    sa.cprint(f"  cwd: {Path.cwd()}", sa.C.DIM)
                 except Exception as exc:
-                    sa.cprint(f"Cannot change to '{new_path}': {exc}", sa.C.RED)
+                    sa.cprint(f"  Cannot change to '{new_path}': {exc}", sa.C.RED)
             else:
-                sa.cprint(f"cwd: {Path.cwd()}", sa.C.DIM)
+                sa.cprint(f"  cwd: {Path.cwd()}", sa.C.DIM)
             continue
 
         # ── config ────────────────────────────────────────────────────────
@@ -636,8 +645,8 @@ def run_repl(config: dict[str, Any]) -> int:
         if query.startswith("/") and not ran_custom:
             cmd_word = query.split()[0]
             suggestion = _closest_command(cmd_word, extra=custom_names)
-            hint = f" Did you mean {suggestion}?" if suggestion else ""
-            sa.cprint(f"  Unknown command {cmd_word}.{hint} Type /help for the list.", sa.C.YELLOW)
+            hint = f" Did you mean {suggestion}?" if suggestion else " /help lists the commands."
+            sa.cprint(f"  Unknown command {cmd_word}.{hint}", sa.C.YELLOW)
             continue
 
         # ── agent turn ────────────────────────────────────────────────────
@@ -646,10 +655,14 @@ def run_repl(config: dict[str, Any]) -> int:
         probe = clog.turn_start(len(tel.turns), query, history,
                                 sa.context_fill_percent(current_session, config))
         try:
+            sa.clear_turn_stop()
             message = sa.run_autopilot(config, history, query, shell_exe,
                                        session=current_session, turn=turn, probe=probe)
-            if sa.last_streamed_matches(message):
-                print()   # the answer streamed as it arrived; no need to print it twice
+            if sa.last_streamed_matches(message) or sa.last_turn_stopped():
+                # Streamed already, or the turn ended on a stop notice: the
+                # message is on screen (or is raw tool output kept for the
+                # history), so no answer box.
+                print()
             else:
                 sa.render_result("Result", message)
             sa.append_session_message(current_session, "user", query)
@@ -665,7 +678,7 @@ def run_repl(config: dict[str, Any]) -> int:
                 clog.compaction(_n_before, len(_after), _c_before,
                                 sum(len(m.get("content", "")) for m in _after))
         except (sa.UserCancelled, KeyboardInterrupt):
-            print("\nCancelled.\n")
+            sa.cprint("\n  Cancelled.\n", sa.C.DIM)
             tel.record_turn(turn, status="cancelled")
             clog.turn_end(probe.turn, status="cancelled")
         except urllib.error.HTTPError as exc:
@@ -676,22 +689,22 @@ def run_repl(config: dict[str, Any]) -> int:
             # had to figure out the restart ritual themselves. Now it is
             # named, and recovery is one keypress.
             if exc.code >= 500:
-                _handle_backend_failure(config, f"HTTP {exc.code} from the model server")
+                _handle_backend_failure(config, f"Model server error: HTTP {exc.code}.")
             else:
-                ui.error_box(f"Backend rejected the request (HTTP {exc.code}).")
+                ui.error_box(f"The model server rejected the request: HTTP {exc.code}.")
             tel.record_turn(turn, status="error")
             clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
         except urllib.error.URLError:
             if not sa.ping_backend(config):
-                _handle_backend_failure(config, "the model server is not responding")
+                _handle_backend_failure(config, "The model server is not responding.")
             else:
-                ui.error_box("Network error — backend returned an unexpected response.")
+                ui.error_box("The model server returned an unexpected response.")
             tel.record_turn(turn, status="error")
             clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))
         except (ConnectionResetError, ConnectionAbortedError):
             ui.error_box(
                 "npurun dropped the stream connection.\n"
-                'Add  "use_streaming": false  to shellai.json to avoid this.'
+                "Turn streaming off: /config use_streaming false"
             )
             tel.record_turn(turn, status="error")
             clog.turn_end(probe.turn, status="error", message=_last_error_text(locals()))

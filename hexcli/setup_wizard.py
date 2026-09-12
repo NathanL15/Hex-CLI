@@ -25,17 +25,17 @@ from hexcli.ui import C, cprint
 # (key, question, kind, choices) — kind is "bool" or "choice".
 QUESTIONS: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("autopilot_confirm_destructive",
-     "Confirm before running destructive commands (rm, format, …)?", "bool", ()),
+     "Confirm destructive commands such as rm and format?", "bool", ()),
     ("autopilot_confirm_sensitive",
-     "Confirm before touching sensitive paths (ssh keys, credentials)?", "bool", ()),
+     "Confirm access to sensitive paths such as SSH keys and credentials?", "bool", ()),
     ("workspace_write_scope",
      "Block file writes outside the project directory?", "bool", ()),
     ("network_access",
-     "Network access for fetch_url", "choice", ("ask", "deny", "allow")),
+     "Network access for fetch_url?", "choice", ("ask", "deny", "allow")),
     ("show_diffs",
      "Show a diff after every file change?", "bool", ()),
     ("rich_input",
-     "Rich input line (history, Tab completion, word editing)?", "bool", ()),
+     "Rich input line with history and Tab completion?", "bool", ()),
 ]
 
 
@@ -51,12 +51,12 @@ def _ask_choice(ask: Callable[[str], str], question: str,
                 choices: tuple[str, ...], current: str) -> str:
     menu = "/".join(c.upper() if c == current else c for c in choices)
     while True:
-        answer = ask(f"  {question} ({menu})? ").strip().lower()
+        answer = ask(f"  {question} [{menu}] ").strip().lower()
         if not answer:
             return current
         if answer in choices:
             return answer
-        cprint(f"    Please answer one of: {', '.join(choices)}", C.DIM)
+        cprint(f"    Answer {', '.join(choices[:-1])} or {choices[-1]}.", C.DIM)
 
 
 def write_config_keys(path: Path, chosen: dict[str, Any]) -> None:
@@ -106,7 +106,8 @@ def run_wizard(
     session immediately, not just the next launch.
     """
     print()
-    cprint("  Hex CLI setup  (Enter keeps the current value)", C.BOLD)
+    cprint("  Setup", C.BOLD)
+    cprint("  Enter keeps the current value.", C.DIM)
     print()
     chosen: dict[str, Any] = {}
     try:
@@ -120,24 +121,24 @@ def run_wizard(
                 chosen[key] = _ask_choice(ask, question, choices, current)
         print()
         for key, value in chosen.items():
-            marker = "" if config.get(key) == value else "  (changed)"
+            marker = "" if config.get(key) == value else "  changed"
             cprint(f"    {key} = {value!r}{marker}", C.DIM)
         print()
         confirm = ask(f"  Save to {config_path.name}? [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        cprint("  Setup cancelled; nothing written.", C.YELLOW)
+        cprint("  Cancelled. Nothing written.", C.DIM)
         return False
     if confirm not in ("", "y", "yes"):
-        cprint("  Nothing written.", C.YELLOW)
+        cprint("  Nothing written.", C.DIM)
         return False
     write_config_keys(config_path, chosen)
     config.update(chosen)
-    cprint(f"  Saved to {config_path}. Applied to this session.", C.BCYAN)
+    cprint(f"  Saved {config_path}.", C.DIM)
     shadowed = overridden_by_project(
         chosen, project_cfg if project_cfg is not None else Path.cwd() / ".shellai" / "config.json"
     )
     if shadowed:
-        cprint(f"  Note: this project's .shellai/config.json overrides "
-               f"{', '.join(sorted(shadowed))} on every load — edit it there too.", C.YELLOW)
+        cprint(f"  .shellai/config.json overrides {', '.join(sorted(shadowed))}. "
+               "Edit it there too.", C.YELLOW)
     return True

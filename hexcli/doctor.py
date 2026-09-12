@@ -48,8 +48,8 @@ def _mark(status: str) -> str:
 def check_python() -> Check:
     v = sys.version_info
     if v < (3, 10):
-        return Check("Python", FAIL, f"{v.major}.{v.minor} — 3.10+ required",
-                     "Install Python 3.11+ from python.org (ARM64 build).")
+        return Check("Python", FAIL, f"{v.major}.{v.minor}; 3.10 or newer required",
+                     "Install the ARM64 build of Python 3.11 or newer from python.org.")
     return Check("Python", PASS, f"{v.major}.{v.minor}.{v.micro} ({sys.executable})")
 
 
@@ -63,7 +63,7 @@ def check_packages() -> list[Check]:
             __import__(mod)
             out.append(Check(mod, PASS, "importable"))
         except ImportError:
-            out.append(Check(mod, WARN, f"missing — {why} disabled", fix))
+            out.append(Check(mod, WARN, f"missing; {why} off", fix))
     return out
 
 
@@ -82,12 +82,11 @@ def check_embedding_model(app_dir: Path) -> list[Check]:
     if model.exists() and model.stat().st_size > 1_000_000:
         checks.append(Check("embedding model", PASS, f"{model.stat().st_size // 1_000_000} MB"))
     else:
-        checks.append(Check("embedding model", WARN,
-                            "missing — semantic memory silently does nothing", fix))
+        checks.append(Check("embedding model", WARN, "missing; memory is off", fix))
     if tok.exists():
         checks.append(Check("embedding tokenizer", PASS, "present"))
     else:
-        checks.append(Check("embedding tokenizer", WARN, "missing — memory disabled", fix))
+        checks.append(Check("embedding tokenizer", WARN, "missing; memory is off", fix))
     return checks
 
 
@@ -107,8 +106,7 @@ def check_qairt() -> list[Check]:
     checks: list[Check] = []
     if not sdk.exists():
         checks.append(Check("QAIRT SDK", FAIL, f"not found at {sdk}",
-                            "Download from the Qualcomm developer portal (free account, "
-                            "not redistributable), then set QNN_SDK_ROOT."))
+                            "Download it from the Qualcomm developer portal and set QNN_SDK_ROOT."))
         return checks
     checks.append(Check("QAIRT SDK", PASS, str(sdk)))
     lib = sdk / "lib" / "aarch64-windows-msvc"
@@ -118,7 +116,7 @@ def check_qairt() -> list[Check]:
     adsp = Path(os.environ.get("ADSP_LIBRARY_PATH", ""))
     if not adsp.exists():
         checks.append(Check("ADSP_LIBRARY_PATH", WARN,
-                            "unset — npurun crashes with STATUS_STACK_BUFFER_OVERRUN without it",
+                            "unset; npurun crashes without it",
                             rf'setx ADSP_LIBRARY_PATH "{sdk}\lib\hexagon-v73\unsigned"'))
     else:
         checks.append(Check("ADSP_LIBRARY_PATH", PASS, str(adsp)))
@@ -136,7 +134,7 @@ def check_npurun() -> list[Check]:
         path = Path(exe) if exe else (local if local.exists() else None)
     if path is None:
         return [Check("npurun", FAIL, "binary not found",
-                      f"hexcli --update   (downloads npurun-arm64.exe from {_NPURUN_RELEASES})")]
+                      f"hexcli --update\n{_NPURUN_RELEASES}")]
     checks = [Check("npurun", PASS, str(path))]
     if ln is not None:
         version = ln._npurun_version(path)
@@ -144,18 +142,17 @@ def check_npurun() -> list[Check]:
         need = ".".join(str(n) for n in ln.REQUIRED_NPURUN)
         if ln.npurun_outdated(version=version) is not None:
             checks.append(Check("npurun version", FAIL,
-                                f"{ver} — this Hex CLI is written for {need}",
-                                f"hexcli --update   (or {need} from {ln.NPURUN_RELEASES})"))
+                                f"{ver}; {need} required",
+                                "hexcli --update"))
         else:
             checks.append(Check("npurun version", PASS, ver))
         if ln.REWIND_ROOT is not None:
             checks.append(Check("KV prefix reuse", PASS,
-                                f"on — npurun {ver}, {ln.REWIND_ROOT.name}"))
+                                f"on: npurun {ver}, {ln.REWIND_ROOT.name}"))
         else:
             checks.append(Check("KV prefix reuse", WARN,
-                                f"off — npurun {ver}, {ln.QNN_SDK_ROOT.name}",
-                                "Needs QAIRT >= 2.50 under C:/Qualcomm/AIStack and npurun >= 0.2.0 "
-                                "(turns are ~40% faster with it)."))
+                                f"off: npurun {ver}, {ln.QNN_SDK_ROOT.name}",
+                                r"Install QAIRT 2.50 or newer under C:\Qualcomm\AIStack."))
     try:
         r = subprocess.run([str(path), "list"], capture_output=True, text=True, timeout=20)
         models = [ln.split()[0] for ln in r.stdout.splitlines() if ln.strip()]
@@ -163,9 +160,9 @@ def check_npurun() -> list[Check]:
             checks.append(Check("model bundles", PASS, ", ".join(models)))
         else:
             checks.append(Check("model bundles", FAIL, "none downloaded",
-                                "npurun pull qwen3-4b-instruct-2507   (~2.5 GB)"))
+                                "npurun pull qwen3-4b-instruct-2507"))
     except Exception as exc:
-        checks.append(Check("model bundles", WARN, f"could not list ({exc.__class__.__name__})"))
+        checks.append(Check("model bundles", WARN, f"could not list: {exc.__class__.__name__}"))
     return checks
 
 
@@ -183,7 +180,7 @@ def check_server(config: dict[str, Any]) -> Check:
                         models = json.loads(m.read().decode("utf-8")).get("data") or []
                     first = models[0] if models else {}
                     if first.get("input_token_budget"):
-                        detail += (f" — input budget {first['input_token_budget']} of "
+                        detail += (f"; input budget {first['input_token_budget']} of "
                                    f"{first.get('context_size', '?')} tokens")
                 except Exception:
                     pass
@@ -191,14 +188,13 @@ def check_server(config: dict[str, Any]) -> Check:
     except Exception:
         pass
     return Check("model server", WARN, f"not responding at {host}",
-                 "Start it: python launcher.py   (or hexcli will offer to "
-                 "restart it when a turn fails)")
+                 "Launch Hex CLI, or run python launcher.py from the repo.")
 
 
 def check_ruff() -> Check:
     if shutil.which("ruff"):
-        return Check("ruff (optional)", PASS, "on PATH — lint_code tool enabled")
-    return Check("ruff (optional)", WARN, "not found — lint_code tool is hidden from the agent",
+        return Check("ruff (optional)", PASS, "on PATH")
+    return Check("ruff (optional)", WARN, "not found; lint_code is off",
                  "pip install ruff")
 
 
@@ -211,7 +207,7 @@ def check_workspace() -> list[Check]:
             break
     else:
         checks.append(Check("project instructions", WARN,
-                            "no AGENTS.md — the agent has no project-specific rules",
+                            "no AGENTS.md",
                             "Create AGENTS.md with a few lines about this project."))
     return checks
 
@@ -228,21 +224,21 @@ def run_doctor(config: dict[str, Any], app_dir: Path) -> int:
     checks += check_workspace()
 
     print()
-    cprint("Hex CLI installation check", C.BOLD)
+    cprint("  Install check", C.BOLD)
     print()
     for c in checks:
         print(f"  {_mark(c.status)}  {c.name:<22} {c.detail}")
         if c.fix and c.status != PASS:
             for line in c.fix.splitlines():
-                cprint(f"          → {line}", C.DIM)
+                cprint(f"            {line}", C.DIM)
     fails = sum(1 for c in checks if c.status == FAIL)
     warns = sum(1 for c in checks if c.status == WARN)
     print()
     if fails:
-        cprint(f"  {fails} blocking problem(s), {warns} warning(s).", C.BRED)
+        cprint(f"  {fails} failed, {warns} warnings.", C.BRED)
     elif warns:
-        cprint(f"  Ready, with {warns} optional feature(s) unavailable.", C.BYELLOW)
+        cprint(f"  {warns} warnings.", C.BYELLOW)
     else:
-        cprint("  Everything checks out.", C.BGREEN)
+        cprint("  All checks passed.", C.BGREEN)
     print()
     return 1 if fails else 0

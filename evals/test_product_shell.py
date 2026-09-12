@@ -153,7 +153,7 @@ def test_doctor_reports_exit_code_on_failure() -> None:
         # An empty app dir: no model, and QAIRT likely absent in CI.
         rc = doctor.run_doctor({"openai_compatible": {"base_url": ""}}, Path(tmp))
     text = buf.getvalue()
-    assert "installation check" in text.lower()
+    assert "install check" in text.lower()
     assert rc in (0, 1)
 
 
@@ -657,7 +657,7 @@ def test_doctor_fails_on_an_older_npurun_build() -> None:
         checks = doctor.check_npurun()
     bad = [c for c in checks if c.name == "npurun version"]
     assert bad and bad[0].status == doctor.FAIL, [(c.name, c.status) for c in checks]
-    assert "--update" in bad[0].fix and "0.2.3" in bad[0].fix
+    assert "--update" in bad[0].fix and "0.2.3" in bad[0].detail
 
 
 def test_version_is_written_in_one_place() -> None:

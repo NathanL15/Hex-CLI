@@ -337,9 +337,9 @@ def test_context_command_shows_the_deciding_numbers() -> None:
                                   {**_CFG, "context_window_tokens": 3_696},
                                   budget=(850, 1062), system_prompt_tokens=2_340, history_tokens=100)
         out = buf.getvalue()
-        assert "100 / 850 tokens" in out and "(1 messages)" in out, out
+        assert "100 / 850 tokens" in out and ", 1 messages" in out, out
         assert "2,340 tokens" in out and "3,696 tokens per call" in out, out
-        assert "compactions    2" in out and "after ~750 more tokens" in out, out
+        assert "compactions    2" in out and "after about 750 more tokens" in out, out
         assert out.count("\n") <= 8, "just enough: one screenful, no more"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):

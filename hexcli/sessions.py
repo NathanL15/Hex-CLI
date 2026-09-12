@@ -49,7 +49,7 @@ def create_session() -> dict[str, Any]:
     now = iso_now()
     return {
         "id": str(uuid4()),
-        "title": "New Chat",
+        "title": "New session",
         "created_at": now,
         "modified_at": now,
         "messages": [],
@@ -66,7 +66,7 @@ def generate_session_title(text: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9\s-]", "", text).strip()
     words = [w for w in cleaned.split() if w]
     if not words:
-        return "New Chat"
+        return "New session"
     return " ".join(w.upper() if w.isupper() else w.capitalize() for w in words[:6])
 
 
@@ -143,7 +143,7 @@ def load_history_store(config: dict[str, Any]) -> list[dict[str, Any]]:
         if modified_at < cutoff:
             changed = True
             continue
-        s.setdefault("title", "New Chat")
+        s.setdefault("title", "New session")
         s.setdefault("created_at", s.get("modified_at", iso_now()))
         s.setdefault("messages", [])
         s.setdefault("compact_count", 0)

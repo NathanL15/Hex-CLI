@@ -512,7 +512,7 @@ def redraw_transcript(session: dict[str, Any]) -> None:
         role, content = msg.get("role"), str(msg.get("content", ""))
         if role == "user":
             print()
-            cprint(f"> {content}", C.DIM)
+            print(f"{C.BOLD}>{C.RESET} {content}")
         elif role == "assistant":
             render_result("Result", content)
 
@@ -536,16 +536,34 @@ def tool_event(tag: str, detail: str) -> None:
 
 
 def tool_header(tool_name: str) -> None:
-    cprint(f"\n{C.BMAGENTA}◆{C.RESET} {C.BOLD}{C.BCYAN}{tool_name}{C.RESET}")
+    """One blank line, then the card. Everything the tool prints attaches
+    below it with no further blank lines."""
+    cprint(f"\n{C.BCYAN}◆{C.RESET} {C.BOLD}{tool_name}{C.RESET}")
 
 
 def command_echo(command: str) -> None:
-    cprint(f"\n{C.GRAY}${C.RESET} {C.GREEN}{command}{C.RESET}\n")
+    cprint(f"{C.DIM}${C.RESET} {C.BOLD}{command}{C.RESET}")
+
+
+def tool_error(message: str) -> None:
+    """A failed tool call, on one dim red line under its card. The model
+    still receives the full error text; the transcript gets the first line."""
+    first = str(message).strip().splitlines()[0] if str(message).strip() else "failed"
+    cprint(f"{C.RED}▸ error{C.RESET} {first}", file=sys.stderr)
+
+
+def _usable_width() -> int:
+    try:
+        width = os.get_terminal_size().columns
+    except OSError:
+        width = 80
+    pad = getattr(sys.stdout, "pad", 0) or 0
+    return max(20, width - 2 * int(pad))
 
 
 def error_box(message: str, *, file: Any = None) -> None:
     lines = str(message).strip().splitlines() or [""]
-    width = min(max(len(ln) for ln in lines) + 4, 100)
+    width = min(max(len(ln) for ln in lines) + 4, _usable_width() - 2)
     out = file or sys.stderr
     cprint("┌" + "─" * width, C.RED, file=out)
     for ln in lines:
@@ -553,7 +571,9 @@ def error_box(message: str, *, file: Any = None) -> None:
     cprint("└" + "─" * width, C.RED, file=out)
 
 
-def print_banner(model: str, backend: str) -> None:
+def print_banner(model: str, backend: str, engine: str | None = None) -> None:
+    """The one banner. `engine` names the hardware ("Hexagon NPU"); without
+    it the line falls back to naming the server, never the transport."""
     title = "HEX CLI"
     try:
         cols = os.get_terminal_size().columns
@@ -576,11 +596,8 @@ def print_banner(model: str, backend: str) -> None:
         cprint("└" + "─" * w + "┘", C.BCYAN)
     else:
         cprint(title, C.BOLD + C.BCYAN)
-    cprint(
-        f"  model: {C.BWHITE}{model}{C.RESET}{C.DIM}  backend: {backend}  "
-        f"/help for commands  Esc cancels{C.RESET}",
-        C.DIM,
-    )
+    where = f"on the {engine}" if engine else f"via {backend}"
+    cprint(f"  {C.BWHITE}{model}{C.RESET}{C.DIM} {where}  ·  /help  ·  Esc cancels{C.RESET}", C.DIM)
     print()
 
 
@@ -589,76 +606,67 @@ def print_banner(model: str, backend: str) -> None:
 # ---------------------------------------------------------------------------
 
 HELP_TEXT = textwrap.dedent("""
-    Hex CLI  —  local Hexagon NPU terminal agent
+    Hex CLI, a local agent on the Hexagon NPU
 
-    SLASH COMMANDS:
-      /help                         this help
-      /history                      list saved sessions
-      /clear                        clear screen and chat history
-      /new                          clear chat history, keep the scrollback
-      /resume <n>                   resume session #n from /history
-      /search <text>                find past sessions by content, then /resume
-      /compact                      summarise + compress history (saves context)
-      /undo                         remove last exchange; restores files if the turn wrote any
-      /diff                         show what the agent changed this turn
-      /stats                        turns, elapsed time, tokens, context usage, chat log path
-      /context                      how full the context is and when it compacts
-      /cwd [path]                   show or change working directory
-      /config [key [value]]         view or set runtime config  e.g. /config temperature 0.2
-      /memory [status|list|search|clear|prune]  inspect or manage the memory store
-      /setup                        interactive config wizard (saves to file)
-      /doctor                       diagnose the installation
-      /tools                        list agent tools
-      /exit  /quit                  exit
+    Session
+      /new                    start a new session, keep the screen
+      /clear                  clear the screen and start a new session
+      /history                list saved sessions
+      /resume <n>             reopen session n
+      /search <text>          find sessions by content
+      /compact                compress the chat history
+      /undo                   revert the last exchange, including files it wrote
+      /diff                   show what the agent changed this turn
 
-    CUSTOM COMMANDS:
-      Drop a .md file in .shellai/commands/ (project) or ~/.shellai/commands/
-      (global) — /<filename> runs its content as a prompt. $ARGUMENTS in the
-      file is replaced with whatever you type after the command; without the
-      placeholder, arguments are appended. Built-ins always win name clashes.
+    Status
+      /context                how full the context is and when it compacts
+      /stats                  turns, time and tokens for this session
+      /doctor                 check the install
+      /tools                  list the agent's tools
 
-    KEYS:
-      Up / Down                     history (prefix-searched once you type)
-      Tab                           complete commands, config keys, file paths
-      Ctrl+Left / Ctrl+Right        move by word
-      Ctrl+W / Ctrl+U / Ctrl+K      kill word back / to line start / to line end
-      Esc                           clear the line — or cancel a running step
-      Ctrl+Plus / Ctrl+Minus        bigger / smaller text (remembered next time)
-      \\ then Enter                  continue on a new line (pastes keep theirs)
+    Setup
+      /config [key [value]]   view or set a config value for this session
+      /setup                  config wizard, writes the config file
+      /memory [status|list|search|clear|prune]   the memory store
+      /cwd [path]             show or change the working directory
+      /exit                   quit
 
-    AGENT TOOLS:
-      run_command     read_file      edit_file      write_file    append_file
-      list_directory  search_files   find_files     run_code      verify_syntax
-      lint_code       search_memory  fetch_url      batch         delegate
-      (/tools for full signatures)
+    Custom commands: a .md file in .shellai/commands/ or ~/.shellai/commands/
+    becomes /<filename> and its text is sent as the prompt. $ARGUMENTS is
+    replaced with what follows the command. Built-in names win.
 
-    NPU NOTE:
-      Primary path: npurun + qwen3-4b-instruct-2507 on the Hexagon NPU (~15 tok/s).
-      Fallback: Phi-4-mini via DirectML (Adreno GPU) or Ollama on CPU.
-      See README.md for setup. launcher.py auto-selects the best available backend.
+    Keys
+      Up / Down                 history, filtered by what is typed
+      Tab                       complete commands, config keys and paths
+      Shift+Enter               new line; \\ then Enter also works
+      Ctrl+Left / Ctrl+Right    move by word
+      Ctrl+W / Ctrl+U / Ctrl+K  delete the word, to line start, to line end
+      Esc                       clear the line, or cancel a running turn
+      Ctrl+L                    clear the screen
+      Ctrl+Plus / Ctrl+Minus    text size in the classic console
+
+    The agent runs qwen3-4b-instruct-2507 on the Hexagon NPU through npurun.
 """).strip()
 
 TOOLS_HELP = textwrap.dedent("""
     Tools available to the agent:
-      run_command(command)                        Run a PowerShell command (safety-classified;
-                                                  sensitive/destructive ones ask first).
-      read_file(path, offset, limit)              Read a file; offset/limit page through big ones.
-      edit_file(path, old_string, new_string)     Replace text (fuzzy match if whitespace or
-                                                  indentation differs; undo snapshot).
-      write_file(path, content)                   Write or overwrite a file (undo snapshot).
-      append_file(path, content)                  Append text to a file.
-      list_directory(path)                        List files and folders.
-      search_files(pattern, path, glob)           Grep — search across files by content.
-      find_files(glob, path)                      Find files by glob pattern.
-      verify_syntax(path, language)               Non-destructive syntax check (.py .json .ps1 .js).
-      run_code(path, args, timeout)               Execute a script in a sandboxed subprocess.
-      lint_code(path)                             Run ruff and return findings (needs ruff on PATH).
-      search_memory(query, top_k)                 Recall relevant prior session context.
-      fetch_url(url, max_chars)                   Fetch a URL and return readable text.
-      batch(actions)                              Run up to 8 read-only tools in parallel.
-      delegate(task)                              Spawn a focused sub-agent (max 5 steps).
+      run_command(command)                      run PowerShell; risky ones ask first
+      read_file(path, offset, limit)            read a file, paged by offset and limit
+      edit_file(path, old_string, new_string)   replace text; undoable
+      write_file(path, content)                 write a file; undoable
+      append_file(path, content)                append to a file
+      list_directory(path)                      list files and folders
+      search_files(pattern, path, glob)         search file contents
+      find_files(glob, path)                    find files by glob
+      verify_syntax(path, language)             syntax check for .py .json .ps1 .js
+      run_code(path, args, timeout)             run a script in a sandbox
+      lint_code(path)                           run ruff; needs ruff on PATH
+      search_memory(query, top_k)               recall prior sessions
+      fetch_url(url, max_chars)                 fetch a URL as readable text
+      batch(actions)                            up to 8 read-only tools at once
+      delegate(task)                            a sub-agent of up to 5 steps
 
-    File writes are confined to the working directory (see workspace_write_scope).
+    Writes stay in the working directory; see workspace_write_scope.
 """).strip()
 
 
@@ -693,42 +701,40 @@ def truncate_summary(text: str, width: int) -> str:
 
 def render_history_list(sessions: list[dict[str, Any]], current_id: str) -> None:
     if not sessions:
-        print("\nNo saved chats.\n")
+        cprint("  No saved sessions.", C.DIM)
         return
     print()
-    header = f"{'#':<4}{'Summary':<52}{'Modified':<12}{'Created'}"
+    header = f"  {'#':<4}{'Session':<52}{'Modified':<12}{'Created'}"
     cprint(header, C.BOLD)
-    cprint("─" * len(header), C.DIM)
+    cprint("  " + "─" * (len(header) - 2), C.DIM)
     for i, s in enumerate(sessions, start=1):
-        marker = "▶" if s.get("id") == current_id else " "
-        summary = truncate_summary(str(s.get("title", "New Chat")), 48)
+        current = s.get("id") == current_id
+        marker = "▸" if current else " "
+        summary = truncate_summary(str(s.get("title", "New session")), 48)
         modified = format_relative_time(str(s.get("modified_at", "")))
         created = format_relative_time(str(s.get("created_at", "")))
-        compact = s.get("compact_count", 0)
-        compact_str = f" [c×{compact}]" if compact else ""
-        color = C.BCYAN if s.get("id") == current_id else ""
-        cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}{compact_str}", color)
+        cprint(f"{marker} {i:>2}. {summary:<48}  {modified:<10}  {created}", C.BOLD if current else "")
     print()
 
 
 def render_search_results(term: str, hits: list[dict[str, Any]]) -> None:
     """Render /search hits: same numbering as /history, matches highlighted."""
     if not hits:
-        print(f"\nNo sessions match {term!r}.\n")
+        cprint(f'  No sessions match "{term}".', C.DIM)
         return
     print()
-    cprint(f"{len(hits)} session(s) match {term!r}:", C.BOLD)
+    cprint(f'  Sessions matching "{term}"', C.BOLD)
     for h in hits:
         s = h["session"]
-        summary = truncate_summary(str(s.get("title", "New Chat")), 48)
+        summary = truncate_summary(str(s.get("title", "New session")), 48)
         modified = format_relative_time(str(s.get("modified_at", "")))
         print()
-        cprint(f"  {h['index']:>2}. {summary}  ({modified})", C.BCYAN)
+        cprint(f"  {h['index']:>2}. {summary}  {C.DIM}{modified}{C.RESET}")
         for role, prefix, match, suffix in h["snippets"]:
-            print(f"      {C.DIM}[{role}]{C.RESET} {prefix}"
+            print(f"      {C.DIM}{role}{C.RESET}  {prefix}"
                   f"{C.BOLD}{C.BYELLOW}{match}{C.RESET}{suffix}")
     print()
-    cprint("  Reopen one with /resume <n>.", C.DIM)
+    cprint("  /resume <n> reopens one.", C.DIM)
     print()
 
 
@@ -769,11 +775,8 @@ def show_context(
     print(f"  Compact runs:     {compact_count}")
     print(f"  Max agent steps:  {config.get('max_agent_steps', 15)}")
     print(f"  Model:            {config.get('model', 'unknown')}")
-    print(f"  Backend:          {config.get('backend', 'ollama')}")
-    if est_tokens >= crit:
-        cprint("  ✗ Past degradation threshold; auto-compact runs after the next turn.", C.BRED)
-    elif est_tokens >= warn:
-        cprint("  ⚠ At history budget; auto-compact runs after this turn.", C.BYELLOW)
+    if est_tokens >= warn:
+        cprint("  ⚠ Auto-compact runs after the next turn.", C.BYELLOW)
     print()
 
 
@@ -793,16 +796,16 @@ def show_context_brief(
     if history_tokens >= warn:
         nxt = "auto-compact runs after the next turn"
     else:
-        nxt = f"auto-compact after ~{warn - history_tokens:,} more tokens"
+        nxt = f"auto-compact after about {warn - history_tokens:,} more tokens"
     print()
-    cprint(f"Context  {context_gauge(pct)}", C.BOLD)
-    print(f"  history        {history_tokens:,} / {warn:,} tokens  ({len(messages)} messages)")
-    print(f"  system prompt  {system_prompt_tokens:,} tokens")
+    cprint(f"  Context  {context_gauge(pct)}", C.BOLD)
+    print(f"    history        {history_tokens:,} / {warn:,} tokens, {len(messages)} messages")
+    print(f"    system prompt  {system_prompt_tokens:,} tokens")
     if window:
-        print(f"  server budget  {window:,} tokens per call")
+        print(f"    server budget  {window:,} tokens per call")
     if compact_count:
-        print(f"  compactions    {compact_count}")
-    print(f"  next           {nxt}")
+        print(f"    compactions    {compact_count}")
+    print(f"    next           {nxt}")
     print()
 
 
@@ -918,7 +921,9 @@ def confirm_or_deny(prompt: str, timeout_s: float | None = None) -> bool:
     # the question is not printed on top of a still-live input box (nested
     # inside a confirm_* wrapper this is already down, so it is a no-op).
     with paused_status():
-        return _confirm_or_deny_read(prompt, timeout_s)
+        allowed = _confirm_or_deny_read(prompt, timeout_s)
+        cprint("  Allowed." if allowed else "  Denied.", C.DIM)
+        return allowed
 
 
 def ask_line(prompt: str, timeout_s: float | None = None) -> str | None:
@@ -933,12 +938,11 @@ def ask_line(prompt: str, timeout_s: float | None = None) -> str | None:
     if not sys.stdin.isatty():
         return None
     with paused_status():
-        return _console_read_line(prompt, timeout_s, cancel_note="   Cancelled.", timeout_suffix=".")
+        return _console_read_line(prompt, timeout_s, cancel_note="  Cancelled.", timeout_suffix=".")
 
 
 def _confirm_or_deny_read(prompt: str, timeout_s: float) -> bool:
-    answer = _console_read_line(prompt, timeout_s, cancel_note="   Cancelled; denied.",
-                                timeout_suffix="; denied.")
+    answer = _console_read_line(prompt, timeout_s, cancel_note="", timeout_suffix=".")
     return answer is not None and answer.strip().lower() in {"y", "yes"}
 
 
@@ -959,7 +963,8 @@ def _console_read_line(prompt: str, timeout_s: float, cancel_note: str,
             return buf
         if ch == "\x03":  # Ctrl-C — an emphatic no, not a crash
             print()
-            cprint(cancel_note, C.DIM)
+            if cancel_note:
+                cprint(cancel_note, C.DIM)
             return None
         if ch in ("\b", "\x7f"):
             if buf:
@@ -976,7 +981,7 @@ def _console_read_line(prompt: str, timeout_s: float, cancel_note: str,
         sys.stdout.write(ch)
         sys.stdout.flush()
     print()
-    cprint(f"   No response after {timeout_s:.0f}s{timeout_suffix}", C.DIM)
+    cprint(f"  No answer after {timeout_s:.0f} s{timeout_suffix}", C.DIM)
     return None
 
 
@@ -985,10 +990,9 @@ def confirm_network_fetch(url: str) -> bool:
     require explicit consent per fetch. Denied when non-interactive."""
     with paused_status():
         print()
-        cprint("⚠  Agent wants to fetch a URL (the only network access it has):", C.BYELLOW, bold=True)
-        cprint(f"   {url}", C.CYAN)
-        print()
-        return confirm_or_deny("Allow this fetch? [y/N] ")
+        cprint("⚠ The agent wants to fetch a URL:", C.BYELLOW, bold=True)
+        cprint(f"  {url}", C.CYAN)
+        return confirm_or_deny("  Allow? [y/N] ")
 
 
 def confirm_sensitive_command(cmd: str) -> bool:
@@ -996,11 +1000,10 @@ def confirm_sensitive_command(cmd: str) -> bool:
     execution) requires explicit consent; denied when non-interactive."""
     with paused_status():
         print()
-        cprint("⚠  Agent wants to access sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
-        cprint(f"   {cmd}", C.RED)
-        cprint("   (credentials / keys / security files: deny unless YOU asked for exactly this)", C.DIM)
-        print()
-        return confirm_or_deny("Allow? [y/N] ")
+        cprint("⚠ The agent wants to read sensitive data or run an obfuscated command:", C.BYELLOW, bold=True)
+        cprint(f"  {cmd}", C.RED)
+        cprint("  Deny unless you asked for exactly this.", C.DIM)
+        return confirm_or_deny("  Allow? [y/N] ")
 
 
 def confirm_destructive_command(cmd: str) -> bool:
@@ -1008,16 +1011,16 @@ def confirm_destructive_command(cmd: str) -> bool:
     y/yes; denied when non-interactive or unanswered."""
     with paused_status():
         print()
-        cprint("⚠  Agent wants to run a destructive command:", C.BYELLOW, bold=True)
-        cprint(f"   {cmd}", C.RED)
-        print()
-        return confirm_or_deny("Allow? [y/N] ")
+        cprint("⚠ The agent wants to run a destructive command:", C.BYELLOW, bold=True)
+        cprint(f"  {cmd}", C.RED)
+        return confirm_or_deny("  Allow? [y/N] ")
 
 
 def render_result(title: str, body: str) -> None:
+    """An answer that did not stream (or streamed differently). Printed the
+    way a streamed answer lands: a blank line, the text, a blank line. The
+    `title` is kept for callers but not shown; streamed answers carry none."""
     from hexcli.markdown_stream import render_markdown  # lazy: it imports C from here
     print()
-    cprint(f"── {title} ", C.BOLD + C.BCYAN)
-    cprint("─" * 60, C.DIM)
     print(render_markdown(body))
     print()

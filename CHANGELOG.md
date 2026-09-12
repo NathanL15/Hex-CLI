@@ -64,6 +64,56 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### Copy, glyphs and flow, end to end
+
+Two audits over every string a person sees (about 120 findings) and the
+full interaction flow, then one pass to fix them. Model-facing text is
+untouched.
+
+* **One banner.** The launcher used to print its own two-section header and
+  name the model and engine four times before the REPL's banner. It is now
+  quiet when the server is already up, shows a spinner only while starting
+  it, and stops with the log path on failure instead of falling through to
+  the unmaintained DirectML and Ollama tiers. The REPL banner reads
+  `qwen3-4b-instruct-2507 on the Hexagon NPU · /help · Esc cancels`; the
+  old `backend: openai` told NPU users they were on OpenAI.
+* **`/help` regrouped** into Session, Status, Setup and Keys, wrapped to 76
+  columns, Shift+Enter and Ctrl+L added, the DirectML/Ollama "NPU note"
+  gone. `/tools` shortened to one line per tool.
+* **One glyph set.** `◆` tool card (cyan, no more magenta), `▸` result line,
+  `⚠` warning, `✓ ✗` only in the launcher and doctor. The delegate's `⟶`,
+  the history list's `▶`, the launcher's `!` and the `[warn]` tag are gone.
+  `$` command echo is dim with the command bold; command output is dim and
+  ends with `▸ [run] exit N`, so evidence no longer looks like the answer.
+* **Rhythm.** One blank line before a tool card, none after; one blank line
+  before every answer (the first streamed byte adds it); the answer box
+  lost its `── Result` title so streamed and boxed answers look alike; a
+  turn that stopped on a loop or the step limit shows one `⚠ Stopped: …`
+  line and no box of raw tool output; tool failures are one dim red
+  `▸ error` line under the card instead of a red frame.
+* **Confirms.** `⚠ The agent wants to …`, the command indented two spaces,
+  `Allow? [y/N]`, then `Allowed.` or `Denied.` so the transcript records
+  the outcome. The all-caps "unless YOU asked" aside is gone.
+* **Notices** are two-space indented, dim, one past-tense sentence:
+  `Chat history cleared.`, `Last exchange removed.`, `Memory cleared.`,
+  `Cancelled.` everywhere (was also `Aborted.`), `Unknown command /hlep.
+  Did you mean /help?`. The backend-failure flow reads `Model server error:
+  HTTP 500.` then `Restart the model server? [Y/n]` and, after a restart,
+  `Press Up, then Enter to resend.`; `python launcher.py` advice that only
+  works from the repo became `Relaunch Hex CLI`. The HTTP 404 case no
+  longer suggests `ollama pull` on the NPU path. `/stats` ends with the same
+  block as `/context` instead of a second format of the same numbers.
+  `/resume` reprints the conversation it reopened.
+* **Status line** labels are `thinking`, `responding`, `▸ tool` with the
+  turn's elapsed seconds, and `Esc cancels` sits at the right edge while a
+  turn runs, so the location no longer blinks off at 80 columns. The empty
+  input shows a dim `ask, or / for commands` hint.
+* **Doctor, setup, update, uninstall** copy brought in line: no em-dash
+  asides, `All checks passed.`, `N failed, M warnings.`, `Saved …`,
+  `Cancelled. Nothing written.`; the wizard now reads through the same
+  polled prompt as the confirms, so the box is lowered for its questions.
+  Default session title is `New session`.
+
 ### Answers render their markdown
 
 Streamed answers printed their markup raw: `## Heading`, `**bold**`,

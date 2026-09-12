@@ -60,6 +60,25 @@ set_mock_responses = llm.set_mock_responses
 _pop_mock_response = llm._pop_mock_response
 _TokenEstimator = llm._TokenEstimator
 last_streamed_matches = llm.last_streamed_matches
+
+# How the last turn ended when it did not end on a model message: "loop" or
+# "step_limit". The REPL then skips the answer box (the notice already said
+# what happened; the returned text is raw tool output kept for the history).
+_LAST_TURN_STOP: str | None = None
+
+
+def _mark_turn_stopped(how: str) -> None:
+    global _LAST_TURN_STOP
+    _LAST_TURN_STOP = how
+
+
+def clear_turn_stop() -> None:
+    global _LAST_TURN_STOP
+    _LAST_TURN_STOP = None
+
+
+def last_turn_stopped() -> str | None:
+    return _LAST_TURN_STOP
 _TOKEN_ESTIMATOR = llm._TOKEN_ESTIMATOR
 estimate_tokens = llm.estimate_tokens
 _ollama_stream_chat = llm._ollama_stream_chat
@@ -674,7 +693,8 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
     _in_delegate = True
     _CURRENT_SESSION_ID = str(uuid4())
 
-    cprint(f"\n  ⟶ delegate: {task[:100]}", C.BCYAN)
+    ui.tool_header("delegate")
+    ui.tool_event("delegate", task[:100])
     delegate_config = dict(config)
     delegate_config["max_agent_steps"] = min(int(config.get("max_agent_steps", 15)), 5)
     try:
@@ -692,7 +712,7 @@ def _run_delegate(config: dict[str, Any], task: str, shell_exe: str) -> str:
     cap = 1500
     if len(result) > cap:
         result = result[:cap] + f"\n...[delegate output truncated to {cap} chars]"
-    cprint("  ⟶ delegate done", C.DIM)
+    ui.tool_event("delegate", "finished")
     return result
 
 
@@ -1082,11 +1102,7 @@ def _run_autopilot_turn(
         global _PROMPT_OVERRIDE_WARNED
         if not _PROMPT_OVERRIDE_WARNED:
             _PROMPT_OVERRIDE_WARNED = True
-            cprint(
-                "  [warn] autopilot_system_prompt is set: the tuned system prompt "
-                "is replaced entirely. Remove the key to restore it.",
-                C.YELLOW,
-            )
+            cprint("  ⚠ autopilot_system_prompt replaces the built-in system prompt.", C.YELLOW)
 
     # Prompt split: a conservatively-routed knowledge query gets the small
     # no-tools prompt (structural tool restraint + ~40% lower first-token
@@ -1143,7 +1159,7 @@ def _run_autopilot_turn(
         nonlocal _escalation_used
         if _escalator is None or _escalation_used:
             return False
-        cprint("\n  Consulting the local escalation model…", C.BCYAN, file=sys.stderr)
+        cprint("\n  Consulting the escalation model.", C.DIM, file=sys.stderr)
         advice = _escalator.consult(
             local_escalation.build_situation(query, _turn_events, problem))
         if not advice:
@@ -1163,9 +1179,7 @@ def _run_autopilot_turn(
 
     for step in range(max_steps):
         step_label = "thinking" if step == 0 else f"step {step + 1}/{max_steps}"
-        if ui._live_area() is not None:
-            print(file=sys.stderr)   # the status line carries the step label
-        else:
+        if ui._live_area() is None:   # with the status bar up, the status line carries the label
             cprint(f"\n  {step_label}...", C.DIM, file=sys.stderr)
 
         # Up to 2 retries on bad JSON
@@ -1337,7 +1351,7 @@ def _run_autopilot_turn(
         except Exception as exc:
             tool_output = f"Error: {exc}"
             tool_status = "error"
-            ui.error_box(str(exc))
+            ui.tool_error(str(exc))
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "error")
         _probe(
@@ -1354,7 +1368,7 @@ def _run_autopilot_turn(
                 key = str(resolve_path(str(tool_path)))
                 if key in _turn_snapshots:
                     after = Path(key).read_text(encoding="utf-8", errors="replace")
-                    print(diffview.render_diff(_turn_snapshots[key], after, key))
+                    print(diffview.render_diff(_turn_snapshots[key], after, str(tool_path)))
             except Exception:
                 pass
 
@@ -1382,9 +1396,6 @@ def _run_autopilot_turn(
                          and all(err for _t, _tgt, err, _out in _loop_tracker)
                          and len({(t, tgt) for t, tgt, _e, _out in _loop_tracker}) == 1)
         if _identical_trip or _failure_trip:
-            reason = ("3 identical results" if _identical_trip
-                      else "3 straight failures of the same call")
-            cprint(f"\n  ⚠ Agent appears stuck in a repeat loop ({reason}).", C.BYELLOW)
             # Escalation trigger A — the loop detector: consult the local
             # model BEFORE giving up (the cloud path stays as the fallback).
             if _consult_and_inject(
@@ -1392,21 +1403,20 @@ def _run_autopilot_turn(
                     f"kept returning:\n{tool_output[:400]}", raw):
                 _loop_tracker.clear()
                 continue
-            cprint("  Stopping.", C.BYELLOW)
+            what = f"{tool_name} returned the same result" if _identical_trip else f"{tool_name} failed"
+            cprint(f"\n  ⚠ Stopped: {what} three times in a row.", C.BYELLOW)
+            _mark_turn_stopped("loop")
             if escalate.get_api_key(config):
                 # Same non-interactive hazard as the safety confirms: this sits in
                 # the autopilot path, so an unattended run must not stall here.
-                escalated = ui.confirm_or_deny(
-                    "\n  The agent is stuck. Escalate to Claude cloud? [y/N] "
-                )
+                escalated = ui.confirm_or_deny("  Escalate to the cloud model? [y/N] ")
                 if escalated:
                     tool_seq = [entry[0] for entry in _loop_tracker]
                     suggestion = escalate.escalate(config, messages, tool_seq)
-                    cprint("\n── Cloud suggestion ──────────────────────────────────────────────", C.BCYAN)
+                    print()
+                    cprint("  Cloud suggestion", C.BOLD)
                     print(suggestion)
                     print()
-            else:
-                cprint("  (set ANTHROPIC_API_KEY to enable cloud escalation)", C.DIM)
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="error_loop")
             if session:
                 _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
@@ -1416,8 +1426,8 @@ def _run_autopilot_turn(
         messages.append({"role": "user", "content": f"Tool output:\n{trim_tool_output(tool_output, step_limit)}"})
 
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
-    if total_eval:
-        cprint("\n  Step limit reached.", C.DIM)
+    cprint("\n  ⚠ Stopped at the step limit.", C.BYELLOW)
+    _mark_turn_stopped("step_limit")
     if session:
         _SESSION_UNDO_SNAPSHOTS[session.get("id", "")] = _turn_snapshots
     _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
@@ -1655,27 +1665,28 @@ def main() -> int:
     except urllib.error.HTTPError as error:
         if error.code == 404:
             model = config.get("model", "unknown")
-            ui.error_box(f"Model '{model}' not found. Pull it with:  ollama pull {model}")
+            hint = f"\nollama pull {model}" if config.get("backend") == "ollama" else ""
+            ui.error_box(f"Model '{model}' not found on the server.{hint}")
         else:
-            ui.error_box(f"Backend error {error.code}: {error.reason}")
+            ui.error_box(f"Model server error {error.code}: {error.reason}")
         if DEBUG:
             raise
         return 2
     except urllib.error.URLError:
         if not ping_backend(config):
             ui.error_box(
-                f"Backend at {_backend_url(config)} is not responding.\n"
-                "Restart it with: python launcher.py"
+                f"The model server at {_backend_url(config)} is not responding.\n"
+                "Relaunch Hex CLI to restart it."
             )
         else:
-            ui.error_box("Network error — backend returned an unexpected response.")
+            ui.error_box("The model server returned an unexpected response.")
         if DEBUG:
             raise
         return 2
     except (ConnectionResetError, ConnectionAbortedError):
         ui.error_box(
             "npurun dropped the stream connection.\n"
-            'Add  "use_streaming": false  to shellai.json to avoid this.'
+            "Turn streaming off: /config use_streaming false"
         )
         if DEBUG:
             raise

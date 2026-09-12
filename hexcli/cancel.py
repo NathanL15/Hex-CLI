@@ -64,7 +64,7 @@ def run_cancellable(label: str, work: Any) -> Any:
             error["value"] = exc
 
     thread = threading.Thread(target=worker, daemon=True)
-    with CancelMonitor() as monitor, Spinner(f"{label} (Esc to cancel)"):
+    with CancelMonitor() as monitor, Spinner(label):
         thread.start()
         while thread.is_alive():
             if monitor.cancelled.is_set():

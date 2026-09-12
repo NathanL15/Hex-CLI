@@ -255,7 +255,8 @@ def run_command_tool(
                     line = out_q.get(timeout=0.05)
                 except queue.Empty:
                     continue
-                print(line, end="")
+                # Dim on screen: command output is evidence, not the answer.
+                print(f"{ui.C.DIM}{line.rstrip(chr(10))}{ui.C.RESET}", end="\n" if line.endswith("\n") else "")
                 if parts_chars < _BUF_CAP:
                     parts.append(line)
                     parts_chars += len(line)
@@ -264,6 +265,7 @@ def run_command_tool(
         raise UserCancelled()
     process.wait()
     output = "".join(parts)
+    ui.tool_event("run", f"exit {process.returncode}")
     return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
 
 
@@ -579,7 +581,7 @@ def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
         ok, detail = _verify_node_syntax(path)
     else:
         ok, detail = True, f"OK: skipped (no syntax checker for '{path.suffix or language or 'unknown'}')"
-    ui.tool_event("verify", f"{path}  ({'pass' if ok else 'FAIL'})")
+    ui.tool_event("verify", f"{path}  ({'pass' if ok else 'fail'})")
     return detail
 
 

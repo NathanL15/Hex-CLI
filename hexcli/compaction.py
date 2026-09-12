@@ -173,7 +173,7 @@ def compact_history(
     # and removed — otherwise the 2 summary messages + 4 tail can exceed the
     # original count (e.g. 5 msgs → 6 msgs after compact).
     if len(messages) < _COMPACT_KEEP_RECENT + 3:
-        print(f"Nothing to compact yet (need at least {_COMPACT_KEEP_RECENT + 3} messages).")
+        cprint("  Nothing to compact yet.", C.DIM)
         return messages
 
     # /no_think disables Qwen3's chain-of-thought block so the token budget
@@ -211,10 +211,9 @@ def compact_history(
     session["compact_count"] = session.get("compact_count", 0) + 1
     touch_session(session)
 
-    n_removed = len(messages) - len(new_messages)
     if not quiet:
-        cprint(f"\nCompacted: {len(messages)} → {len(new_messages)} messages (removed ~{n_removed}).", C.BCYAN)
-        cprint("Summary:", C.BOLD)
+        cprint("  Chat history compacted.", C.DIM)
+        print()
         print(summary)
         print()
     return new_messages
