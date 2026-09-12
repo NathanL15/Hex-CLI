@@ -333,7 +333,10 @@ if (-not $NoStartMenu) {
                         profiles = @(@{
                             name                     = "Hex CLI"
                             commandline              = "cmd.exe /c `"$targetCmd`""
-                            startingDirectory        = $InstallDir
+                            # Start where a shell would, not inside the Hex CLI
+                            # checkout: its AGENTS.md would otherwise ride along
+                            # into every casual session's prompt.
+                            startingDirectory        = "%USERPROFILE%"
                             icon                     = $(if (Test-Path $iconPng) { $iconPng } else { $null })
                             tabTitle                 = "Hex CLI"
                             suppressApplicationTitle = $true
@@ -359,7 +362,7 @@ if (-not $NoStartMenu) {
                 $shortcut.TargetPath = "$env:SystemRoot\System32\conhost.exe"
                 $shortcut.Arguments  = "cmd.exe /c `"$targetCmd`""
             }
-            $shortcut.WorkingDirectory = $InstallDir
+            $shortcut.WorkingDirectory = $env:USERPROFILE   # a shell's start, not the checkout
             $shortcut.Description      = "Hex CLI - local NPU terminal agent"
             $shortcut.IconLocation = if (Test-Path $icon) { "$icon,0" } else { "powershell.exe,0" }
             $shortcut.Save()

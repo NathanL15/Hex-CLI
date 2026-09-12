@@ -47,7 +47,8 @@ the next run. See [Setup by hand](#setup-by-hand) if you want to do the
 steps yourself.
 
 The Start Menu shortcut opens Hex in Windows Terminal when it is installed,
-through a "Hex CLI" profile the installer registers. Text selection, copy
+through a "Hex CLI" profile the installer registers. It starts in your home
+folder; `/cwd <path>` moves into a project, whose `AGENTS.md` then applies. Text selection, copy
 and paste work there as in any other tab. Without Windows Terminal the
 shortcut uses the classic console, where drag-select is off because Hex
 disables QuickEdit (a click would otherwise freeze output); use the window

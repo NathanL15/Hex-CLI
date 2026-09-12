@@ -515,8 +515,10 @@ class LiveArea:
         self._pad_top = top
         self._pad_above += n
 
-    def _delete_pad_rows(self, inner: Any, n: int) -> int:
-        """Remove up to `n` rows from the top of the pad; returns how many."""
+    def _delete_pad_rows(self, inner: Any, n: int, col: int | None = None) -> int:
+        """Remove up to `n` rows from the top of the pad; returns how many.
+        `col` is the cursor's real column to return to (the margin's column
+        may already reflect text that is about to be written)."""
         geo = self._geo()
         if geo is None or n <= 0 or self._pad_above <= 0 or self._pad_top is None:
             return 0
@@ -525,7 +527,9 @@ class LiveArea:
             self.reset_pad()
             return 0
         m = min(n, self._pad_above)
-        inner.write(f"\033[{self._pad_top + 1};1H\033[{m}M\033[{row - m + 1};{self._cursor_col() + 1}H")
+        if col is None:
+            col = self._cursor_col()
+        inner.write(f"\033[{self._pad_top + 1};1H\033[{m}M\033[{row - m + 1};{col + 1}H")
         self._pad_above -= m
         if self._pad_above == 0:
             self._pad_top = None
@@ -577,6 +581,10 @@ class LiveArea:
         with self.lock:
             if self.enabled:
                 self._erase(inner)
+            # The column to come back to after a pad delete is where the
+            # cursor is NOW; rendering advances the margin's column to where
+            # it will be after the write, so read it first.
+            col_before = self._cursor_col()
             rendered = self.margin.render(text)
             newlines = rendered.count("\n")
             if newlines and self._pad_above:
@@ -586,7 +594,7 @@ class LiveArea:
                     need = newlines + (self._drawn_rows_needed() if self.enabled else 0)
                     deficit = need - (height - 1 - row)
                     if deficit > 0:
-                        self._delete_pad_rows(inner, deficit)
+                        self._delete_pad_rows(inner, deficit, col=col_before)
             inner._base.write(rendered)
             if self.enabled:
                 self._draw(inner)

@@ -305,6 +305,27 @@ def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
         restore()
 
 
+def test_pad_delete_returns_to_the_column_before_the_write() -> None:
+    """A mid-row write that carries a newline (a streamed token that wraps)
+    deletes a pad row and must put the cursor back where it WAS, not where
+    the margin's column will be after the write. Getting this wrong wrote
+    each wrapped token at the wrong column and left single letters behind."""
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=40, pad=2)
+        geo = {"row": 5, "height": 30}
+        live._geometry = lambda: (geo["row"], geo["height"])
+        live.enable()                      # pad_top 5, pad_above 20, cursor row 25
+        geo["row"] = 25
+        live.write(inner, "ab")            # column 2 on the row, no newline
+        base.chunks.clear()
+        live.write(inner, "cd\nef")        # one newline: delete one pad row
+        # Restore to (row 25, margin 2 + column 2) BEFORE writing "cd\n  ef".
+        assert base.text.startswith("\033[J\033[6;1H\033[1M\033[25;5Hcd\n  ef"), repr(base.text[:50])
+    finally:
+        restore()
+
+
 def test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it() -> None:
     restore = _no_color()
     try:
@@ -419,6 +440,7 @@ TESTS = [
     test_sampler_on_update_fires_the_repaint,
     test_repaint_skips_when_nothing_visible_changed,
     test_paused_context_suspends_and_restores_and_nests,
+    test_pad_delete_returns_to_the_column_before_the_write,
     test_suspend_takes_the_box_down_for_an_inline_prompt_and_resume_restores_it,
     test_spinner_uses_the_live_area_when_one_is_up,
     test_install_declines_off_a_console_and_when_turned_off,

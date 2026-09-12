@@ -64,6 +64,17 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### The shortcut starts in the home folder
+
+It used to start inside the Hex CLI checkout, so every session's first
+message carried the repo's own `AGENTS.md` as project instructions, and
+the model folded those working rules into unrelated answers ("what is an
+NPU" came back with "the NPU server must be restarted fresh for each
+evaluation" and the `REQUIRED_NPURUN` pin). The shortcut and the Terminal
+profile now start in the user's home folder, like a shell; `/cwd <path>`
+or launching from a project directory picks up that project's
+instructions. The prompt itself is unchanged.
+
 ### Your messages get a light band
 
 The echoed `> question` rows carry a subtle background band across the
