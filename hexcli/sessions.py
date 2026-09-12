@@ -63,11 +63,20 @@ def session_has_messages(session: dict[str, Any]) -> bool:
 
 
 def generate_session_title(text: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9\s-]", "", text).strip()
-    words = [w for w in cleaned.split() if w]
+    """The first words of the first message, as typed: "what is 2+2" stays
+    readable ("What Is 22" did not). Trailing punctuation goes, the case
+    is the person's own but for the first letter, and long lines are cut
+    at a word."""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    cleaned = re.sub(r"[^A-Za-z0-9\s\-+_./:'\"]", "", first_line)
+    words = [w.strip("-+_./:'\"") for w in cleaned.split()]
+    words = [w for w in words if w]
     if not words:
         return "New session"
-    return " ".join(w.upper() if w.isupper() else w.capitalize() for w in words[:6])
+    title = " ".join(words[:8])
+    if len(title) > 48:
+        title = title[:47].rsplit(" ", 1)[0] + "…"
+    return title[0].upper() + title[1:]
 
 
 def touch_session(session: dict[str, Any]) -> None:

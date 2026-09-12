@@ -131,6 +131,31 @@ Seen and left alone: on a nonsense or one-word question the model
 sometimes echoes its own prompt scaffolding ("Request: …", the workspace
 line). That is the prompt's shape, which changes only through the A/B
 gate, not the terminal.
+
+### Walkthroughs by kind of user (2026-09-12)
+
+The same live method, this time as the people who meet the tool: someone
+scripting it, a developer in a repo, someone whose server died, someone
+coming back to old sessions, a first-time reader of the docs.
+
+* Scripting: a pipe or `hex "..." > file` got the spinner, the step
+  label, the token counter and erase sequences on stderr, and the answer
+  wrapped in blank lines on stdout. Off a terminal, nothing but the
+  answer is printed.
+* Developer: `/undo` restored files for the last turn only; the second
+  `/undo` removed the exchange but left its file change. Every turn now
+  keeps its own snapshots, so exchanges undo one by one. A tool error's
+  first line no longer ends on a bare colon.
+* Server died: the in-session restart started the server with a 2.47
+  SDK default when the launcher had chosen 2.50; the launcher now hands
+  the REPL the server's environment, and the fallback picks the newest
+  install.
+* Returning: "what can you do?" stored the whole help text as an answer
+  and cost half the context; it now stores one line. Session titles
+  keep the person's words ("What is 2+2", not "What Is 22").
+* Docs: README's opening transcript shows today's screen, every
+  command-line flag has a help line, and the scripting behaviour is
+  written down.
 * Ctrl+C at `/memory clear` or in `/setup` printed `Cancelled.` twice;
   `/setup` over a pipe works again. The non-streaming spinner and the
   delegate token counter no longer print alongside the status line.

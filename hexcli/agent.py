@@ -1105,7 +1105,10 @@ def _run_autopilot_turn(
     global _CURRENT_SESSION_ID, _LAST_SYSTEM_PROMPT
     _CURRENT_SESSION_ID = None  # clear before early-return paths
     if is_help_request(query):
-        return HELP_TEXT
+        # Print the list; keep the stored answer short. Storing the whole
+        # help text as a message cost half the 4K context in one turn.
+        print(f"\n{HELP_TEXT}")
+        return "That is the command list; /help prints it again."
     meta = local_meta_response(query, config)
     if meta:
         return meta

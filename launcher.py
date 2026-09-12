@@ -488,7 +488,7 @@ def run_npurun_path(conda: Path | None = None) -> int:
     outdated = npurun_outdated()
     if outdated:
         warn(f"npurun {version_str(outdated)} is older than the required "
-             f"{version_str(REQUIRED_NPURUN)}. Run  hexcli --update.")
+             f"{version_str(REQUIRED_NPURUN)}. Run  python -m hexcli.agent --update  from the Hex CLI folder.")
 
     if not _npurun_model_ok():
         print(f"  Downloading {NPURUN_MODEL}...", flush=True)
@@ -672,7 +672,7 @@ def main() -> int:
     # so a missing prerequisite is reported, never silently substituted.
     try:
         if not _npurun_ready():
-            return _fail("npurun or the QAIRT SDK was not found.", "Run  hexcli --doctor  for the fix.")
+            return _fail("npurun or the QAIRT SDK was not found.", "Run  python -m hexcli.agent --doctor  from the Hex CLI folder for the fix.")
         return run_npurun_path()
     except KeyboardInterrupt:
         print()

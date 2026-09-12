@@ -192,6 +192,11 @@ def test_generate_session_title_strips_specials() -> None:
     title = sa.generate_session_title("how do I use git?!")
     assert "!" not in title
     assert "?" not in title
+    assert title == "How do I use git", title                       # the person's own words and case
+    assert sa.generate_session_title("what is 2+2") == "What is 2+2"   # operators inside words survive
+    assert sa.generate_session_title("in notes.txt replace alpha\nsecond line") == "In notes.txt replace alpha"
+    long = sa.generate_session_title("please summarise everything interesting about concurrency primitives today")
+    assert len(long) <= 48 and long.endswith("…"), long
 
 
 def test_generate_session_title_empty_input() -> None:
@@ -205,8 +210,8 @@ def test_generate_session_title_all_specials() -> None:
 
 
 def test_generate_session_title_truncates_to_six_words() -> None:
-    title = sa.generate_session_title("one two three four five six seven eight")
-    assert len(title.split()) <= 6
+    title = sa.generate_session_title("one two three four five six seven eight nine ten")
+    assert len(title.split()) <= 8 and len(title) <= 48, title
 
 
 def test_upsert_session_inserts_new() -> None:

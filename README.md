@@ -83,6 +83,8 @@ python -m hexcli.agent --update      # pull latest source and refresh npurun
 
 Piped input is added to the request as context, or used as the request if
 there is no argument. Long input is trimmed to fit the context window.
+When stdout is not a terminal the answer is printed alone, with no
+progress text, so `hex "..." > answer.txt` and `hex "..." | clip` work.
 
 To get a `hex` command, add this to your PowerShell `$PROFILE`:
 

@@ -213,12 +213,12 @@ def first_run_check(install_dir: Path) -> None:
     npurun_on_path = shutil.which("npurun") or shutil.which("npurun.exe")
     npurun_local = (install_dir / "npurun-arm64.exe").exists()
     if not npurun_on_path and not npurun_local:
-        hints.append("  npurun not found. Run:  hexcli --update")
+        hints.append("  npurun not found. Run:  python -m hexcli.agent --update")
 
     # ONNX embedding model for memory.
     onnx_model = install_dir / "onnx" / "model_qint8_arm64.onnx"
     if not onnx_model.exists():
-        hints.append("  Embedding model missing; memory is off. hexcli --doctor prints the download commands.")
+        hints.append("  Embedding model missing; memory is off. python -m hexcli.agent --doctor prints the download commands.")
 
     if hints:
         print("\n  First-run setup", flush=True)

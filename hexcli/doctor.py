@@ -134,7 +134,7 @@ def check_npurun() -> list[Check]:
         path = Path(exe) if exe else (local if local.exists() else None)
     if path is None:
         return [Check("npurun", FAIL, "binary not found",
-                      f"hexcli --update\n{_NPURUN_RELEASES}")]
+                      f"python -m hexcli.agent --update\n{_NPURUN_RELEASES}")]
     checks = [Check("npurun", PASS, str(path))]
     if ln is not None:
         version = ln._npurun_version(path)
@@ -143,7 +143,7 @@ def check_npurun() -> list[Check]:
         if ln.npurun_outdated(version=version) is not None:
             checks.append(Check("npurun version", FAIL,
                                 f"{ver}; {need} required",
-                                "hexcli --update"))
+                                "python -m hexcli.agent --update"))
         else:
             checks.append(Check("npurun version", PASS, ver))
         if ln.REWIND_ROOT is not None:
