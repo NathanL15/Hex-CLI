@@ -331,11 +331,17 @@ if (-not $NoStartMenu) {
                     New-Item -ItemType Directory -Force -Path $fragmentDir | Out-Null
                     $fragment = @{
                         profiles = @(@{
-                            name              = "Hex CLI"
-                            commandline       = "cmd.exe /c `"$targetCmd`""
-                            startingDirectory = $InstallDir
-                            icon              = $(if (Test-Path $iconPng) { $iconPng } else { $null })
-                            tabTitle          = "Hex CLI"
+                            name                     = "Hex CLI"
+                            commandline              = "cmd.exe /c `"$targetCmd`""
+                            startingDirectory        = $InstallDir
+                            icon                     = $(if (Test-Path $iconPng) { $iconPng } else { $null })
+                            tabTitle                 = "Hex CLI"
+                            suppressApplicationTitle = $true
+                            colorScheme              = "One Half Dark"
+                            font                     = @{ face = "Cascadia Mono"; size = 11 }
+                            padding                  = "10"
+                            opacity                  = 96
+                            cursorShape              = "bar"
                         })
                     }
                     $fragment | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $fragmentDir "hexcli.json") -Encoding UTF8
@@ -345,8 +351,10 @@ if (-not $NoStartMenu) {
             $shell    = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($lnkPath)
             if ($useTerminal) {
+                # A compact window: 92 columns fits the 76-column help with
+                # the side padding; 28 rows leaves room above the input box.
                 $shortcut.TargetPath = $wt
-                $shortcut.Arguments  = '-p "Hex CLI"'
+                $shortcut.Arguments  = '--size 92,28 -p "Hex CLI"'
             } else {
                 $shortcut.TargetPath = "$env:SystemRoot\System32\conhost.exe"
                 $shortcut.Arguments  = "cmd.exe /c `"$targetCmd`""

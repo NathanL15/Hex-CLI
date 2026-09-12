@@ -64,6 +64,14 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### A compact window
+
+The shortcut opens Windows Terminal at 92 columns by 28 rows
+(`wt.exe --size 92,28 -p "Hex CLI"`) instead of the default 120 by 30, and
+the installer's profile fragment sets the look: One Half Dark, Cascadia
+Mono 11, even padding, a bar cursor, slight transparency, and a title that
+the shell cannot overwrite.
+
 ### Copy, glyphs and flow, end to end
 
 Two audits over every string a person sees (about 120 findings) and the
