@@ -406,6 +406,7 @@ class LiveArea:
         self.prompt = prompt
         self._geometry = geometry or console_geometry
         self.editor_rows = 4       # rule, input row, rule, status: what the editor draws
+        self.editor_pad = 0        # blank rows pad_for_editor put above the editor's rows
         self.lock = threading.RLock()
         self.enabled = False
         self.activity: str | None = None
@@ -510,13 +511,19 @@ class LiveArea:
 
     def pad_for_editor(self) -> None:
         """Move the cursor down so the editor's rows land on the window's
-        last rows. Called with the box down and the cursor on a fresh row."""
+        last rows. Called with the box down and the cursor on a fresh row.
+        The count is kept in `editor_pad`: when the line is submitted the
+        editor climbs back over exactly these rows, so the echoed message
+        lands right under the transcript and the conversation fills the
+        window from the top, not from the bottom up."""
+        self.editor_pad = 0
         below = self._rows_below_cursor()
         if below is None or self._inner is None:
             return
         pad = below - (self.editor_rows - 1)
         if pad > 0:
             self._inner.write("\n" * pad)
+            self.editor_pad = pad
 
     def write(self, inner: Any, text: str) -> None:
         """A transcript write from one of the wrapped streams."""

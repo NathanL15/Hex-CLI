@@ -443,6 +443,7 @@ class LineEditor:
         on_resize: Callable[[], Any] | None = None,
         chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
         placeholder: str = "",
+        rows_above: Callable[[], int] | None = None,
     ) -> None:
         self.history = history or History()
         self.completer = completer
@@ -469,6 +470,12 @@ class LineEditor:
         # Dim hint shown after the prompt while nothing is typed; never part
         # of the finished line.
         self.placeholder = placeholder
+        # Blank rows the caller put above the input to pin it to the bottom
+        # of the window. The finished line is written above them (the editor
+        # climbs over them first), so the conversation fills the window from
+        # the top down and only scrolls once it reaches the input.
+        self.rows_above = rows_above
+        self._pad_above = 0
         self.styled = sys.stdout.isatty() if styled is None else styled
         self.buffer = ""
         self.pos = 0
@@ -601,12 +608,22 @@ class LineEditor:
 
     def _finish_render(self, prompt: str) -> None:
         """Leave the finished line on screen (without the chrome) and the
-        cursor below it."""
+        cursor below it. Any blank rows that pinned the input to the bottom
+        are climbed over and cleared first, so the line lands right under
+        the transcript."""
         text, total_rows, cursor_row, _ = self._layout(prompt, chrome=False)
-        self._write(self._move_to_anchor() + "\033[J" + text + "\n")
+        climb = f"\033[{self._pad_above}A" if self._pad_above > 0 else ""
+        self._write(self._move_to_anchor() + climb + "\033[J" + text + "\n")
         self._rendered_rows = 0
         self._cursor_row = 0
+        self._pad_above = 0
         self._last_text = None
+
+    def _read_pad_above(self) -> None:
+        try:
+            self._pad_above = max(0, int(self.rows_above())) if self.rows_above else 0
+        except Exception:
+            self._pad_above = 0
 
     # -- editing primitives -------------------------------------------------
 
@@ -720,6 +737,7 @@ class LineEditor:
         self._rendered_rows, self._cursor_row = 0, 0
         self._last_text = None
         self._last_size = (self.usable, self.height)
+        self._read_pad_above()
         try:
             self.render(prompt)
             while True:
@@ -791,6 +809,7 @@ class LineEditor:
                 self.on_resize()
             except Exception:
                 pass
+        self._read_pad_above()
         self._last_size = (self.usable, self.height)
         self.render(prompt)
 
@@ -869,7 +888,8 @@ class LineEditor:
             if self.chrome is not None:
                 # Keep the box on the window's last rows after the clear.
                 rows = self._layout(prompt)[1]
-                self._write("\n" * max(0, self.height - rows))
+                self._pad_above = max(0, self.height - rows)
+                self._write("\n" * self._pad_above)
             return None
         if key == ESCAPE:
             self.buffer, self.pos = "", 0
@@ -900,6 +920,7 @@ def make_reader(
     on_resize: Callable[[], Any] | None = None,
     chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
     placeholder: str = "",
+    rows_above: Callable[[], int] | None = None,
 ) -> Callable[[str], str] | None:
     """Build the REPL's input function, or None if a rich line is unavailable.
 
@@ -929,5 +950,6 @@ def make_reader(
         on_resize=on_resize,
         chrome=chrome,
         placeholder=placeholder,
+        rows_above=rows_above,
     )
     return editor.read

@@ -64,6 +64,16 @@ idle repaint; `ui.py`, `repl.py`, `llm.py` and `agent.py` wire it in.
   turn, `/help`, paste, Esc. 14 offline tests in `evals/test_statusbar.py`
   and 3 in `test_lineedit.py`.
 
+### The conversation fills the window from the top
+
+The box is pinned to the bottom by blank rows above it, and the echoed
+question used to be written where the box sat, so the conversation started
+at the bottom of the window and the blank rows stayed between it and the
+banner. On Enter the editor now climbs over those rows and clears them, so
+the question lands directly under the last transcript line, the answer
+fills downward, the gap shrinks, and scrolling starts only when the text
+reaches the box.
+
 ### A compact window
 
 The shortcut opens Windows Terminal at 92 columns by 28 rows

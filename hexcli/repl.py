@@ -394,6 +394,7 @@ def run_repl(config: dict[str, Any]) -> int:
         on_zoom=_zoom, on_resize=_resize,
         chrome=live.chrome if live is not None else None,
         placeholder="ask, or / for commands" if live is not None else "",
+        rows_above=(lambda: live.editor_pad) if live is not None else None,
     ) or (lambda p: input(p))
 
     while True:
