@@ -373,15 +373,15 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 
 | Doc | Use it for | Currency |
 |---|---|---|
-| `README.md` | user-facing install/usage/commands/config | current (2026-09-08) |
+| `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
-| `CHANGELOG.md` | what shipped and the numbers | current; `Unreleased` = release re-org + prewarm negative result |
+| `CHANGELOG.md` | what shipped and the numbers | current through 2.8.0; `Unreleased` = publish workflow, README rewrite, docs pass |
 | `docs/V2X_ROADMAP.md` | phase status, watch items, rejected list | current (09-07) |
 | `docs/RESEARCH_NEXT_LEVERS.md` | the levers memo, Rewind arc, runtime knobs | current through 09-05 |
 | `docs/backend_study/CPU_VS_NPU.md`, `PROMPT_LEVER.md`, `RUNBOOK.md` | the measurement study and procedure | current (09-05/07) |
 | `docs/V2_PLAN.md` | §14 evidence archive only | §1–13 are superseded intent |
-| `ARCHITECTURE.md` | the reasoning behind rules and the safety layers | **stale** (2026-08-16): predates the Split, the prune and Rewind; says the template is in agent.py, no KV reuse, 22 suites/685 tests, 38 cases. Read §2 and §4 for rationale, not §1/§3/§5 for facts |
-| `docs/paper/hexcli-paper.tex` | the methodology paper (v2.2.0 state) | hand-built with pdflatex; no script; lacks the backend study |
+| `ARCHITECTURE.md` | the reasoning behind rules and the safety layers | mostly current (2026-09-12: template location, 29 suites/798 tests, 44 cases, a dated note on top of the pre-Rewind TTFT section); §1/§3 narrative still predates the Split and the prune, read §2 and §4 for rationale/§5 for facts |
+| `docs/paper/hexcli-paper.tex` | the methodology paper, numbers current at v2.8.0 (window figure = 3,696 budget, 32/44, 35/48, backend study paragraph) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
 | `evals/results/LATEST.md` | scoreboard and the gate command | regenerate with `gate.py --scoreboard` |
 
 `tools/`: `gen_example_config.py`, `chatlog_report.py` (`--last`,

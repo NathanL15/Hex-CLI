@@ -270,7 +270,7 @@ def _maybe_auto_compact(
     The full summary is suppressed (quiet=True); only a one-line notice prints.
 
     Thrash guard: before 2.5.0's window-derived budget, a 2,200-token prompt
-    clamped the history budget to the 250-token floor (now ~850 against a
+    clamped the history budget to the 250-token floor (now ~800 against a
     3,696-token server budget), and the compacted tail usually exceeded it —
     so v2.2 re-fired every single turn, shredding the condensed block a little
     further each time while freeing almost nothing (the user-reported "by the

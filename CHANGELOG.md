@@ -20,6 +20,15 @@ the Hexagon NPU, not single-run anecdotes.
   closing state paragraph record the package and the classifier finding,
   and the milestones table breaks across pages instead of running off
   one (it had been overflowing page 9).
+- Paper numbers re-audited against the code and the latest results: the
+  window figure shows the 3,696-token server budget and the ~810-token
+  history it leaves instead of the disproven 2,600-token cliff; the
+  headline is 32/44 at pass^5 (LATEST.md) and 35/48 multi-turn; the
+  "9 s per new conversation" figure is retracted as the backend study
+  found; a paragraph carries that study's numbers (15.5 tok/s, 0.8 s warm
+  first token, polling-off power). ARCHITECTURE.md gets the same pass
+  (template in prompts.py, 29 suites, 44 cases, a dated note on the
+  pre-Rewind TTFT section) and the README's suite size reads 44.
 
 ## 2.8.0 — 2026-09-12
 

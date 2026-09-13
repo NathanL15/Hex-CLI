@@ -309,7 +309,7 @@ times because the model is not deterministic:
 
 ```powershell
 python evals/cases_smoke.py                        # quick check
-python evals/cases_extended.py --runs 3            # 41 cases
+python evals/cases_extended.py --runs 3            # 44 cases
 python evals/cases_multiturn.py --runs 3 --think-time 15
 python evals/compare.py <before.json> <after.json>
 python evals/gate.py --baseline <base.json> <candidate.json>

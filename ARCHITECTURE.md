@@ -51,7 +51,7 @@ knows. A 4B model will happily call `run_command` to answer "what's the syntax f
 list comprehension," burning 5-10 seconds of NPU inference on a question that needed zero
 tool calls.
 
-The fix is entirely in the system prompt (`_AUTOPILOT_TEMPLATE` in `hexcli/agent.py`), not in code.
+The fix is entirely in the system prompt (`_AUTOPILOT_TEMPLATE` in `hexcli/prompts.py`; the byte-stable variant the warm prefix relies on is `_AUTOPILOT_TEMPLATE_STABLE`), not in code.
 The model emits exactly one JSON action per turn (`{"action": "<tool>", "args": {...}}` or
 `{"action": "finish", "message": "..."}`), and the routing rules draw a hard line between two
 categories of request:
@@ -88,7 +88,7 @@ stochastic 4B variance and real regressions were indistinguishable.
 
 ### Tier 1 — offline suites (the merge gate)
 
-22 suites, 685 tests, no LLM and no NPU required. This is what CI (windows-latest) runs,
+29 suites, 798 tests (2.8.0), no LLM and no NPU required. This is what CI (windows-latest) runs,
 alongside the compile gate and `ruff check hexcli/ evals/`:
 
 ```powershell
@@ -107,7 +107,7 @@ scripted key source) is what makes that possible.
 
 ```powershell
 python evals/cases_smoke.py                    # fast gate
-python evals/cases_extended.py --runs 5        # pass^5 over 38 cases
+python evals/cases_extended.py --runs 5        # pass^5 over 44 cases
 python evals/cases_multiturn.py --runs 3       # deep-context scenarios
 python evals/cases_everyday.py                 # common-prompt sweep vs computed machine truth
 python evals/compare.py <before.json> <after.json>
@@ -194,6 +194,16 @@ matching the same one-way-dependency, fail-silent convention already established
 ## 5. System Limitations & Telemetry
 
 ### TTFT: the real bottleneck vs. the obvious one
+
+*Historical note (2026-09-12).* The section below describes the runtime as it was in
+August: every request re-prefilled the whole transcript. Since 2.4.0 the fork keeps one
+dialog alive for the life of the process and sends every warm query as a prefix-matching
+KV rewind (`NPURUN_REWIND=2`, QAIRT 2.50; 2.47 rejects the rewind on this bundle), with the
+system prompt made byte-identical across days and directories so the prefix matches. The
+prefill tax the section describes is gone on warm turns: first-token median 6.8 s → 3.7 s,
+whole-turn mean 16.0 s → 9.5 s on the extended suite. A new conversation still pays the
+rebuild (~9 s), which is what `docs/backend_study/CPU_VS_NPU.md` measures. The analysis of
+the connection-reuse fix still holds.
 
 The natural hypothesis going into a latency investigation was that `hexcli/agent.py` was paying
 for a fresh TCP connection on every single agent-loop step (`urllib.request.urlopen()` opens

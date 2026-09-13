@@ -53,7 +53,8 @@ Between versions 1.7 and 2.0 the model never changed, yet every headline
 metric improved. The extended task suite rose from 22/35 to 24/36
 (pass\textsuperscript{5}), multi-turn success from 23/45 to 26/45, executed
 prompt-injection payloads fell from 9/9 to 0/9, and offline test coverage grew
-from 330 to 619 tests. The negative results matter as much as the positive
+from 330 to 619 tests (798 at v2.8.0, on a suite that has since grown to 44
+cases with 32 passing all five runs). The negative results matter as much as the positive
 ones. Eight plausible improvements, including a new action protocol, prompt
 compression, a larger context window, and a runtime migration, were built or
 benchmarked, measured, and rejected with evidence. The central claim of this
@@ -71,46 +72,57 @@ laptop NPU (the low-power AI accelerator built into the laptop's processor),
 inside a context window of 4{,}096 tokens (roughly 3{,}000 words), on a
 16\,GB machine with no cloud fallback?
 
-The constraints are severe. The model degrades measurably once the context
-passes roughly 2{,}600 tokens, and the system prompt alone costs about
-2{,}100, so the usable working space is a thin slice of an already small
-window (Figure~\ref{fig:window}). Models must be quantized and compiled ahead
-of time for this NPU, and such bundles exist for exactly twelve of them, so
-swapping to a better model is rarely an option. Each of these numbers was
-measured on the target machine, and each one shaped the design.
+The constraints are severe. The system prompt alone costs about 2{,}400
+tokens, so once the server has reserved room for a reply, roughly 1{,}300
+tokens remain for the conversation and everything the tools return
+(Figure~\ref{fig:window}). For most of the project the picture was worse
+still: a ``degradation cliff'' at about 2{,}600 tokens and a 3{,}000-token
+input cap in the server held history to 250 tokens, and both turned out to
+be inherited constants rather than measurements (\S\ref{sec:negative}).
+Models must be quantized and compiled ahead of time for this NPU, and such
+bundles exist for exactly twelve of them, so swapping to a better model is
+rarely an option. Each of these numbers was measured on the target machine,
+and each one shaped the design.
 
 \begin{figure}[ht]
 \centering
 \begin{tikzpicture}[x=1cm, font=\small]
 % zones: 4,096 tokens mapped onto 12.2cm  (factor 0.0029785)
-\fill[hexblue]  (0,0)    rectangle (6.26,0.85);
-\fill[hexaqua]  (6.30,0) rectangle (7.74,0.85);
-\fill[pattern=north east lines, pattern color=hexgray!70] (7.78,0) rectangle (12.2,0.85);
+% system prompt 2,377 -> 7.08cm; history + tool output to the 3,696 budget -> 11.01cm; reply reserve 400 -> 12.2cm
+\fill[hexblue]  (0,0)    rectangle (7.08,0.85);
+\fill[hexaqua]  (7.12,0) rectangle (11.01,0.85);
+\fill[pattern=north east lines, pattern color=hexgray!70] (11.05,0) rectangle (12.2,0.85);
 \draw[rulegray] (0,0) rectangle (12.2,0.85);
 % labels
-\node[white, font=\small\bfseries] at (3.13,0.425) {system prompt $\sim$2{,}100 tok};
-\node[font=\scriptsize, color=inkmuted, align=center] (head) at (5.6,1.75) {usable headroom\\$\sim$500 tok};
-\draw[color=inkmuted, thin] (head.south) -- (7.0,0.95);
-\node[font=\small, color=inkmuted, fill=white, inner sep=2pt] at (9.99,0.425) {degraded output};
-% cliff line
-\draw[hexred, thick, dashed] (7.74,-0.35) -- (7.74,1.45);
-\node[font=\scriptsize, color=hexred, anchor=west] at (7.9,1.75) {degradation cliff $\approx$ 2{,}600 tok};
+\node[white, font=\small\bfseries] at (3.54,0.425) {system prompt $\sim$2{,}400 tok};
+\node[white, font=\scriptsize\bfseries, align=center] at (9.06,0.425) {history + tool output\\$\sim$1{,}300 tok};
+\node[font=\scriptsize, color=inkmuted, align=center] (rsv) at (10.6,1.75) {reply reserve\\400 tok};
+\draw[color=inkmuted, thin] (rsv.south) -- (11.6,0.95);
+% server budget line
+\draw[hexred, thick, dashed] (11.01,-0.35) -- (11.01,1.45);
+\node[font=\scriptsize, color=hexred, anchor=north] at (11.01,-0.62) {server input budget 3{,}696};
+% old floor, for scale
+\draw[hexgray, thin, dashed] (7.74,-0.05) -- (7.74,1.2);
+\node[font=\scriptsize, color=hexgray, anchor=south east, align=right] at (7.7,1.22) {where history ended\\before v2.5 ($\sim$2{,}600)};
 % axis ticks
 \foreach \x/\lab in {0/0, 3.05/{1{,}024}, 6.1/{2{,}048}, 9.15/{3{,}072}, 12.2/{4{,}096}} {
   \draw[color=hexgray] (\x,-0.05) -- (\x,-0.18);
   \node[font=\scriptsize, color=hexgray, anchor=north] at (\x,-0.22) {\lab};
 }
 \end{tikzpicture}
-\caption{The 4{,}096-token context window as the agent actually experiences
-it. Output quality collapses past the measured cliff, so auto-compaction,
-calibrated with an exact token estimator, keeps every session left of the
-red line.}
+\caption{The 4{,}096-token context window as the agent budgets it at v2.8.0.
+The server derives an input budget of 3{,}696 tokens from the compiled
+bundle and advertises it; the harness sizes history (about 810 tokens after
+a 500-token turn reserve) and tool-output pages against what the prompt
+leaves. Until v2.5 a ``degradation cliff'' at about 2{,}600 tokens, later
+traced to a parser bug, and a 3{,}000-token server cap ended history at the
+grey line.}
 \label{fig:window}
 \end{figure}
 
 There are practical reasons to accept these constraints: code never leaves the
-laptop, inference costs nothing, and the first token arrives in about half a
-second. The more interesting reason is the engineering thesis this report
+laptop, inference costs nothing, and on a warm follow-up turn the first
+token arrives in under a second. The more interesting reason is the engineering thesis this report
 defends. At small model scale, the harness (parsing, context management, edit
 application, safety) matters more than the model. Running a model locally is
 a solved problem; tools like Ollama do it in one command. Running a
@@ -127,8 +139,10 @@ compaction, and the interactive REPL. A vendored fork of \emph{npurun},
 written in Rust, owns inference. It wraps Qualcomm's Genie SDK behind a local
 server that speaks the OpenAI API. The fork is not a passive dependency; over
 the course of the project it gained per-token usage reporting, token-precise
-\code{max\_tokens}, mid-stream stop sequences, and a fix for a UTF-8
-character-boundary crash that could take down the whole server.
+\code{max\_tokens}, mid-stream stop sequences, a fix for a UTF-8
+character-boundary crash that could take down the whole server, and later
+the KV-cache rewind, a budget derived from the bundle, and a request
+watchdog that \S\ref{sec:negative} and the timeline describe.
 
 \begin{figure}[ht]
 \centering
@@ -323,9 +337,10 @@ trimmed either.
 \end{axis}
 \end{tikzpicture}
 \caption{Anatomy of the 1{,}990-token system-prompt template at v2.0. With the
-full prompt near 2{,}100 tokens, almost half the 4{,}096-token window is spent
-before the user types a word. Each rule earned its place by fixing a measured
-failure.}
+full prompt near 2{,}100 tokens then, and about 2{,}400 at v2.8.0 after the
+live-state cookbook and the rules added since, more than half the
+4{,}096-token window is spent before the user types a word. Each rule earned
+its place by fixing a measured failure.}
 \label{fig:prompt}
 \end{figure}
 
@@ -340,11 +355,13 @@ and adding a dry-run gain guard fixed the churn without touching the prompt.
 Second, a dedicated sweep ran the production loop at controlled input sizes
 from 2{,}370 to 2{,}973 measured tokens and found quality \emph{flat} across
 the whole range — while inputs targeted above $\sim$3K came back truncated to
-$\sim$2{,}92x by the runtime. The shipping configuration already sits at that
-ceiling. Together with the negative results in \S\ref{sec:negative}, the
-conclusion is that the 250-token history floor is a property of the model and
-the compiled 4K bundle, not a harness gap: within this model and runtime, the
-context budget is fully spent, and spent well.
+$\sim$2{,}92x by the runtime. The shipping configuration already sat at that
+ceiling, and the conclusion drawn at the time was that the 250-token history
+floor was a property of the model and the compiled 4K bundle. That
+conclusion was wrong, and \S\ref{sec:negative} records how it was overturned
+once the prefill tax was gone: the ``ceiling'' was a server constant, the
+model is flat to the bundle's real limit, and the history budget is now about
+850 tokens.
 
 \subsection{Why the NPU, when the CPU decodes faster}
 
@@ -428,21 +445,39 @@ break-even point, and real turns never get there.}
 \label{fig:crossover}
 \end{figure}
 
+A second study in September, run under the rewind runtime described in
+\S\ref{sec:negative} (\code{docs/backend\_study/CPU\_VS\_NPU.md}), kept the
+conclusion and sharpened the numbers. The NPU decodes at 15.5 tokens per
+second at short context and about 9--10 at the agent's working context; a
+cold prefill of 2{,}048 tokens takes 8.3\,s. A warm follow-up turn reaches
+its first token in about 0.8\,s, and a new conversation pays a dialog
+rebuild of 6.6--8\,s only when the system prompt itself changes, which the
+byte-stable prefix avoids (an earlier ``9\,s per new conversation'' figure
+was the benchmark's own nonce forcing that rebuild, and is retracted). The
+study also settled a power question: switching off the runtime's host-side
+polling raised decode from 15.5 to 19 tokens per second while cutting
+package power from 21\,W to 9.8\,W, 0.55\,J per token instead of 1.44, with
+no quality change on the extended suite (62/82 against 61/82). The CPU path
+still loses where it matters: a CPU busy decoding is a CPU that cannot run
+the agent's tools.
+
 \subsection{What still fails}
 
 Section 1 asked how much of a real coding agent survives at this scale, and
-the honest answer includes the 12 of 36 cases that still fail. They
+the honest answer includes the cases that still fail: 12 of 36 at v2.0, and
+12 of the 44-case suite at v2.8.0, seven of them at 0 of 5 runs. They
 concentrate in two classes, and both are model ceilings rather than harness
 bugs. The first is bait compliance: when a prompt explicitly names a tool
 (``use \code{run\_command} to\ldots'') for something that should be answered
 directly, the model complies roughly one time in three despite an explicit
-rule against it. The second is edit quality deep into a session: past about
-2{,}500 tokens of context the model starts reconstructing edit anchors from
-memory instead of from the file, or drifts into describing the change in
-prose instead of making it. The harness converts both from silent failures
-into retried or deflected ones, but it cannot eliminate them. They define
-where a better small model would actually help, and the instrument is ready
-to measure one when it exists.
+rule against it; three of the seven hard failures are these trap cases. The
+second is edit anchoring: on a follow-up turn the model reconstructs an
+\code{edit\_file} anchor from memory instead of from the file, three times in
+a row, or drifts into describing the change in prose instead of making it.
+The harness converts both from silent failures into retried or deflected
+ones, but it cannot eliminate them. They define where a better small model
+would actually help, and the instrument is ready to measure one when it
+exists.
 
 % ═══════════════════════════════════════════════════════════════
 \section{Negative results}
@@ -470,10 +505,12 @@ and the damage did not scale with rules dropped & rejected \\[3pt]
 6 tok/s vs.\ 15, with no quality gain; compaction already keeps sessions under
 the degradation cliff & rejected \\[3pt]
 Raise the compaction threshold (re-measure the $\sim$2{,}600-token cliff) &
-a dedicated sweep found quality \emph{flat} from 2{,}370 to 2{,}973 measured
-input tokens — but the runtime silently trims inputs above $\sim$3K to
-$\sim$2{,}92x, and the shipping configuration already operates at that
-ceiling, so a higher threshold buys zero usable history & closed \\[3pt]
+a first sweep found quality \emph{flat} from 2{,}370 to 2{,}973 measured
+input tokens but hit a $\sim$3K input cap and was closed as ``zero usable
+history''; the cap turned out to be a server constant inherited from
+upstream, not the model, and a second sweep to 3{,}697 tokens was equally
+flat, so the threshold was raised after all (history budget 250 $\to$
+$\sim$850) & closed, then reversed \\[3pt]
 Leaner prompt for agent steps $\ge 2$ (drop the five step-1 decision rules) &
 overall quality flat (77.8\% vs.\ 74.4\%, $p = 0.65$), but the JSON-edit case
 fell 3/3 $\to$ 1/3 with degenerate \code{old\_string} anchors — the trimming
@@ -553,7 +590,7 @@ rewind on a transcript that diverges mid-conversation can return success
 with zero tokens (63 of 117 calls in one run under the old floor --- now
 treated as a failed rewind), and a divergent rewind fails outright once the
 cached transcript exceeds roughly 3,200 tokens, which an end-of-turn prewarm
-absorbs in the background. Multi-turn: 25/48 $\to$ 34--35/48 turn-runs,
+absorbs in the background. Multi-turn: 25/48 $\to$ 35/48 turn-runs,
 server trims per run 141 $\to$ 17; extended suite at parity.
 
 % ═══════════════════════════════════════════════════════════════
@@ -574,7 +611,9 @@ encoded-command tricks. Access to these is confirmed interactively and denied
 outright when the session is unattended. Every mutating code path routes
 through a single \code{guard\_mutation} gate, and a test enumerates every
 mutating entry point in both the production loop and the experimental v2
-protocol, driving each one at a forbidden path. Network egress is denied by default.
+protocol, driving each one at a forbidden path. The one tool that reaches the network
+asks before every fetch and is refused outright when the session is
+unattended.
 
 One measured lesson became a permanent style rule. An early refusal message
 helpfully suggested an alternative command, and the model followed that hint
@@ -654,7 +693,7 @@ and go through the gate: a loop nudge makes ``run the tests'' mean a test
 actually ran (0/5 $\to$ 5/5 runs execute it), and a loop guard stops an
 edit landing on a file the request did not name (1/5 $\to$ 5/5); a prompt
 sentence tried for each broke a gated case and was reverted. v2.7.0--2.7.1
-ship on a 44-case suite at 30/44 pass\textsuperscript{5}. v2.8.0 makes the
+ship on a 44-case suite at 32/44 pass\textsuperscript{5}. v2.8.0 makes the
 project an installable package (\texttt{pip install hexcli} gives
 \texttt{hex}; everything it writes lives under one data directory) and,
 while recording the README clips, finds that the command classifier had
@@ -740,7 +779,7 @@ reported with the exit code), and when a request names a file that does not
 exist, the loop refuses to let the edit land on another file (1/5 to 5/5).
 In both cases a prompt sentence was tried first and broke a gated case: at
 this scale, mechanics in the loop beat instructions in the prompt, which is
-lesson~1 again. The headline number at v2.7.1 is 30 of 44 cases at
+lesson~1 again. The headline number at v2.8.0 is 32 of 44 cases at
 pass\textsuperscript{5} on a fresh server, with the three new cases counted;
 the multi-turn suite loses one run in three at about 3{,}100 tokens to a
 platform stall the server's watchdog now ends, which the instrument counts
