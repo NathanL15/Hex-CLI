@@ -6,6 +6,12 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.9.1 — 2026-09-13
+
+A patch release: the input line and the status bar; nothing model-facing
+and nothing the launcher hands the server. Gate: CI green on main; smoke
+10/10 on a fresh server.
+
 - The status bar no longer flickers while a turn runs. Every spinner tick
   (12 a second) went through the full redraw: erase the box to the end of
   the screen, then rewrite its rows, with the cursor visible during the
