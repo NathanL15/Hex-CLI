@@ -157,7 +157,10 @@ def _tool_edit(agent: Any, args: dict[str, Any], payload: list[tuple[str, str]] 
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(new_content, encoding="utf-8")
     tmp.replace(path)
-    ui.tool_event("edit", f"{path} ({len(payload)} block(s))")
+    from . import protocol_v2 as p2
+    tier = p2.LAST_APPLY_TIER
+    suffix = "" if tier == "exact" else f", {tier} match"
+    ui.tool_event("edit", f"{path} ({len(payload)} block(s){suffix})")
     return f"Edited {path}: {len(payload)} block(s) applied."
 
 

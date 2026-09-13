@@ -446,8 +446,24 @@ def run_npurun_path() -> int:
     # up the same SDK and Rewind settings, not whatever the shell had.
     return subprocess.run(
         [sys.executable, "-m", "hexcli.agent", "--config", str(NPURUN_CONFIG), *sys.argv[1:]],
-        env=_npurun_env(),
+        env=_agent_env(),
     ).returncode
+
+
+def _agent_env() -> dict[str, str]:
+    """The server environment plus the path of THIS package, so the child
+    runs the same code as the launcher. `python -m hexcli.agent` resolves
+    the package from the working directory first and site-packages next;
+    the Terminal profile starts in the home directory, so a checkout's
+    launcher was starting the pip-installed copy (2.7.1 on the owner's
+    machine on 2026-09-13, with none of the 2.8.x or later changes) while
+    the checkout sat unused. Prepending the package's parent to PYTHONPATH
+    is a no-op for an installed copy and the fix for a checkout."""
+    env = dict(_npurun_env())
+    here = str(Path(__file__).resolve().parent.parent)
+    prior = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = here if not prior else f"{here}{os.pathsep}{prior}"
+    return env
 
 
 # Flags the REPL answers on its own; no server needed, so `hex --version`

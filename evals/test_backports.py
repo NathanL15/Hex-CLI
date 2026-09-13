@@ -237,7 +237,20 @@ def test_edit_file_tier4_rejects_near_ties() -> None:
         assert raised, "near-tie candidates must error, never pick one"
 
 
+def test_write_file_decodes_double_escaped_body() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "m.py"
+        # One line of literal backslash-n: the model escaped its JSON twice.
+        sa.write_file_tool(str(f), "import re" + "\\n" * 3 + "# Regex" + "\\n" + "X = 1")
+        body = f.read_text(encoding="utf-8")
+        assert body == "import re\n\n\n# Regex\nX = 1", body
+        # A body with real newlines is written verbatim, backslashes and all.
+        sa.write_file_tool(str(f), "x = \"a\\nb\"\ny = 1\n")
+        assert f.read_text(encoding="utf-8") == "x = \"a\\nb\"\ny = 1\n"
+
+
 TESTS = [
+    test_write_file_decodes_double_escaped_body,
     test_multi_action_response_yields_first_action,
     test_edit_file_tier4_high_similarity_unique_match,
     test_edit_file_tier4_rejects_weak_similarity,

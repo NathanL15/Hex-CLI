@@ -677,7 +677,27 @@ def test_version_is_written_in_one_place() -> None:
     assert 'tags: ["v*"]' in ci and "hexcli.__version__" in ci, "CI no longer checks release tags"
 
 
+def test_launcher_hands_the_child_its_own_package_path() -> None:
+    """`python -m hexcli.agent` resolves the package from the working
+    directory, then site-packages. The Terminal profile starts in the home
+    directory, so a checkout's launcher was starting the pip-installed copy
+    (2026-09-13: 2.7.1 while the checkout was at 2.8.1). The child's
+    PYTHONPATH must lead with the launcher's own package parent."""
+    import unittest.mock
+
+    import hexcli
+    from hexcli import launcher
+    with unittest.mock.patch.object(launcher, "_npurun_env", return_value={"PATH": "x", "PYTHONPATH": "prior"}):
+        env = launcher._agent_env()
+    here = str(Path(hexcli.__file__).resolve().parent.parent)
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == here, env["PYTHONPATH"]
+    assert env["PYTHONPATH"].endswith("prior") and env["PATH"] == "x"
+    with unittest.mock.patch.object(launcher, "_npurun_env", return_value={}):
+        assert launcher._agent_env()["PYTHONPATH"] == here
+
+
 TESTS = [
+    test_launcher_hands_the_child_its_own_package_path,
     test_memory_dreaming_is_off_by_default,
     test_repl_gates_dreaming_on_the_config_flag,
     test_confirm_ctrl_c_denies_without_raising,

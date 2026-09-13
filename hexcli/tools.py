@@ -350,6 +350,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     is still an error, never a guess, and a genuine no-match now reports the
     closest region with line numbers so the retry has something to work with.
     """
+    from . import protocol_v2 as p2
     from .protocol_v2 import apply_search_replace
 
     path = resolve_path(path_text)
@@ -359,28 +360,38 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
     content = path.read_text(encoding="utf-8")
+    tier = "exact"
     if content.count(old_string) == 1:
         new_content = content.replace(old_string, new_string, 1)
     else:
         new_content, err = apply_search_replace(content, [(old_string, new_string)])
         if err:
             raise RuntimeError(err.replace("SEARCH block 1", "old_string"))
+        tier = p2.LAST_APPLY_TIER
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(new_content, encoding="utf-8")
     tmp.replace(path)
     delta = new_string.count("\n") - old_string.count("\n")
-    ui.tool_event("edit", f"{path}  ({delta:+d} lines)")
+    # The tier is UI-only (arm logs read it); the model sees "Edited <path>".
+    suffix = "" if tier == "exact" else f", {tier} match"
+    ui.tool_event("edit", f"{path}  ({delta:+d} lines{suffix})")
     return f"Edited {path}"
 
 
 def write_file_tool(path_text: str, content: str) -> str:
+    from . import protocol_v2 as p2
+
     path = resolve_path(path_text)
     guard_mutation(path, "write_file", _active_config())
     path.parent.mkdir(parents=True, exist_ok=True)
+    note = ""
+    if p2.looks_double_escaped(content):
+        content = p2.unescape_json(content)
+        note = ", unescaped"
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
-    ui.tool_event("write", f"{path}  ({len(content)} chars)")
+    ui.tool_event("write", f"{path}  ({len(content)} chars{note})")
     return f"Wrote {path}"
 
 

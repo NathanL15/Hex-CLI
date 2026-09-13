@@ -1,7 +1,11 @@
 @echo off
 rem evals\run_recheck.cmd — the gate's RECHECK step, detached.
 rem
-rem   evals\run_recheck.cmd <name> <case1,case2,...> <baseline1.json> [baseline2.json]
+rem   evals\run_recheck.cmd <name> "<case1,case2,...>" <baseline1.json> [baseline2.json]
+rem
+rem QUOTE the case list. cmd splits unquoted commas into separate arguments,
+rem so an unquoted list rechecks only the first case and hands the second
+rem case name to the gate as a baseline path (2026-09-13, delta_transfer arm).
 rem
 rem Re-runs the named gated cases at 6 runs on a fresh server, merges them
 rem into evals\results\<name>_r5.json (the arm run_arm.cmd produced), and
@@ -12,7 +16,8 @@ set NAME=%~1
 set CASES=%~2
 set B1=%~3
 set B2=%~4
-if "%CASES%"=="" ( echo usage: run_recheck.cmd ^<name^> ^<case1,case2^> ^<baseline1^> [baseline2] & exit /b 2 )
+if "%CASES%"=="" ( echo usage: run_recheck.cmd ^<name^> "case1,case2" ^<baseline1^> [baseline2] & exit /b 2 )
+if "%~3"=="" ( echo usage: run_recheck.cmd ^<name^> "case1,case2" ^<baseline1^> [baseline2] -- quote the case list & exit /b 2 )
 set LOG=evals\results\%NAME%.log
 set OUT=evals\results\%NAME%_r5.json
 
