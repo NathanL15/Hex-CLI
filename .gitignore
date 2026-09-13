@@ -53,3 +53,6 @@ docs/backend_study/data_npu_ab/
 docs/backend_study/_pre_restart/
 tools/backend_bench/.tok_*.txt
 tools/backend_bench/.battery_probe.ps1
+
+# python -m build output
+dist/
