@@ -191,7 +191,7 @@ server with the system prompt.
    python -m compileall hexcli/ evals/ -q
    python evals/test_core.py            # plus every suite covering what you touched
    ```
-   Full offline set = the step list in `.github/workflows/ci.yml` (27 files, 771 tests). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
+   Full offline set = the step list in `.github/workflows/ci.yml` (29 files, 798 tests). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
 3. Anything touching the model path (prompts, compaction, tools the model sees, launcher env, runtime keys) also needs a live check: at minimum `python evals/cases_smoke.py` on a fresh server (10/10), and for behaviour changes the A/B protocol in §7.
 4. Never weaken a test to make it pass. If the test is wrong, fix it and say why in the commit. Never add a dependency without a strong reason.
 5. Update `CHANGELOG.md` `## Unreleased` with the measured effect. Numbers are pass^k over repeated live runs, never single anecdotes.
@@ -287,10 +287,10 @@ loss; do not argue with the instrument.
 ## 8. Releasing (`RELEASING.md` is authoritative)
 
 - One version source: `hexcli/__init__.py`. CI refuses a `v*` tag that does not match.
-- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard); the next release is 2.7.1 or 2.8.0 by the rule above.
+- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); the next release is 2.8.1 or 2.9.0 by the rule above.
 - Fork changes ship as fork releases first (`vX.Y.Z` on NathanL15/npurun with `npurun-arm64.exe` attached, fork CHANGELOG). Hex pins `REQUIRED_NPURUN` in `launcher.py`; `install.ps1` reads that literal by regex, so keep the line shape `REQUIRED_NPURUN = (0, 2, 3)`. Never pin past a fork release that does not exist. Hex releases carry the wheel and sdist (attached by `.github/workflows/publish.yml` on release, which also publishes to PyPI as `hexcli` via trusted publishing — no token anywhere), never the npurun binary.
 - Fork build: `cargo install --path crates/npurun-cli` inside the fork's dev shell (`scripts/dev-shell.ps1`; needs MSVC ARM64, LLVM on PATH for bindgen, `QNN_SDK_ROOT`). Known traps: GNU `link.exe` from Git Bash shadowing MSVC's; `ADSP_LIBRARY_PATH` unset.
-- Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → tag → push both → CI green → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>`. Title is the bare version.
+- Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → push main → wait for the remote CI run to be green (`gh run list --commit <sha>`) → tag → push the tag → CI green on the tag → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>` → the Publish workflow attaches wheel+sdist and publishes to PyPI; check it is green. Title is the bare version.
 - A release that exists to fix the previous one is a skipped gate; add the case that would have caught it.
 
 ---

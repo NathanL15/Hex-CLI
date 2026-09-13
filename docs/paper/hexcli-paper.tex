@@ -6,6 +6,7 @@
 \usepackage[charter]{mathdesign}
 \usepackage{microtype}
 \usepackage{booktabs}
+\usepackage{longtable}
 \usepackage{array}
 \usepackage{xcolor}
 \usepackage{tikz}
@@ -33,7 +34,7 @@
 
 \title{\textbf{Hex CLI: A Measurement-First Coding Agent\\ on a 4-Billion-Parameter Model and a Laptop NPU}}
 \author{Nathan L.\\ \small\texttt{github.com/NathanL15/Hex-CLI}}
-\date{September 2026 \,\textperiodcentered\, v2.7.1}
+\date{September 2026 \,\textperiodcentered\, v2.8.0}
 
 \begin{document}
 \maketitle
@@ -582,12 +583,19 @@ straight to the bypass. Refusal messages never name another route.
 % ═══════════════════════════════════════════════════════════════
 \section{Timeline}
 
-\begin{table}[H]
-\centering\small
-\begin{tabular}{@{}lp{10.6cm}@{}}
+{\small
+\begin{longtable}{@{}lp{10.6cm}@{}}
+\caption{Project milestones.}\label{tab:timeline}\\
 \toprule
 \textbf{Date (2026)} & \textbf{Milestone} \\
 \midrule
+\endfirsthead
+\toprule
+\textbf{Date (2026)} & \textbf{Milestone} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
 Jun 16 & First end-to-end NPU inference: npurun and the Genie SDK running
 Qwen3-4B at about 15 tok/s, after two other runtimes proved to be dead ends. \\
 Jun--Jul & v1.x: state-graded evals find six real prompt and loop bugs; the
@@ -646,13 +654,14 @@ and go through the gate: a loop nudge makes ``run the tests'' mean a test
 actually ran (0/5 $\to$ 5/5 runs execute it), and a loop guard stops an
 edit landing on a file the request did not name (1/5 $\to$ 5/5); a prompt
 sentence tried for each broke a gated case and was reverted. v2.7.0--2.7.1
-ship on a 44-case suite at 30/44 pass\textsuperscript{5}, and the project
-becomes an installable package (\texttt{pip install .} gives \texttt{hex}). \\
-\bottomrule
-\end{tabular}
-\caption{Project milestones.}
-\label{tab:timeline}
-\end{table}
+ship on a 44-case suite at 30/44 pass\textsuperscript{5}. v2.8.0 makes the
+project an installable package (\texttt{pip install hexcli} gives
+\texttt{hex}; everything it writes lives under one data directory) and,
+while recording the README clips, finds that the command classifier had
+matched every \texttt{Format-} verb: the model's live-state queries end in
+\texttt{Format-List}, which was asking for a destructive-command
+confirmation and being auto-denied in every unattended eval. \\
+\end{longtable}}
 
 % ═══════════════════════════════════════════════════════════════
 \section{Lessons}
@@ -710,12 +719,19 @@ afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
 the Qualcomm Hexagon NPU. Methodology and full run-level data:
 \code{docs/V2\_PLAN.md} \S14 and \code{evals/} in the repository.}
 
-\paragraph{State at v2.7.1 (September 2026).} The measurements above stand;
+\paragraph{State at v2.8.0 (September 2026).} The measurements above stand;
 what changed since is the surface and the loop's discipline, not the model.
 The agent now runs in Windows Terminal with a pinned input box and status
 line, survives the terminal's reflow on resize, prints only the answer when
-its output is a pipe, and installs as a package whose \texttt{hex} command
-starts the server and the REPL. Two behaviours found by walking through the
+its output is a pipe, and installs from PyPI as a package whose
+\texttt{hex} command starts the server and the REPL, with everything it
+writes under one data directory. Packaging also produced a finding about
+the instrument: the command classifier had treated every \texttt{Format-}
+verb as a disk format, so the \texttt{Format-List} the model appends to its
+live-state queries asked for a confirmation that unattended evals answer
+with a denial. The live-state numbers above were measured with that
+handicap in place; the fix is a two-line pattern, and the cases will be
+re-run under the next model-facing change rather than restated here. Two behaviours found by walking through the
 tool as different users were turned into eval cases and taken through the
 gate: when a request asks for the tests to run, the loop sends a finish back
 until a test file has actually executed (it ran in 0 of 5 attempts before,

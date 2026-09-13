@@ -16,6 +16,10 @@ the Hexagon NPU, not single-run anecdotes.
   short section under Usage, and the clips use absolute links so they
   render on PyPI, in a two-by-two grid; the edit clip plays faster
   (23 s, was 32 s). Version and CI badges at the top.
+- Paper and CLAUDE.md current through 2.8.0: the timeline row and the
+  closing state paragraph record the package and the classifier finding,
+  and the milestones table breaks across pages instead of running off
+  one (it had been overflowing page 9).
 
 ## 2.8.0 — 2026-09-12
 
