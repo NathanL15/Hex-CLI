@@ -9,8 +9,12 @@ the Hexagon NPU, not single-run anecdotes.
 - Releases carry the wheel and the source distribution and go to PyPI
   (`pip install hexcli`): `.github/workflows/publish.yml` runs when a
   release is published, builds both, attaches them and publishes through
-  PyPI trusted publishing. 2.8.0's files were attached by hand. The README
-  says so, and its clips use absolute links so they render on PyPI.
+  PyPI trusted publishing. 2.8.0's files were attached by hand.
+- README rewritten shorter: the PyPI route sits in Install next to the
+  installer, the sample transcript the clips made redundant is gone, the
+  configuration table keeps the keys people change, memory and logs are a
+  short section under Usage, and the clips use absolute links so they
+  render on PyPI. Version and CI badges at the top.
 
 ## 2.8.0 — 2026-09-12
 

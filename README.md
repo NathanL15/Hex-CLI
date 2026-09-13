@@ -1,5 +1,8 @@
 # Hex CLI
 
+[![PyPI](https://img.shields.io/pypi/v/hexcli)](https://pypi.org/project/hexcli/)
+[![CI](https://github.com/NathanL15/Hex-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/NathanL15/Hex-CLI/actions/workflows/ci.yml)
+
 Hex CLI is a coding agent for the Windows terminal, similar to aider or
 Claude Code, that runs a local model on the Snapdragon Hexagon NPU. It reads
 and edits files, runs commands, and checks its own work. The model is
@@ -27,35 +30,6 @@ run; a delete asks first.
 
 ![A delete command waits for a y/N before running](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/safety.gif)
 
-```
-> the median calc in processor.py is wrong for even-length lists, fix it
-
-◆ read_file
-▸ [read] processor.py  (lines 1-40 of 40)
-
-◆ edit_file
-▸ [edit] processor.py  (+2 lines)
-~ processor.py  (+3 −1)
-@@ -12,4 +12,6 @@
--    return sorted(data)[len(data) // 2]
-+    mid = len(data) // 2
-+    if len(data) % 2 == 0:
-+        return (sorted(data)[mid - 1] + sorted(data)[mid]) / 2
-
-◆ run_code
-
-Fixed: even-length lists now average the two middle values. The test file
-prints 3.5 for [1, 2, 5, 6].
-
-──────────────────────────────────────────────────────────────────
-> ask, or / for commands
-──────────────────────────────────────────────────────────────────
-context ◔ 21%   npu 0%   mem 12.5/15.6 GB              ~\proj (main)
-```
-
-Your messages sit on a light band, the input box and status line stay on
-the last rows, and the answer streams in above them.
-
 ## Requirements
 
 - Windows 11 on ARM with a Snapdragon X series chip
@@ -66,33 +40,42 @@ Tested on a Snapdragon X Elite. It will not run on x86 machines or on Macs.
 
 ## Install
 
+The installer does everything the machine allows:
+
 ```powershell
 git clone https://github.com/NathanL15/Hex-CLI
 cd Hex-CLI
 .\install.ps1
 ```
 
-The installer checks the machine, installs the package (`pip install .`,
-which gives you the `hex` and `hexcli` commands), downloads npurun, the
-model and the small embedding model that semantic memory uses, and runs
-`--doctor` when it finishes. It skips steps that are already done, so run
-it again after fixing anything it reports. Everything it writes for you
-lives in `~\.shellai`.
+It checks the machine, installs the package, downloads npurun, the model
+and the small embedding model that memory uses, and runs `--doctor` when it
+finishes. It skips steps that are already done, so run it again after
+fixing anything it reports. Everything it writes for you lives in
+`~\.shellai`.
 
-It cannot download the QAIRT SDK for you, because Qualcomm does not allow
-redistribution. It prints instructions for that step and picks the SDK up on
-the next run. See [Setup by hand](#setup-by-hand) if you want to do the
-steps yourself.
+The one thing it cannot download is the QAIRT SDK, because Qualcomm does
+not allow redistribution. It prints the instructions for that step and
+picks the SDK up on the next run.
 
-The Start Menu shortcut opens Hex in Windows Terminal when it is installed,
-through a "Hex CLI" profile the installer registers. It starts in your home
-folder; `/cwd <path>` moves into a project, whose `AGENTS.md` then applies. Text selection, copy
-and paste work there as in any other tab. Without Windows Terminal the
-shortcut uses the classic console, where drag-select is off because Hex
-disables QuickEdit (a click would otherwise freeze output); use the window
-menu's Edit, Mark to copy there. To have `hex` itself open in Windows
-Terminal from any shell, set it as the default terminal in its Settings,
-Startup.
+Or install from PyPI. The package is the same one the installer uses; you
+install the SDK yourself and the rest downloads itself:
+
+```powershell
+pip install hexcli       # the hex and hexcli commands
+hexcli --update          # downloads npurun
+hex                      # the first run downloads the model, about 2.5 GB
+```
+
+`hexcli --doctor` lists what is still missing and the command that fixes
+each item. Every [release](https://github.com/NathanL15/Hex-CLI/releases)
+also carries the wheel and the source distribution.
+
+The Start Menu shortcut opens Hex in Windows Terminal, through a profile
+the installer registers, starting in your home folder; `/cwd <path>` moves
+into a project. Without Windows Terminal it uses the classic console, where
+drag-select is off because Hex disables QuickEdit (a click would otherwise
+freeze output); use the window menu's Edit, Mark to copy there.
 
 ## Usage
 
@@ -106,14 +89,11 @@ hexcli --doctor                      # check the install
 hexcli --update                      # refresh npurun (and pull the source in a checkout)
 ```
 
-In a checkout without the package installed, `python launcher.py` and
-`python -m hexcli.agent` are the same two commands.
-
 Piped input is added to the request as context, or used as the request if
-there is no argument. Long input is trimmed to fit the context window.
-When stdout is not a terminal the answer is printed alone, with no
-progress text, so `hexcli "..." > answer.txt` and `hexcli "..." | clip`
-work.
+there is no argument. When stdout is not a terminal the answer is printed
+alone, so `hexcli "..." > answer.txt` and `hexcli "..." | clip` work. In a
+checkout without the package installed, `python launcher.py` and
+`python -m hexcli.agent` are the same two commands.
 
 ### Commands
 
@@ -138,10 +118,10 @@ work.
 | `/doctor` | check the install |
 | `Esc` | cancel the running step |
 
-You can add your own commands. Put a `.md` file in `.shellai/commands/` in
-the project, or `~/.shellai/commands/` for all projects, and `/<filename>`
-sends its content as the prompt. `$ARGUMENTS` in the file is replaced with
-whatever follows the command.
+You can add your own. Put a `.md` file in `.shellai/commands/` in the
+project, or `~/.shellai/commands/` for all projects, and `/<filename>`
+sends its content as the prompt, with `$ARGUMENTS` replaced by whatever
+follows the command:
 
 ```powershell
 # .shellai/commands/review.md contains: Review $ARGUMENTS for bugs and style issues.
@@ -161,21 +141,15 @@ whatever follows the command.
 | `Ctrl+V` | paste a block. Nothing is sent until you press Enter |
 | `Shift+Enter` | new line inside the entry |
 | `\` then `Enter` | continue on a new line |
-| `Ctrl+Plus` `Ctrl+Minus` | text size in the classic console |
 
-History is saved in `~/.shellai/input_history`. When stdin is not a
-terminal the agent falls back to plain `input()`, so pipes and CI work.
-
-The input box stays on the last rows of the window, and the conversation
-scrolls up above it. The status line under it
-shows how full the context is, the NPU load (the counter behind Task
-Manager's NPU graph), memory in use, and the working directory and branch.
-Set `status_bar` to `false` for the old inline prompt.
+The status line under the input box shows how full the context is, the
+NPU load, memory in use, and the working directory and branch. Set
+`status_bar` to `false` for a plain inline prompt.
 
 ### Project instructions
 
 If a project has an `AGENTS.md`, the agent reads it every turn. Keep it
-under about 1,200 characters. The model has a 4K token context and your
+under about 1,200 characters: the model has a 4K token context and your
 request has to fit in there too.
 
 ### Tools
@@ -186,9 +160,19 @@ request has to fit in there too.
 for the full signatures.
 
 `edit_file` tries an exact match first, then a whitespace-tolerant match,
-then a close match if there is exactly one. If the match is ambiguous it
-returns an error rather than guessing. `read_file` reads large files in
-pages. Every file change prints a diff and can be reverted with `/undo`.
+then a close match if there is exactly one; an ambiguous match returns an
+error rather than a guess. `read_file` reads large files in pages. Every
+file change prints a diff and can be reverted with `/undo`.
+
+### Memory and logs
+
+Memory is two local stores, one per project and one global, built on
+MiniLM embeddings. When idle, the agent condenses recent turns into short
+notes that later prompts include; `/memory` shows what is stored.
+
+Each session is written to `~/.shellai/chatlog/` as a JSONL file: every
+request, every message sent to the model, every reply with its latency,
+every tool call with its output. Secrets in the config are redacted.
 
 ## Safety
 
@@ -196,18 +180,16 @@ Commands are classified before they run:
 
 | Level | Examples | Behaviour |
 |---|---|---|
-| destructive | `Remove-Item`, `git reset --hard`, `format-*`, `iex` | asks first |
+| destructive | `Remove-Item`, `git reset --hard`, `Format-Volume`, `iex` | asks first |
 | sensitive | ssh/gpg/aws keys, hosts file, registry hives, credential stores, `-EncodedCommand` | asks first, denied when non-interactive |
 | safe | `Get-*`, `ls`, `git status` | runs |
 | caution | anything else | runs |
 
 File writes stay inside the working directory unless you widen the scope
 with `workspace_write_allow`. Reads can go anywhere. Key and credential
-paths are blocked for all file tools.
-
-`fetch_url` is the only tool that touches the network. It asks before every
-fetch, and is refused when non-interactive. Set `network_access` to
-`"deny"` to remove the tool or `"allow"` to skip the prompt.
+paths are blocked for all file tools. `fetch_url` is the only tool that
+touches the network; it asks before every fetch and is refused when
+non-interactive.
 
 Each classified command is appended to `.shellai/audit.log`. Text inside
 files and tool output is treated as data, not instructions. A 4B model does
@@ -217,45 +199,20 @@ doing so.
 ## Configuration
 
 Config is optional. `~\.shellai\shellai.json` and `.shellai/config.json`
-in a project are merged over the defaults, so you only need to write the
-keys you change. `shellai.example.json` lists every key with its default,
-and `/setup` writes the file for you.
+in a project are merged over the defaults, so you only write the keys you
+change. The ones people change:
 
 | Key | Default | Effect |
 |---|---|---|
 | `max_agent_steps` | `15` | tool calls per turn |
-| `live_streaming` | `true` | show the answer as it arrives |
-| `rich_input` | `true` | history, Tab completion, multi-line paste |
-| `side_padding` | `2` | left margin in columns |
-| `status_bar` | `true` | input box and status line at the bottom |
-| `user_highlight` | `true` | light band behind your messages in the transcript |
 | `show_diffs` | `true` | print a diff after each file change |
+| `status_bar` | `true` | input box and status line at the bottom |
 | `workspace_write_scope` | `true` | keep writes inside the working directory |
-| `autopilot_confirm_sensitive` | `true` | ask before touching keys and credentials |
-| `network_access` | `"ask"` | `"deny"` or `"allow"` |
-| `require_verification` | `true` | ask the agent to check its own edits |
-| `prompt_split` | `true` | answer plain questions without the tool loop |
-| `escalation_local_model` | `""` | a larger local model to consult when stuck |
+| `network_access` | `"ask"` | `"deny"` removes `fetch_url`, `"allow"` skips the prompt |
 | `memory_enabled` | `true` | semantic memory |
-| `chat_log_enabled` | `true` | write full session logs |
-| `protocol` | `"v1"` | `"v2"` is experimental |
 
-## Logs and memory
-
-Each session is written to `~/.shellai/chatlog/` as a JSONL file: every
-request, every message sent to the model, every reply with its latency,
-every tool call with its output. Secrets in the config are redacted.
-`/stats` prints the path of the current file.
-
-```powershell
-python tools/chatlog_report.py                  # summary across all sessions
-python tools/chatlog_report.py --last           # replay the most recent session
-python tools/chatlog_report.py --session 1a2b   # replay one session by id prefix
-```
-
-Memory is two local stores, one per project and one global, built on MiniLM
-embeddings. When idle, the agent condenses recent turns into short notes
-that are included in later prompts. `/memory` shows what is stored.
+`shellai.example.json` lists every key with its default, and `/setup`
+writes the file for you.
 
 ## Setup by hand
 
@@ -264,13 +221,8 @@ These are the steps `install.ps1` performs. `--doctor` checks each one.
 **1. The package**
 
 ```powershell
-pip install hexcli   # from PyPI: the hex and hexcli commands, numpy, onnxruntime
-pip install .        # or from the checkout
+pip install hexcli   # or, from the checkout: pip install .
 ```
-
-Each [release](https://github.com/NathanL15/Hex-CLI/releases) also carries
-the wheel and the source distribution, for a `pip install <file>` without
-PyPI.
 
 `ruff` is optional and enables the `lint_code` tool.
 
@@ -291,22 +243,26 @@ setx ADSP_LIBRARY_PATH "C:\Qualcomm\AIStack\QAIRT_2.50.0\lib\hexagon-v73\unsigne
 If `ADSP_LIBRARY_PATH` is missing, npurun crashes with
 `STATUS_STACK_BUFFER_OVERRUN`.
 
-**3. npurun and a model**
+**3. npurun and the model**
 
-The NPU server is a fork of npurun, at
-[NathanL15/npurun](https://github.com/NathanL15/npurun) on the
-`hexcli-fork` branch. Each release there has a prebuilt `npurun-arm64.exe`.
-Hex CLI expects one specific build, set by `REQUIRED_NPURUN` in
-`hexcli/launcher.py`. `--doctor` fails on an older build and `--update`
-replaces it (the download goes to `~\.shellai\bin`).
-
-To build from source, use the fork. It has the prompt cache rewind, usage
-reporting, exact `max_tokens`, and request watchdog that Hex CLI relies on.
+The NPU server is a fork of npurun at
+[NathanL15/npurun](https://github.com/NathanL15/npurun), branch
+`hexcli-fork`, with a prebuilt `npurun-arm64.exe` on each release. Hex CLI
+expects one specific build, set by `REQUIRED_NPURUN` in
+`hexcli/launcher.py`; `hexcli --update` downloads it to `~\.shellai\bin`
+and `--doctor` fails on an older one. The fork adds the prompt cache
+rewind, usage reporting, exact `max_tokens` and the request watchdog that
+Hex CLI relies on, so upstream npurun will not do. To build it yourself:
 
 ```powershell
 git clone -b hexcli-fork https://github.com/NathanL15/npurun
 cd npurun
 cmd /c "scripts\dev-shell-local.bat cargo install --path crates\npurun-cli"
+```
+
+The model downloads on the first `hex` run, or by hand:
+
+```powershell
 npurun pull qwen3-4b-instruct-2507      # about 2.5 GB
 ```
 
@@ -335,7 +291,7 @@ curl -L -o ~\.shellai\onnx\tokenizer.json https://huggingface.co/sentence-transf
 
 ## Development
 
-CI runs `ruff` and 25 offline test suites against a mock backend, so no NPU
+CI runs `ruff` and 29 offline test suites against a mock backend, so no NPU
 is needed for those:
 
 ```powershell
@@ -347,7 +303,7 @@ python evals/test_lineedit.py
 
 The live evals need the NPU server. They check what the model actually did,
 by looking at the filesystem and the answer, and run each case several
-times because the model is not deterministic.
+times because the model is not deterministic:
 
 ```powershell
 python evals/cases_smoke.py                        # quick check
@@ -355,6 +311,7 @@ python evals/cases_extended.py --runs 3            # 41 cases
 python evals/cases_multiturn.py --runs 3 --think-time 15
 python evals/compare.py <before.json> <after.json>
 python evals/gate.py --baseline <base.json> <candidate.json>
+python tools/chatlog_report.py --last             # replay the most recent session
 ```
 
 Restart the NPU server before each suite. After an hour or two of steady
