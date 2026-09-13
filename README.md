@@ -9,26 +9,28 @@ and edits files, runs commands, and checks its own work. The model is
 Qwen3-4B, served by [npurun](https://github.com/bpbonker/npurun). After
 setup it works offline.
 
-**Ask something.** The answer streams in, markdown and all, above an input
-box that stays on the last rows.
-
-![A question answered in bullet points](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/ask.gif)
-
-**Ask about the machine.** Live state comes from a real command, shown as
-it runs.
-
-![The CPU name read with a PowerShell command](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/machine.gif)
-
-**Change code.** Every file change prints a diff; when you ask for the
-tests, they run; `/diff` shows the turn's changes and `/undo` takes them
-back, files included.
-
-![A docstring added, the tests run, then undone](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/edit.gif)
-
-**Nothing destructive runs unasked.** Commands are classified before they
-run; a delete asks first.
-
-![A delete command waits for a y/N before running](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/safety.gif)
+<table>
+<tr>
+<td width="50%" valign="top">
+<b>Ask something.</b> The answer streams in, markdown and all, above an input box that stays on the last rows.<br><br>
+<img src="https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/ask.gif" alt="A question answered in bullet points" width="100%">
+</td>
+<td width="50%" valign="top">
+<b>Ask about the machine.</b> Live state comes from a real command, shown as it runs.<br><br>
+<img src="https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/machine.gif" alt="The CPU name read with a PowerShell command" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<b>Change code.</b> Every file change prints a diff; when you ask for the tests, they run; <code>/diff</code> shows the turn's changes and <code>/undo</code> takes them back, files included.<br><br>
+<img src="https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/edit.gif" alt="A docstring added, the tests run, then undone" width="100%">
+</td>
+<td width="50%" valign="top">
+<b>Nothing destructive runs unasked.</b> Commands are classified before they run; a delete asks first.<br><br>
+<img src="https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/safety.gif" alt="A delete command waits for a y/N before running" width="100%">
+</td>
+</tr>
+</table>
 
 ## Requirements
 

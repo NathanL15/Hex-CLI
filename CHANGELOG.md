@@ -14,7 +14,8 @@ the Hexagon NPU, not single-run anecdotes.
   installer, the sample transcript the clips made redundant is gone, the
   configuration table keeps the keys people change, memory and logs are a
   short section under Usage, and the clips use absolute links so they
-  render on PyPI. Version and CI badges at the top.
+  render on PyPI, in a two-by-two grid; the edit clip plays faster
+  (23 s, was 32 s). Version and CI badges at the top.
 
 ## 2.8.0 — 2026-09-12
 
