@@ -6,6 +6,95 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.9.0 — 2026-09-13
+
+A minor release: `edit_file` and `write_file` behave differently for the
+model, and the launcher hands the agent its package path. Gate: extended
+suite at 5 runs PASS after recheck, uc1 at 6 runs, smoke 10/10, CI green.
+
+- `edit_file` merges the model's change into the file instead of pasting
+  its memory of the file. Multi-turn traces (uc1-t3/t4, 2026-09-13) show
+  the 4B rebuilding lines from the traceback in its history rather than
+  copying them: `for item in data` where the file says `items`, `"average":
+  average` where it says `avg`, a dropped trailing comment. Its
+  `old_string` then sits at 40–95 % similarity while the change it wants is
+  small and clear (`appned` → `append`; add a key to a dict). The old
+  fallback pasted `new_string` over the closest region when similarity was
+  ≥ 95 %, which installed the misremembered names: five of six live uc1-t4
+  runs ended in `NameError: name 'average' is not defined`, put there by the
+  harness, and the model then retried the same line four times. The paste
+  is gone. `protocol_v2._apply_one` now runs a token-level three-way merge
+  between the file's closest region, `old_string` and `new_string`: hunks
+  the model changed are applied where the file agrees with what the model
+  saw, tokens the model misremembered keep the file's text, and a hunk that
+  touches a misremembered token refuses (unless the "change" merely restates
+  what the file already says, which is skipped). Inserted lines are
+  re-indented by the delta between the model's line and the file's; a
+  whitespace run holding a newline never matches one that does not; a
+  replacement that would restate the tokens beside its anchor, grow into a
+  side the model did not see correctly, or carry JSON escapes into a file
+  that has no backslashes, refuses. Every refusal still reports the closest
+  region as before. Replaying the saved traces against the fixtures: of 20
+  distinct failed uc1-t3 edits 5 now apply correctly, 15 still error, 0
+  apply wrongly; of 23 non-exact uc1-t4 attempts 8 apply, 12 refuse, 0
+  produce a harmful file (the first draft produced two syntax errors, from
+  un-shifted indentation and literal `\"` sequences, both now refused or
+  fixed).
+- `edit_file` decodes a double-escaped `old_string`. 58 of 667 saved
+  edit_file calls (38 of them errors) carried `\"` or literal `\n` because
+  the model escaped its JSON arguments twice (agentic-3: `\"name\":
+  \"demo\"` for a file holding `"name": "demo"`). When the raw string is
+  absent from the file and the decoded one is present, both strings are
+  decoded once and the tiers run again. `write_file` does the same for a
+  body that is one line of literal `\n` sequences with no real line break
+  (1 of 389 saved calls), and leaves any body with a real newline alone.
+- Audit of the same bug classes elsewhere: protocol v2's `edit` action
+  shares the applier and gains all of the above; the JSON action parser
+  only tracks escapes to find brace boundaries and never re-escapes; tier 3
+  (indent shift) replaces whole lines and has no trailing-segment case;
+  `run_command` carried one escaped argument in 303 calls and it was a
+  legitimate regex.
+- The edit and write event lines name what landed a non-exact edit
+  (`, transfer match`, `, unescaped match`, `, indent match`; `, unescaped`
+  on a write) so an arm log shows which calls the fallbacks rescued; the
+  model still reads `Edited <path>` / `Wrote <path>`.
+- A checkout's launcher runs the checkout's code. `python -m hexcli.agent`
+  resolves the package from the working directory, then site-packages; the
+  Terminal profile starts in the home directory, so since the 2.8.0
+  packaging the launcher started from `Hex CLI.cmd` was silently running
+  the pip-installed copy (2.7.1 on the owner's machine on 2026-09-13,
+  found when a new input-line feature did not appear) while the checkout
+  sat unused. The launcher now prepends its own package's parent to the
+  child's `PYTHONPATH` (`_agent_env`), a no-op for an installed copy.
+- `run_recheck.cmd` documents that the case list must be quoted: cmd splits
+  an unquoted comma list into arguments, so the first 2026-09-13 recheck ran
+  one case and handed the second case's name to the gate as a baseline path.
+- Live numbers (fresh server per arm, 2026-09-13, a day with under 1 GB
+  free on the 16 GB machine). Smoke 10/10. uc1 at 6 runs: t1 6/6, t2 6/6,
+  t3 5/6 (3/3 on 09-12, 15/24 pooled over earlier arms; the miss called no
+  tool), t4 1/6 (0/3 in every baseline: the first pass ever, on a merged
+  insertion beside the file's own `avg`), t5 0/6, t6 0/6 as before; the
+  merge landed 13 edits across uc1/uc2 that would have errored. uc2 at 3
+  runs: t2 2/3 (the model edited on an explain-only turn; both stray edits
+  refused), the rest 3/3. uc3 at 3 runs, twice: every run invalid on both
+  attempts, the client's 300 s timeout expiring while the server answered
+  429 busy at ~3,200 tokens of context (the 09-12 baseline lost one of
+  three the same way; no HTP hang in the server log), so uc3 has no valid
+  measurement today. Extended suite at 5 runs, seed 20260913: 31/44 pass^5
+  (32/44 on the 2.7.x baseline, 31/41 on 09-05), run-level 162/205 vs
+  165/208, Fisher p=1.0; not one fallback tier fired in those 220 runs (the
+  event-line markers show none), so the suite is a regression check only.
+  Gate RECHECK on agentic-3 (4/5) and self-correct-1 (4/5); recheck at 6
+  runs: self-correct-1 5/6, agentic-3 4/6 (two double-escaped runs, one
+  rescued by the decode, one landing the model's own comma-less JSON, and
+  one old_string hallucinated three times) → gate FAIL; a second agentic-3
+  recheck on a fresh server 6/6 → gate PASS. Ceiling panel: +lint-1
+  3/5→5/5, +trap-4 0/5→1/5, −regression-anchor-1 5/5→4/5 (the model wrote
+  invalid JSON through an exact-match edit). Results:
+  `merge_transfer_r5.json`, `multiturn_uc{1,2,3}_merge_*_20260913.json`,
+  log `merge_transfer.log`; the earlier anchor-only tier's arm is
+  `delta_transfer_r5.json` (gate PASS after recheck, 27/44, superseded).
+
 ## 2.8.1 — 2026-09-12
 
 A patch release: nothing model-facing and nothing the launcher hands the
