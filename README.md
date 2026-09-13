@@ -9,23 +9,23 @@ setup it works offline.
 **Ask something.** The answer streams in, markdown and all, above an input
 box that stays on the last rows.
 
-![A question answered in bullet points](docs/gifs/ask.gif)
+![A question answered in bullet points](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/ask.gif)
 
 **Ask about the machine.** Live state comes from a real command, shown as
 it runs.
 
-![The CPU name read with a PowerShell command](docs/gifs/machine.gif)
+![The CPU name read with a PowerShell command](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/machine.gif)
 
 **Change code.** Every file change prints a diff; when you ask for the
 tests, they run; `/diff` shows the turn's changes and `/undo` takes them
 back, files included.
 
-![A docstring added, the tests run, then undone](docs/gifs/edit.gif)
+![A docstring added, the tests run, then undone](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/edit.gif)
 
 **Nothing destructive runs unasked.** Commands are classified before they
 run; a delete asks first.
 
-![A delete command waits for a y/N before running](docs/gifs/safety.gif)
+![A delete command waits for a y/N before running](https://raw.githubusercontent.com/NathanL15/Hex-CLI/main/docs/gifs/safety.gif)
 
 ```
 > the median calc in processor.py is wrong for even-length lists, fix it
@@ -264,8 +264,13 @@ These are the steps `install.ps1` performs. `--doctor` checks each one.
 **1. The package**
 
 ```powershell
-pip install .        # from the checkout: the hex and hexcli commands, numpy, onnxruntime
+pip install hexcli   # from PyPI: the hex and hexcli commands, numpy, onnxruntime
+pip install .        # or from the checkout
 ```
+
+Each [release](https://github.com/NathanL15/Hex-CLI/releases) also carries
+the wheel and the source distribution, for a `pip install <file>` without
+PyPI.
 
 `ruff` is optional and enables the `lint_code` tool.
 

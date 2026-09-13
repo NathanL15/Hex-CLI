@@ -76,7 +76,14 @@ degrades and looks like a regression.
    which is how 2.7.0 shipped a path bug that 797 green local tests never
    saw). Then tag `vX.Y.Z` and push the tag. CI must be green on the tag.
 4. `gh release create vX.Y.Z --title vX.Y.Z --notes-file <the changelog
-   section>`. No asset.
+   section>`. Publishing the release runs `.github/workflows/publish.yml`,
+   which builds the wheel and the source distribution, attaches both to
+   the release and publishes them to PyPI (`pip install hexcli`) through
+   trusted publishing: the `hexcli` project on PyPI names this repository,
+   that workflow file and the `pypi` environment as its publisher, so no
+   token exists anywhere. The npurun binary is not attached; it lives on
+   the fork's releases. Check the Publish run is green; `workflow_dispatch`
+   with the tag re-runs it for a release that was published without it.
 
 A release that exists to fix the previous release is a gate that was
 skipped. If the fix is needed, ship it, then add the case that would have

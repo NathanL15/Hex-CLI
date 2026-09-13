@@ -6,6 +6,12 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- Releases carry the wheel and the source distribution and go to PyPI
+  (`pip install hexcli`): `.github/workflows/publish.yml` runs when a
+  release is published, builds both, attaches them and publishes through
+  PyPI trusted publishing. 2.8.0's files were attached by hand. The README
+  says so, and its clips use absolute links so they render on PyPI.
+
 ## 2.8.0 — 2026-09-12
 
 A minor release by RELEASING.md's rule (the launcher moved and its
