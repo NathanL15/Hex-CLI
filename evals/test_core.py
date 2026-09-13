@@ -513,6 +513,14 @@ def test_check_sensitive_path_blocks_aws() -> None:
 def test_classify_safe_get_commands() -> None:
     for cmd in ["Get-Process", "Get-ChildItem .", "Get-Content file.txt"]:
         assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
+    # PowerShell's output formatters are not the disk formatter: the CPU/RAM
+    # cookbook queries end in Format-List and were asking for confirmation
+    # (auto-denied in every unattended eval) until 2026-09-12.
+    for cmd in ["Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores | Format-List",
+                "Get-Process | Format-Table", "Get-ChildItem | Format-Wide"]:
+        assert safety.classify_command(cmd) != "destructive", cmd
+    for cmd in ["Format-Volume D:", "Format-Disk -Number 1", "format C: /q"]:
+        assert safety.classify_command(cmd) == "destructive", cmd
 
 
 def test_classify_safe_ls_dir() -> None:

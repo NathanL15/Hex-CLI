@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.7.1 release on 2026-09-12 (code at
-`__version__ = "2.7.1"`). When this file and the code disagree, the code
+to date through the 2.8.0 release on 2026-09-12 (code at
+`__version__ = "2.8.0"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`
@@ -355,6 +355,7 @@ From `docs/V2X_ROADMAP.md` and `docs/RESEARCH_NEXT_LEVERS.md` §7:
 - Append-only raw history across turns (every turn a prefix extension). Largest open lever; changes what the model reads, so full pass^5 + multiturn with think time.
 - Compaction prompt sharing the warm prefix (less urgent at an 850-token budget).
 - Harness-side auto-paging for `bigfile-2`. `"Update the file."` still 0/5 on the ask-don't-give-up case.
+- `uc1-t3` (multi-turn: fix the runtime bug after seeing the traceback) sits at 1-3 of 3 across fresh servers (1/3 on 09-05, 3/3, 1/3, 2/3 on 09-12); every miss is three `edit_file` calls with a mismatched `old_string`. A 3/3 there is a lucky draw, not a baseline; the release rule's "no 3/3 lost" needs the case's rate, which means 6-run arms for the multi-turn suite too.
 - `missing-file-2` (edit a file the user did not name when the named one is missing, with a prior edit in the history): 1-3/5. A rule-11 sentence fixed it (4/5) but broke `agentic-3` (gate FAIL, 2026-09-12) and cost 160 prompt tokens; the next attempt should be loop mechanics, not prose — the way the "run the tests" nudge (shipped 2026-09-12, `_tests_requested` in `run_autopilot`) replaced a rule-14 sentence that made the 4B copy the prompt's tool examples literally.
 - Server should mark its cache stale after `finish_reason=length` (Rewind −1 otherwise). Fork-side.
 - Capabilities, each flag-gated and A/B'd: plan ledger, memory v2 (files + ripgrep), git-snapshot undo, background commands / steering, AST command classifier + policy files.

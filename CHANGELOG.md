@@ -6,6 +6,35 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.8.0 — 2026-09-12
+
+A minor release by RELEASING.md's rule (the launcher moved and its
+layout changed), with no change to the prompt or the loop since 2.7.1.
+Gate: the 2.7.1 five-run extended arm stands (no model-facing change);
+smoke 10/10 on the first fresh server; multi-turn 3 runs with 15 s think
+time against `multiturn_r3_20260912`: uc3-t7 regained, uc1-t3 shown as
+lost (1/3, then 2/3 on a uc1 re-run: its failures are three `edit_file`
+calls whose `old_string` did not match, a path untouched since the
+afternoon's 3/3, so it is recorded as the case's own flakiness and a
+watch item, not a regression); stall probe 0 hangs in 20 (a first run
+lost 3 of 20 attempts to the laptop entering standby mid-probe, with 0
+hangs in the 17 it completed).
+
+### Format-List is not Format-Volume
+
+The command classifier's disk-format rule matched every `Format-` verb,
+so the CPU/RAM cookbook queries (`... | Format-List`) asked for a
+destructive-command confirmation, and in every unattended eval were
+auto-denied. Found while recording the README clips. The rule now names
+the formatters it means (`Format-Volume`, `Format-Disk`, `format X:`) and
+leaves `Format-List`, `-Table`, `-Wide`, `-Custom` and `-Hex` alone.
+
+### README clips
+
+Four short recordings under `docs/gifs/` replace the sample transcript:
+a streamed answer, a live-state command, an edit with diff, test run and
+undo, and a destructive command that asks first.
+
 ### Installable package
 
 `pip install .` now gives a working product, not a REPL without a

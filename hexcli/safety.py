@@ -15,7 +15,12 @@ _DESTRUCTIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
     r"(?<![a-z])del\s",
     r"(?<![a-z])rd\s",
     r"\berase\b",
-    r"\bformat-\w+",                # Format-Volume, Format-Disk …
+    # Format-Volume / Format-Disk / the DOS `format X:` — not PowerShell's
+    # output formatters (Format-List, Format-Table, Format-Wide, Format-Custom,
+    # Format-Hex), which the CPU/RAM cookbook queries end in. Those asked for
+    # confirmation for weeks and were auto-denied in every unattended eval.
+    r"\bformat-(?!list\b|table\b|wide\b|custom\b|hex\b)\w+",
+    r"^\s*format\s+[a-z]:",
     r"git\s+reset\s+--hard\b",
     r"git\s+push\s+(-f\b|--force\b)",
     r"git\s+clean\s+-[a-z]*f",     # git clean -f / -df / -xf

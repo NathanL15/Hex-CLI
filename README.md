@@ -6,7 +6,26 @@ and edits files, runs commands, and checks its own work. The model is
 Qwen3-4B, served by [npurun](https://github.com/bpbonker/npurun). After
 setup it works offline.
 
-![A live-state question, then a small edit verified by running the tests](docs/demo.gif)
+**Ask something.** The answer streams in, markdown and all, above an input
+box that stays on the last rows.
+
+![A question answered in bullet points](docs/gifs/ask.gif)
+
+**Ask about the machine.** Live state comes from a real command, shown as
+it runs.
+
+![The CPU name read with a PowerShell command](docs/gifs/machine.gif)
+
+**Change code.** Every file change prints a diff; when you ask for the
+tests, they run; `/diff` shows the turn's changes and `/undo` takes them
+back, files included.
+
+![A docstring added, the tests run, then undone](docs/gifs/edit.gif)
+
+**Nothing destructive runs unasked.** Commands are classified before they
+run; a delete asks first.
+
+![A delete command waits for a y/N before running](docs/gifs/safety.gif)
 
 ```
 > the median calc in processor.py is wrong for even-length lists, fix it
