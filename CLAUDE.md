@@ -375,7 +375,7 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 |---|---|---|
 | `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
-| `CHANGELOG.md` | what shipped and the numbers | current through 2.8.0; `Unreleased` = publish workflow, README rewrite, docs pass |
+| `CHANGELOG.md` | what shipped and the numbers | current through 2.8.1; `Unreleased` empty |
 | `docs/V2X_ROADMAP.md` | phase status, watch items, rejected list | current (09-07) |
 | `docs/RESEARCH_NEXT_LEVERS.md` | the levers memo, Rewind arc, runtime knobs | current through 09-05 |
 | `docs/backend_study/CPU_VS_NPU.md`, `PROMPT_LEVER.md`, `RUNBOOK.md` | the measurement study and procedure | current (09-05/07) |
