@@ -6,6 +6,12 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.8.1 — 2026-09-12
+
+A patch release: nothing model-facing and nothing the launcher hands the
+server changed. Gate: CI green on main; smoke 10/10 on a fresh
+server.
+
 - Installer repairs a Windows Terminal profile whose icon path 2.8.0
   invalidated. The icon moved into the package (`hexcli/assets/`) that
   release, but an existing "Hex CLI" profile kept pointing at the old

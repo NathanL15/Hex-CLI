@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.8.0 release on 2026-09-12 (code at
-`__version__ = "2.8.0"`). When this file and the code disagree, the code
+to date through the 2.8.1 release on 2026-09-12 (code at
+`__version__ = "2.8.1"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`
@@ -287,7 +287,7 @@ loss; do not argue with the instrument.
 ## 8. Releasing (`RELEASING.md` is authoritative)
 
 - One version source: `hexcli/__init__.py`. CI refuses a `v*` tag that does not match.
-- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); the next release is 2.8.1 or 2.9.0 by the rule above.
+- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); the next release is 2.8.2 or 2.9.0 by the rule above.
 - Fork changes ship as fork releases first (`vX.Y.Z` on NathanL15/npurun with `npurun-arm64.exe` attached, fork CHANGELOG). Hex pins `REQUIRED_NPURUN` in `launcher.py`; `install.ps1` reads that literal by regex, so keep the line shape `REQUIRED_NPURUN = (0, 2, 3)`. Never pin past a fork release that does not exist. Hex releases carry the wheel and sdist (attached by `.github/workflows/publish.yml` on release, which also publishes to PyPI as `hexcli` via trusted publishing — no token anywhere), never the npurun binary.
 - Fork build: `cargo install --path crates/npurun-cli` inside the fork's dev shell (`scripts/dev-shell.ps1`; needs MSVC ARM64, LLVM on PATH for bindgen, `QNN_SDK_ROOT`). Known traps: GNU `link.exe` from Git Bash shadowing MSVC's; `ADSP_LIBRARY_PATH` unset.
 - Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → push main → wait for the remote CI run to be green (`gh run list --commit <sha>`) → tag → push the tag → CI green on the tag → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>` → the Publish workflow attaches wheel+sdist and publishes to PyPI; check it is green. Title is the bare version.
