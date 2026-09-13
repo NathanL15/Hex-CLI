@@ -173,8 +173,8 @@ def test_enable_draws_the_box_below_the_transcript_and_returns_the_cursor() -> N
         rows = live.rows(36)
         # Hidden cursor, a fresh (padded) row per box row, then back up
         # four rows to the transcript row's column 0 (plus the margin fill).
-        assert text.startswith("\033[?25l\n  " + rows[0]), repr(text[:60])
-        assert text.endswith("\r  \033[4A\033[?25h"), repr(text[-30:])
+        assert text.startswith("\033[?2026h\033[?25l\n  \033[2K" + rows[0]), repr(text[:60])
+        assert text.endswith("\r  \033[4A\033[?25h\033[?2026l"), repr(text[-30:])
         assert all(r in text for r in rows)
         assert live._drawn == 4 and live.margin.col == 0
     finally:
@@ -190,14 +190,14 @@ def test_a_transcript_write_erases_writes_and_redraws_keeping_the_column() -> No
         live.write(inner, "hello")
         text = base.text
         assert text.startswith("\033[J"), repr(text[:10])
-        assert "\033[Jhello\033[?25l\n" in text, repr(text[:40])
+        assert "\033[Jhello\033[?2026h\033[?25l\n" in text, repr(text[:40])
         # The margin column is restored so later wrapping is right, and the
         # cursor is moved back to it after the box is drawn.
-        assert live.margin.col == 5 and text.endswith("\r  \033[4A\033[5C\033[?25h"), (live.margin.col, repr(text[-30:]))
+        assert live.margin.col == 5 and text.endswith("\r  \033[4A\033[5C\033[?25h\033[?2026l"), (live.margin.col, repr(text[-30:]))
         # A newline-terminated write leaves the cursor at column 0: no move.
         base.chunks.clear()
         live.write(inner, " world\n")
-        assert live.margin.col == 0 and base.text.endswith("\r  \033[4A\033[?25h"), repr(base.text[-30:])
+        assert live.margin.col == 0 and base.text.endswith("\r  \033[4A\033[?25h\033[?2026l"), repr(base.text[-30:])
     finally:
         restore()
 
@@ -240,7 +240,12 @@ def test_activity_and_ticks_repaint_the_status_row() -> None:
         assert "thinking (Esc to cancel)   context" in base.text, base.text
         base.chunks.clear()
         live.tick("⠹")
-        assert "⠹ thinking" in base.text and base.text.startswith("\033[J"), base.text
+        # A tick overwrites the box in place: one synchronized frame, cursor
+        # hidden, no erase-to-end (that erase was the flicker).
+        assert "⠹ thinking" in base.text, base.text
+        assert "\033[J" not in base.text, repr(base.text)
+        assert base.text.startswith("\033[?2026h\033[?25l") and base.text.endswith("\033[?25h\033[?2026l"), repr(base.text)
+        assert len(base.chunks) == 1, [repr(c) for c in base.chunks]
         base.chunks.clear()
         live.set_activity(None)
         assert "thinking" not in base.text and "context" in base.text, base.text
@@ -269,8 +274,8 @@ def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
         live._geometry = lambda: (geo["row"], geo["height"])
         live.enable()
         text = base.text
-        assert text.startswith("\033[6;1H\033[20L\033[26;3H\033[?25l\n  "), repr(text[:60])
-        assert text.endswith("\r  \033[4A\033[?25h") and live._drawn == 4, (repr(text[-30:]), live._drawn)
+        assert text.startswith("\033[6;1H\033[20L\033[26;3H\033[?2026h\033[?25l\n  "), repr(text[:60])
+        assert text.endswith("\r  \033[4A\033[?25h\033[?2026l") and live._drawn == 4, (repr(text[-30:]), live._drawn)
         assert (live._pad_top, live._pad_above) == (5, 20)
         # The cursor is now on row 25 with the box on 26..29. A one-line
         # write needs one more row below: delete one pad row at row 5, move
@@ -300,7 +305,7 @@ def test_box_is_padded_down_to_the_last_rows_of_the_window() -> None:
         live._geometry = lambda: None
         base.chunks.clear()
         live.enable()
-        assert base.text.startswith("\033[?25l\n  ") and live._drawn == 4
+        assert base.text.startswith("\033[?2026h\033[?25l\n  ") and live._drawn == 4
     finally:
         restore()
 
@@ -527,6 +532,31 @@ def test_paused_context_suspends_and_restores_and_nests() -> None:
         restore()
 
 
+def test_banner_visible_until_the_window_scrolls_or_the_screen_clears() -> None:
+    restore = _no_color()
+    try:
+        live, base, inner = _live(width=80)
+        assert live.banner_visible is False
+        live.banner_printed()
+        assert live.banner_visible is True
+        # A write that fits (cursor high in a tall window) keeps it.
+        live._geometry = lambda: (2, 40)
+        live.write(inner, "one line\n")
+        assert live.banner_visible is True
+        # A write from the last row with no pad to take from scrolls the window.
+        live._geometry = lambda: (39, 40)
+        live.write(inner, "two\nlines\n")
+        assert live.banner_visible is False
+        live.banner_printed()
+        live.note_scroll(1)
+        assert live.banner_visible is False
+        live.banner_printed()
+        live.screen_cleared()
+        assert live.banner_visible is False
+    finally:
+        restore()
+
+
 def test_repaint_skips_when_nothing_visible_changed() -> None:
     restore = _no_color()
     try:
@@ -598,6 +628,7 @@ TESTS = [
     test_activity_and_ticks_repaint_the_status_row,
     test_box_is_padded_down_to_the_last_rows_of_the_window,
     test_sampler_on_update_fires_the_repaint,
+    test_banner_visible_until_the_window_scrolls_or_the_screen_clears,
     test_repaint_skips_when_nothing_visible_changed,
     test_paused_context_suspends_and_restores_and_nests,
     test_pad_delete_returns_to_the_column_before_the_write,

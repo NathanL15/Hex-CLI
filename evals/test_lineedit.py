@@ -137,6 +137,29 @@ def test_kill_word_removes_previous_word() -> None:
     assert run(typed("git commit --amend") + [KILL_WORD, ENTER]) == "git commit "
 
 
+def test_ctrl_backspace_kills_a_word_not_a_character() -> None:
+    # A Windows console delivers Ctrl+Backspace as DEL (0x7f); plain
+    # Backspace is 0x08. DEL was bound to a one-character backspace, so
+    # Ctrl+Backspace ate one letter per press (reported 2026-09-13).
+    assert le._CONTROL["\x7f"] == KILL_WORD and le._CONTROL["\x08"] == le.BACKSPACE
+    assert run(typed("git commit --amend") + [KILL_WORD, KILL_WORD, ENTER]) == "git "
+
+
+def test_ctrl_delete_kills_the_word_after_the_caret() -> None:
+    assert le._EXTENDED["\x93"] == le.KILL_WORD_FORWARD
+    keys = typed("one two three") + [le.HOME, le.KILL_WORD_FORWARD, ENTER]
+    assert run(keys) == " two three"
+    keys = typed("one two three") + [le.HOME, le.RIGHT, le.RIGHT, le.RIGHT, le.KILL_WORD_FORWARD, ENTER]
+    assert run(keys) == "one three"
+
+
+def test_ctrl_home_and_end_span_a_multi_line_entry() -> None:
+    assert le._EXTENDED["w"] == le.BUFFER_START and le._EXTENDED["u"] == le.BUFFER_END
+    # Home/End stay on the current line; Ctrl+Home/End reach the whole entry.
+    keys = typed("first") + [le.NEWLINE] + typed("second") + [le.BUFFER_START] + typed("> ") + [le.BUFFER_END] + typed("!") + [ENTER]
+    assert run(keys) == "> first\nsecond!"
+
+
 def test_kill_word_from_trailing_space() -> None:
     assert run(typed("one two ") + [KILL_WORD, ENTER]) == "one "
 
@@ -355,18 +378,101 @@ def test_unique_command_completes_fully() -> None:
     assert run(keys, completer=comp) == "/help "
 
 
-def test_ambiguous_command_completes_common_prefix() -> None:
+def test_ambiguous_command_tab_takes_the_menu_pick() -> None:
     comp = default_completer(COMMANDS)
+    # /help and /history both match "/h": the menu highlights the first, and
+    # Tab takes it (with the argument space), the way Tab takes a unique one.
     keys = typed("/h") + [TAB] + typed("x") + [ENTER]
-    # /help and /history share "/h" only, so nothing is inserted.
-    assert run(keys, completer=comp) == "/hx"
+    assert run(keys, completer=comp) == "/help x"
+    # Down moves the pick before Tab.
+    keys = typed("/h") + [le.DOWN, TAB, ENTER]
+    assert run(keys, completer=comp) == "/history "
 
 
 def test_common_prefix_is_inserted_when_it_helps() -> None:
-    comp = default_completer(("/session", "/settings"))
-    keys = typed("/s") + [TAB] + typed("!") + [ENTER]
-    # Ambiguous, but "/se" is unambiguous — advance as far as certainty goes.
-    assert run(keys, completer=comp) == "/se!"
+    # Off the / menu (an argument, not a command word) Tab still advances
+    # as far as certainty goes: config keys sharing a prefix.
+    comp = default_completer(("/config",), lambda: ["session_x", "settings_x"])
+    keys = typed("/config s") + [TAB] + typed("!") + [ENTER]
+    assert run(keys, completer=comp) == "/config se!"
+
+
+def test_slash_command_preview_is_drawn_dim_after_the_cursor() -> None:
+    comp = default_completer(COMMANDS)
+    ed, out = editor(typed("/he") + [le.ESCAPE, ENTER], completer=comp, styled=True)
+    assert ed.read("> ") == ""             # Esc closes the menu and the line
+    joined = "".join(out)
+    assert "> /he\033[2mlp\033[0m" in joined, repr(joined[-200:])
+    # The caret stays right after the typed text: the redraw walks back over
+    # the two preview cells (a 5-column prompt+text on one row).
+    assert "\r\033[5C" in joined or "\033[5C" in joined, repr(joined[-120:])
+
+
+def test_slash_command_preview_absent_when_complete_or_not_a_command() -> None:
+    comp = default_completer(COMMANDS)
+    for text in ("/help", "/help x", "hello", "/zzz"):
+        ed, out = editor(typed(text) + [ENTER], completer=comp, styled=True)
+        ed.read("> ")
+        last = out[-2] if len(out) > 1 else out[-1]   # the render before the finish
+        assert "\033[2m" not in last.split("> ")[-1].split("\n")[0], (text, repr(last))
+
+
+def test_right_arrow_accepts_the_preview() -> None:
+    comp = default_completer(COMMANDS)
+    assert run(typed("/he") + [RIGHT, ENTER], completer=comp) == "/help "
+    # Nothing to accept: Right at the end of a complete name is a no-op.
+    assert run(typed("/help") + [RIGHT, ENTER], completer=comp) == "/help"
+    # Not at the end of the line: Right just moves the caret; Enter then
+    # runs the menu's pick, since the caret is back at the end.
+    assert run(typed("/he") + [LEFT, RIGHT, ENTER], completer=comp) == "/help"
+
+
+def test_menu_rows_list_matches_with_the_pick_marked() -> None:
+    comp = default_completer(COMMANDS)
+    help_ = {"/help": "show this", "/history": "list sessions"}
+    ed, out = editor(typed("/h") + [le.DOWN, le.ESCAPE, ENTER], completer=comp, command_help=help_)
+    ed.read("> ")
+    joined = "".join(out)
+    # After "/h": two rows under the input, the first marked; after Down the
+    # second is marked and the preview follows it.
+    assert "  ▸ /help     show this" in joined and "    /history  list sessions" in joined, repr(joined[-400:])
+    assert "    /help     show this" in joined and "  ▸ /history  list sessions" in joined, repr(joined[-400:])
+    assert "> /history" in joined and "> /help" in joined, repr(joined[-400:])
+
+
+def test_enter_runs_the_menu_pick() -> None:
+    comp = default_completer(COMMANDS)
+    assert run(typed("/h") + [ENTER], completer=comp) == "/help"
+    assert run(typed("/h") + [le.DOWN, ENTER], completer=comp) == "/history"
+    assert run(typed("/hist") + [ENTER], completer=comp) == "/history"
+    # An exact name submits as typed; unknown text has no menu and submits as is.
+    assert run(typed("/help") + [ENTER], completer=comp) == "/help"
+    assert run(typed("/zzz") + [ENTER], completer=comp) == "/zzz"
+    assert run(typed("/help me") + [ENTER], completer=comp) == "/help me"
+
+
+def test_undo_and_redo_step_by_word() -> None:
+    U, R = le.UNDO, le.REDO
+    assert run(typed("git commit") + [U, ENTER]) == "git "
+    assert run(typed("git commit") + [U, U, ENTER]) == "git"
+    assert run(typed("git commit") + [U, U, U, ENTER]) == ""
+    assert run(typed("git commit") + [U, U, R, ENTER]) == "git "
+    assert run(typed("git commit") + [U, R, ENTER]) == "git commit"
+    # A new edit after an undo drops the redo branch.
+    assert run(typed("git commit") + [U] + typed("push") + [R, ENTER]) == "git push"
+    # Nothing to undo or redo is a no-op, not an error.
+    assert run([U, R] + typed("x") + [R, ENTER]) == "x"
+
+
+def test_undo_covers_kills_pastes_and_history() -> None:
+    U = le.UNDO
+    assert run(typed("one two three") + [KILL_WORD, U, ENTER]) == "one two three"
+    assert run(typed("one two three") + [le.KILL_TO_START, U, ENTER]) == "one two three"
+    assert run(typed("a ") + [le.PASTE + "pasted text", U, ENTER]) == "a "
+    # Cursor moves are not steps: undo after Home still removes the last word.
+    assert run(typed("one two") + [le.HOME, U, ENTER]) == "one "
+    # Backspaces coalesce into one step too.
+    assert run(typed("abc") + [le.BACKSPACE, le.BACKSPACE, U, ENTER]) == "abc"
 
 
 def test_config_keys_complete() -> None:
@@ -928,6 +1034,9 @@ TESTS = [
     test_escape_clears_the_line,
     test_unicode_survives_round_trip,
     test_kill_word_removes_previous_word,
+    test_ctrl_backspace_kills_a_word_not_a_character,
+    test_ctrl_delete_kills_the_word_after_the_caret,
+    test_ctrl_home_and_end_span_a_multi_line_entry,
     test_kill_word_from_trailing_space,
     test_kill_to_start,
     test_kill_line_removes_to_end,
@@ -958,7 +1067,14 @@ TESTS = [
     test_history_survives_an_unwritable_path,
     test_history_survives_a_corrupt_file,
     test_unique_command_completes_fully,
-    test_ambiguous_command_completes_common_prefix,
+    test_ambiguous_command_tab_takes_the_menu_pick,
+    test_menu_rows_list_matches_with_the_pick_marked,
+    test_enter_runs_the_menu_pick,
+    test_undo_and_redo_step_by_word,
+    test_undo_covers_kills_pastes_and_history,
+    test_slash_command_preview_is_drawn_dim_after_the_cursor,
+    test_slash_command_preview_absent_when_complete_or_not_a_command,
+    test_right_arrow_accepts_the_preview,
     test_common_prefix_is_inserted_when_it_helps,
     test_config_keys_complete,
     test_memory_arguments_do_not_path_complete,

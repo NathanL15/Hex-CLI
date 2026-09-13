@@ -685,7 +685,7 @@ HELP_TEXT = textwrap.dedent("""
     Hex CLI, a local agent on the Hexagon NPU
 
     Session
-      /new                    start a new session, keep the screen
+      /new                    start a new session on a fresh screen, banner and all
       /clear                  clear the screen and start a new session
       /history                list saved sessions
       /resume <n>             reopen session n
@@ -712,17 +712,36 @@ HELP_TEXT = textwrap.dedent("""
     replaced with what follows the command. Built-in names win.
 
     Keys
-      Up / Down                 history, filtered by what is typed
+      Up / Down                 history, filtered by what is typed; in the / menu, pick
       Tab                       complete commands, config keys and paths
+      Right                     accept the dim preview of a slash command
       Shift+Enter               new line; \\ then Enter also works
       Ctrl+Left / Ctrl+Right    move by word
-      Ctrl+W / Ctrl+U / Ctrl+K  delete the word, to line start, to line end
+      Ctrl+W / Ctrl+Backspace   delete the word before; Ctrl+Delete the word after
+      Ctrl+U / Ctrl+K           delete to line start, to line end
+      Ctrl+Z / Ctrl+Y           undo, redo
       Esc                       clear the line, or cancel a running turn
       Ctrl+L                    clear the screen
       Ctrl+Plus / Ctrl+Minus    text size in the classic console
 
     The agent runs qwen3-4b-instruct-2507 on the Hexagon NPU through npurun.
 """).strip()
+
+
+def _command_help(text: str) -> dict[str, str]:
+    """One line per slash command, parsed from HELP_TEXT so the / menu and
+    /help can never disagree: the command word, then its description."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        m = re.match(r"\s+(/[a-z]+)\b[^ ]*.*?\s{2,}(\S.*)$", line)
+        if m and m.group(1) not in out:
+            out[m.group(1)] = m.group(2).strip()
+    out.setdefault("/help", "this list of commands and keys")
+    out.setdefault("/quit", out.get("/exit", "quit"))
+    return out
+
+
+COMMAND_HELP = _command_help(HELP_TEXT)
 
 TOOLS_HELP = textwrap.dedent("""
     Tools available to the agent:

@@ -32,7 +32,7 @@ import re
 import sys
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +52,14 @@ HOME = "<home>"
 END = "<end>"
 WORD_LEFT = "<word-left>"
 WORD_RIGHT = "<word-right>"
-KILL_WORD = "<kill-word>"    # Ctrl+W
+KILL_WORD = "<kill-word>"    # Ctrl+W, Ctrl+Backspace
+KILL_WORD_FORWARD = "<kill-word-forward>"  # Ctrl+Delete
+BUFFER_START = "<buffer-start>"  # Ctrl+Home: the first line of a multi-line entry
+BUFFER_END = "<buffer-end>"      # Ctrl+End
 KILL_LINE = "<kill-line>"    # Ctrl+K
 KILL_TO_START = "<kill-to-start>"  # Ctrl+U
+UNDO = "<undo>"              # Ctrl+Z
+REDO = "<redo>"              # Ctrl+Y
 CLEAR_SCREEN = "<clear-screen>"    # Ctrl+L
 INTERRUPT = "<interrupt>"    # Ctrl+C
 EOF_KEY = "<eof>"            # Ctrl+D on an empty buffer
@@ -73,16 +78,18 @@ _EXTENDED = {
     "H": UP, "P": DOWN, "K": LEFT, "M": RIGHT,
     "G": HOME, "O": END, "S": DELETE,
     "s": WORD_LEFT, "t": WORD_RIGHT,
+    "\x93": KILL_WORD_FORWARD, "w": BUFFER_START, "u": BUFFER_END,
 }
 _CONTROL = {
     "\r": ENTER, "\n": NEWLINE, "\t": TAB,
-    "\x08": BACKSPACE, "\x7f": BACKSPACE,
+    "\x08": BACKSPACE, "\x7f": KILL_WORD,   # 0x7f is Ctrl+Backspace on a Windows console
     "\x01": HOME, "\x05": END,
     "\x02": LEFT, "\x06": RIGHT,
     "\x0e": DOWN, "\x10": UP,
     "\x03": INTERRUPT, "\x04": EOF_KEY,
     "\x0b": KILL_LINE, "\x15": KILL_TO_START, "\x17": KILL_WORD,
     "\x0c": CLEAR_SCREEN, "\x1b": ESCAPE,
+    "\x1a": UNDO, "\x19": REDO,
 }
 
 
@@ -480,6 +487,7 @@ class LineEditor:
         *,
         history: History | None = None,
         completer: Callable[[str], list[str]] | None = None,
+        command_help: Mapping[str, str] | None = None,
         read_key: Callable[[], str] | None = None,
         write: Callable[[str], None] | None = None,
         width: int | None = None,
@@ -498,6 +506,16 @@ class LineEditor:
     ) -> None:
         self.history = history or History()
         self.completer = completer
+        self.command_help: Mapping[str, str] = dict(command_help or {})
+        # Undo/redo over the entry: (buffer, pos) snapshots. Typing a word
+        # is one step (a run of non-space characters, then the space), a
+        # kill or a paste is one step; a cursor move is none.
+        self._undo: list[tuple[str, int]] = []
+        self._redo: list[tuple[str, int]] = []
+        self._undo_kind = ""
+        # The / menu: which of the matching commands is selected.
+        self._menu_index = 0
+        self._menu_key: str | None = None
         self._read_key = read_key or windows_key_reader()
         self._write = write or (lambda s: (sys.stdout.write(s), sys.stdout.flush()) and None)
         self._forced_width = width
@@ -621,6 +639,16 @@ class LineEditor:
             hint = self.placeholder[: max(0, self.usable - visible_len(last_prompt) - 1)]
             styled = f"\033[2m{hint}\033[0m" if self.styled else hint
             logical[-1] = (last_prompt + styled, visible_len(last_prompt) + len(hint))
+        ghost = self._ghost() if chrome else ""
+        if ghost:
+            # The rest of the best slash-command match, dim, after the
+            # cursor. It counts toward the row's width so wrapping stays
+            # exact; the cursor arithmetic below only sees the real text.
+            text, vis = logical[-1]
+            styled = f"\033[2m{ghost}\033[0m" if self.styled else ghost
+            logical[-1] = (text + styled, vis + len(ghost))
+        if chrome:
+            logical.extend(self._menu_rows())
         for line in below:
             logical.append((line, visible_len(line)))
 
@@ -825,6 +853,84 @@ class LineEditor:
 
     # -- completion ---------------------------------------------------------
 
+    def _ghost(self) -> str:
+        """The rest of the best slash-command match while a command name is
+        being typed at the end of the line: "/he" previews "lp". Empty when
+        the name is complete, ambiguous beyond a shared prefix is fine (the
+        first match in command order wins, Tab still lists them), and empty
+        for anything that is not a bare command word, so paths and
+        arguments never trigger a filesystem walk on every keystroke."""
+        buf = self.buffer
+        if (self.completer is None or self.pos != len(buf) or not buf.startswith("/")
+                or any(ch.isspace() for ch in buf)):
+            return ""
+        try:
+            candidates = self.completer(buf)
+        except Exception:  # noqa: BLE001 — a preview must never break typing
+            return ""
+        word = buf.lower()
+        if any(c.lower() == word for c in candidates):
+            return ""
+        items = self._menu_items()
+        if items:
+            cand = items[self._menu_index]
+            return cand[len(buf):] if cand.lower().startswith(word) and len(cand) > len(buf) else ""
+        for cand in candidates:
+            if cand.lower().startswith(word) and len(cand) > len(buf):
+                return cand[len(buf):]
+        return ""
+
+    MENU_ROWS = 8
+
+    def _menu_items(self) -> list[str]:
+        """The slash commands matching a bare /word at the end of the line,
+        in command order; the menu the editor draws under the input row.
+        The selection index survives while the list is the same and resets
+        when typing changes it."""
+        buf = self.buffer
+        if (self.completer is None or self.pos != len(buf) or not buf.startswith("/")
+                or any(ch.isspace() for ch in buf)):
+            self._menu_key = None
+            return []
+        try:
+            items = [c for c in self.completer(buf) if c.startswith("/")]
+        except Exception:  # noqa: BLE001
+            items = []
+        key = "\0".join(items)
+        if key != self._menu_key:
+            self._menu_key = key
+            self._menu_index = 0
+        if self._menu_index >= len(items):
+            self._menu_index = 0
+        return items
+
+    def _menu_rows(self) -> list[tuple[str, int]]:
+        """(rendered row, visible width) per menu line, clipped to the width."""
+        items = self._menu_items()
+        if not items:
+            return []
+        first = max(0, min(self._menu_index - self.MENU_ROWS + 1, len(items) - self.MENU_ROWS))
+        first = max(0, min(first, self._menu_index))
+        shown = items[first:first + self.MENU_ROWS]
+        name_w = max(len(c) for c in shown)
+        rows: list[tuple[str, int]] = []
+        for n, cand in enumerate(shown, first):
+            desc = self.command_help.get(cand, "custom command" if cand not in self.command_help and cand in items else "")
+            avail = max(0, self.usable - 4 - name_w - 2)
+            desc = desc[:avail]
+            plain = f"  {'▸' if n == self._menu_index else ' '} {cand.ljust(name_w)}  {desc}".rstrip()
+            if self.styled and n == self._menu_index:
+                text = f"\033[1m{plain}\033[0m"
+            elif self.styled:
+                text = f"\033[2m{plain}\033[0m"
+            else:
+                text = plain
+            rows.append((text, visible_len(plain)))
+        if len(items) > len(shown):
+            more = f"    … {len(items) - len(shown)} more"
+            rows.append((f"\033[2m{more}\033[0m" if self.styled else more, len(more)))
+        return rows
+
     def _complete(self, prompt: str) -> None:
         if self.completer is None:
             return
@@ -871,6 +977,8 @@ class LineEditor:
         ``input()`` does, so callers keep their existing handlers."""
         self.buffer, self.pos = "", 0
         self._hist_index, self._hist_prefix, self._saved_draft = None, "", ""
+        self._undo, self._redo, self._undo_kind = [], [], ""
+        self._menu_index, self._menu_key = 0, None
         self._rendered_rows, self._cursor_row = 0, 0
         self._last_text = None
         self._last_size = (self.usable, self.height)
@@ -951,8 +1059,55 @@ class LineEditor:
         self.render(prompt)
 
     def _handle(self, key: str, prompt: str) -> str | None:
-        """Apply one key. Returns the finished line, or None to keep editing."""
+        """Apply one key. Returns the finished line, or None to keep editing.
+        Every change to the text lands on the undo stack; a run of typed
+        characters up to a space is one step."""
+        if key == UNDO:
+            if self._undo:
+                self._redo.append((self.buffer, self.pos))
+                self.buffer, self.pos = self._undo.pop()
+            self._undo_kind = ""
+            return None
+        if key == REDO:
+            if self._redo:
+                self._undo.append((self.buffer, self.pos))
+                self.buffer, self.pos = self._redo.pop()
+            self._undo_kind = ""
+            return None
+        before = (self.buffer, self.pos)
+        result = self._handle_key(key, prompt)
+        if self.buffer != before[0]:
+            if key == BACKSPACE:
+                kind = "backspace"
+            elif len(key) == 1 and key.isprintable() and not key.isspace():
+                kind = "type"
+            else:
+                kind = ""
+            if not (kind and kind == self._undo_kind):
+                self._undo.append(before)
+                del self._undo[:-200]
+            self._undo_kind = kind
+            self._redo.clear()
+        elif key not in (LEFT, RIGHT, HOME, END, WORD_LEFT, WORD_RIGHT, BUFFER_START, BUFFER_END, IDLE):
+            self._undo_kind = ""
+        return result
+
+    def _handle_key(self, key: str, prompt: str) -> str | None:
         buf = self.buffer
+
+        # The / menu: Up/Down pick, Tab takes the pick, Enter runs it.
+        menu = self._menu_items() if key in (UP, DOWN, TAB, ENTER) else []
+        if menu and key in (UP, DOWN) and len(menu) > 1:
+            self._menu_index = (self._menu_index + (-1 if key == UP else 1)) % len(menu)
+            return None
+        if menu and key == TAB:
+            self.buffer = menu[self._menu_index] + " "
+            self.pos = len(self.buffer)
+            return None
+        if menu and key == ENTER and buf.lower() != menu[self._menu_index].lower():
+            self.buffer = menu[self._menu_index]
+            self.pos = len(self.buffer)
+            buf = self.buffer
 
         if key == ENTER:
             # A trailing backslash is an explicit "keep going" — the one way to
@@ -989,6 +1144,14 @@ class LineEditor:
             self.pos = max(0, self.pos - 1)
             return None
         if key == RIGHT:
+            if self.pos == len(buf):
+                ghost = self._ghost()
+                if ghost:
+                    # Accept the preview; the space means "now the argument",
+                    # as a Tab completion does.
+                    self.buffer = buf + ghost + " "
+                    self.pos = len(self.buffer)
+                    return None
             self.pos = min(len(buf), self.pos + 1)
             return None
         if key == WORD_LEFT:
@@ -1007,6 +1170,15 @@ class LineEditor:
             start = self._word_start()
             self.buffer = buf[:start] + buf[self.pos:]
             self.pos = start
+            return None
+        if key == KILL_WORD_FORWARD:
+            self.buffer = buf[:self.pos] + buf[self._word_end():]
+            return None
+        if key == BUFFER_START:
+            self.pos = 0
+            return None
+        if key == BUFFER_END:
+            self.pos = len(buf)
             return None
         if key == KILL_TO_START:
             start = self._line_start()
@@ -1061,6 +1233,7 @@ def make_reader(
     config: dict[str, Any],
     commands: Sequence[str],
     config_keys: Callable[[], Iterable[str]] | None = None,
+    command_help: Mapping[str, str] | None = None,
     on_zoom: Callable[[int], Any] | None = None,
     on_resize: Callable[[], Any] | None = None,
     chrome: Callable[[int], tuple[list[str], list[str]]] | None = None,
@@ -1095,6 +1268,7 @@ def make_reader(
     editor = LineEditor(
         history=History(path, int(config.get("input_history_limit", 500))),
         completer=default_completer(commands, config_keys),
+        command_help=command_help,
         margin=int(config.get("side_padding", 0) or 0),
         on_zoom=on_zoom,
         on_resize=on_resize,

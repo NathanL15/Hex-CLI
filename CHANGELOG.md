@@ -6,6 +6,59 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- The status bar no longer flickers while a turn runs. Every spinner tick
+  (12 a second) went through the full redraw: erase the box to the end of
+  the screen, then rewrite its rows, with the cursor visible during the
+  erase, so Windows Terminal could present the blank frame in between.
+  `LiveArea.repaint` now overwrites the box in place when its row count is
+  unchanged, each row clears its own line, and `_draw` emits one write with
+  the cursor hidden throughout inside a DEC 2026 synchronized update
+  (Terminal 1.24 presents the frame atomically; a console that does not
+  know the sequence ignores it). The erase path, still used when the box
+  grows or shrinks, joins the same frame.
+- The input line previews the best slash-command match while a command
+  name is typed: `/he` shows a dim `lp` after the caret, Right arrow
+  accepts it with the trailing space a Tab completion adds, and the text
+  submitted is only ever what was typed. The preview appears for a bare
+  `/word` at the end of the line, never for arguments or paths (no
+  filesystem walk per keystroke), and not once the name is complete. Ties
+  go to the first match in `REPL_COMMANDS` order (`/c` previews `/clear`);
+  Tab still lists the rest. The preview counts toward the row's width so a
+  long name still wraps exactly; the caret arithmetic sees only the real
+  text.
+- Ctrl+Backspace deletes the word before the caret. A Windows console
+  delivers it as DEL (0x7f), which the key map bound to a one-character
+  backspace, so it ate one letter per press. Ctrl+Delete deletes the word
+  after the caret, and Ctrl+Home / Ctrl+End jump to the start or end of a
+  multi-line entry (Home / End stay on the current line), all through the
+  extended scancodes the console already sends.
+- Undo and redo on the input line: Ctrl+Z and Ctrl+Y. A run of typed
+  characters up to a space is one step, so undo removes the last word; a
+  kill, a paste, a completion or a history recall is one step each; cursor
+  moves are none. A new edit after an undo drops the redo branch. Two
+  hundred steps per entry, cleared when the line is submitted.
+- A command menu under the input while a bare `/word` is typed: the
+  matching commands in command order with their one-line descriptions
+  (parsed from the `/help` text, so the two can never disagree; custom
+  commands say so), the pick marked, eight rows with a "… n more" line
+  past that. Up and Down move the pick, Tab takes it with the argument
+  space, Enter runs it, Esc closes the menu with the line, and the dim
+  preview after the caret follows the pick. Tab on an ambiguous command
+  word therefore takes the pick now instead of stopping at the shared
+  prefix; off the menu (config keys, paths) Tab still advances as far as
+  certainty goes. The menu rows are part of the entry, so the box grows
+  into the pad the way a multi-line entry does.
+- `/clear` and `/new` on the live layout. The first fix printed the banner
+  with the box up, and text written then is conversation: anchored above
+  the box at the bottom, growing upward, so the banner appeared at the
+  bottom. Both commands now take the box down without padding, clear,
+  print, and pin the box again under what they printed. `/new` always
+  prints the banner (a new session starts the way the program does);
+  `/clear` prints it only if it was still on screen, which the live area
+  tracks: set when the banner is printed, cleared when a write scrolls the
+  window past its pad, when a growing entry scrolls it, or when the screen
+  is cleared.
+
 ## 2.9.0 — 2026-09-13
 
 A minor release: `edit_file` and `write_file` behave differently for the

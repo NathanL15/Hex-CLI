@@ -408,6 +408,10 @@ class LiveArea:
         self.prompt = prompt
         self._geometry = geometry or console_geometry
         self.editor_rows = 4       # rule, input row, rule, status: what the editor draws
+        # Whether the banner printed at the top of the window is still on it:
+        # true after banner_printed(), false once anything scrolls the window
+        # or clears the screen. /clear reprints the banner only when this holds.
+        self.banner_visible = False
         self._pad_top: int | None = None   # first row of the blank pad above the conversation
         self._pad_above = 0                # how many pad rows there are
         self._last_shape: tuple[Any, int] | None = None   # (window height, usable width) at the last draw
@@ -489,13 +493,21 @@ class LiveArea:
         with self.lock:
             self._drawn = 0
             self._signature = None
+            self.banner_visible = False
             self.reset_pad()
+
+    def banner_printed(self) -> None:
+        """The banner was just written at the top of a fresh screen."""
+        with self.lock:
+            self.banner_visible = True
 
     def note_scroll(self, rows: int) -> None:
         """The window scrolled up by `rows` (the editor grew past the bottom
         with a multi-line entry): the pad moved up with it, and any part of
         it that left the window is gone."""
         with self.lock:
+            if rows > 0:
+                self.banner_visible = False
             if rows <= 0 or self._pad_top is None:
                 return
             self._pad_top -= rows
@@ -611,10 +623,17 @@ class LiveArea:
             elif below < len(rows):
                 self._delete_pad_rows(inner, len(rows) - below)   # the rest scrolls
         saved = (m.col, m.word, m.word_vis)
-        out = ["\033[?25l", "\n", "\n".join(rows), "\r", f"\033[{len(rows)}A"]
+        # One write, cursor hidden throughout, inside a synchronized update
+        # (DEC 2026: Windows Terminal presents the whole frame at once; a
+        # console that does not know the sequence ignores it). Each row
+        # clears its own line, so a repaint never needs the erase-to-end
+        # that blanked the box between frames. That erase, 12 times a
+        # second on every spinner tick, was the flicker while the model
+        # was thinking (2026-09-13).
+        out = ["\033[?2026h\033[?25l", "\n", "\n".join(f"\033[2K{r}" for r in rows), "\r", f"\033[{len(rows)}A"]
         if saved[0]:
             out.append(f"\033[{saved[0]}C")
-        out.append("\033[?25h")
+        out.append("\033[?25h\033[?2026l")
         inner.write("".join(out))
         m.col, m.word, m.word_vis = saved
         self._drawn = len(rows)
@@ -670,14 +689,16 @@ class LiveArea:
             newlines = rendered.count("\n")
             if newlines and self._pad_above and self._geometry_changed():
                 self.reset_pad()
-            if newlines and self._pad_above:
+            if newlines and (self._pad_above or self.banner_visible):
                 geo = self._geo()
                 if geo is not None:
                     row, height = geo
                     need = newlines + (self._drawn_rows_needed() if self.enabled else 0)
                     deficit = need - (height - 1 - row)
                     if deficit > 0:
-                        self._delete_pad_rows(inner, deficit, col=col_before)
+                        freed = self._delete_pad_rows(inner, deficit, col=col_before) if self._pad_above else 0
+                        if freed < deficit:
+                            self.banner_visible = False   # the window scrolls: the top row is gone
             inner._base.write(rendered)
             if self.enabled:
                 self._draw(inner)
@@ -743,6 +764,12 @@ class LiveArea:
                 rows = self._compose()
             elif self._drawn and (tuple(rows), self.margin.col) == self._signature:
                 return
+            if self._drawn == len(rows):
+                # Same rows, same place: overwrite in place. No erase, no
+                # blank frame between the old box and the new one.
+                self._draw(self._inner, rows)
+                return
+            self._inner._base.write("\033[?2026h")   # the erase joins the frame
             self._erase(self._inner)
             self._draw(self._inner, rows)
 

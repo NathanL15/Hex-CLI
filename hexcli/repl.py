@@ -384,6 +384,23 @@ def run_repl(config: dict[str, Any]) -> int:
         ui.print_banner(npu_model or str(config.get("model", "?")),
                         str(config.get("backend", "ollama")),
                         engine="Hexagon NPU" if npu_model else None)
+        if live is not None:
+            live.banner_printed()
+
+    def _fresh_screen(with_banner: bool) -> None:
+        """Clear the screen for /clear and /new. The box comes down without
+        padding first: text written while it is up is conversation and is
+        anchored above the box at the bottom, which is where the banner
+        landed on the first attempt (2026-09-13). With the box down the
+        banner keeps the top, and resume() pins the box under it again."""
+        if live is not None:
+            live.suspend()
+        os.system("cls" if os.name == "nt" else "clear")
+        if live is not None:
+            live.screen_cleared()   # the box and its pad rows are gone with the screen
+        sys.stdout.write("\r")      # the clear skipped the margin's fill for this row
+        if with_banner:
+            _banner()
 
     _banner()
     if live is not None:
@@ -455,6 +472,7 @@ def run_repl(config: dict[str, Any]) -> int:
 
     read_line = lineedit.make_reader(
         config, tuple(REPL_COMMANDS) + custom_names, lambda: sorted(sa._CONFIG_SETTABLE),
+        command_help={**ui.COMMAND_HELP, **{c: "custom command" for c in custom_names}},
         on_zoom=_zoom, on_resize=_resize,
         chrome=live.chrome if live is not None else None,
         placeholder="ask, or / for commands" if live is not None else "",
@@ -591,22 +609,26 @@ def run_repl(config: dict[str, Any]) -> int:
         # away. /clear is now the one reset command; /new remains an alias
         # that keeps the scrollback.
         if norm == "/clear":
-            os.system("cls" if os.name == "nt" else "clear")
-            if live is not None:
-                live.screen_cleared()   # the box and its pad rows are gone with the screen
+            # The banner comes back only if it was still on screen: a
+            # cleared long conversation stays clear.
+            _fresh_screen(with_banner=live is None or live.banner_visible)
             sa.sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = sa.create_session()
-            sys.stdout.write("\r")   # the clear skipped the margin's fill for this row
             sa.cprint("  Chat history cleared.", sa.C.DIM)
+            if live is not None:
+                live.resume()
             continue
 
         # ── new session ───────────────────────────────────────────────────
         if norm == "/new":
+            _fresh_screen(with_banner=True)   # a new session starts the way the program does
             sa.sync_session_store(sessions, current_session)
             _close_session_resources(current_session)
             current_session = sa.create_session()
             sa.cprint("  New session started.", sa.C.DIM)
+            if live is not None:
+                live.resume()
             continue
 
         # ── resume ────────────────────────────────────────────────────────

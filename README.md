@@ -136,9 +136,15 @@ follows the command:
 |---|---|
 | `↑` `↓` | history. With text typed, searches by that prefix |
 | `Tab` | complete commands, config keys, and file paths |
+| `Right` | accept the dim preview of a slash command (`/he` shows `lp`) |
+| `/` | opens the command menu under the input; `Up` `Down` pick, `Tab` takes the pick, `Enter` runs it |
+| `Ctrl+Z` `Ctrl+Y` | undo, redo (a typed word is one step) |
 | `Ctrl+←` `Ctrl+→` | move by word |
 | `Home` `End` | start or end of line |
-| `Ctrl+W` `Ctrl+U` `Ctrl+K` | delete the word before, to line start, to line end |
+| `Ctrl+W` `Ctrl+Backspace` | delete the word before the caret |
+| `Ctrl+Delete` | delete the word after the caret |
+| `Ctrl+U` `Ctrl+K` | delete to line start, to line end |
+| `Ctrl+Home` `Ctrl+End` | start or end of a multi-line entry |
 | `Esc` | clear the line |
 | `Ctrl+V` | paste a block. Nothing is sent until you press Enter |
 | `Shift+Enter` | new line inside the entry |
