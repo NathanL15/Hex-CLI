@@ -93,43 +93,92 @@ def strip_thinking(text: str) -> str:
 # Parsing
 # ---------------------------------------------------------------------------
 
+_STRAY_QUOTE_MSGS = ("Expecting ',' delimiter", "Expecting ':' delimiter",
+                     "Expecting property name")
+_MAX_QUOTE_REPAIRS = 64
+_DECODER = json.JSONDecoder(strict=False)   # raw newlines inside a written file are fine
+
+
+def _escaped_at(text: str, i: int) -> bool:
+    """Is the character at i preceded by an odd run of backslashes?"""
+    n = 0
+    while i - 1 - n >= 0 and text[i - 1 - n] == "\\":
+        n += 1
+    return n % 2 == 1
+
+
+def _repair_stray_quote(text: str, err: json.JSONDecodeError) -> str | None:
+    """Escape the quote that ended a string early. A 4B writing 1.6K of HTML
+    inside a JSON string forgets the backslash on a closing attribute quote
+    (`onclick=\\"input('7')">`, sixteen times in one reply, 2026-09-13): the
+    string closes there and the decoder trips on the next token. The last
+    unescaped quote before the error is that closer; escape it and let the
+    caller decode again. A truncated string (\"Unterminated string\") is not
+    repairable and is left alone."""
+    if not any(err.msg.startswith(m) for m in _STRAY_QUOTE_MSGS):
+        return None
+    q = text.rfind('"', 0, err.pos)
+    while q > 0 and _escaped_at(text, q):
+        q = text.rfind('"', 0, q)
+    if q <= 0:
+        return None
+    return text[:q] + "\\" + text[q:]
+
+
+def _loads_object(text: str) -> dict[str, Any] | None:
+    """The first JSON object in `text`, decoded from its first brace and
+    ignoring whatever follows it (a second batched action, prose). Stray
+    quotes inside string values are repaired a bounded number of times."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    for _ in range(_MAX_QUOTE_REPAIRS + 1):
+        try:
+            parsed, _end = _DECODER.raw_decode(text, start)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError as err:
+            fixed = _repair_stray_quote(text, err)
+            if fixed is None:
+                return None
+            text = fixed
+    return None
+
+
+def describe_json_error(raw_text: str) -> str:
+    """What is wrong with the first JSON object in a reply, for the retry
+    feedback: the decoder's message, the character offset and the text
+    around it. Empty when the object decodes."""
+    text = strip_thinking(raw_text).strip()
+    start = max(0, text.find("{"))
+    try:
+        _DECODER.raw_decode(text, start)
+        return ""
+    except json.JSONDecodeError as err:
+        lo, hi = max(0, err.pos - 40), min(len(text), err.pos + 20)
+        return f"{err.msg} at character {err.pos - start}, near: {text[lo:hi]!r}"
+
+
 def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     text = strip_thinking(raw_text).strip()
     if not text:
         return None
     # Direct parse
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
+    parsed = _loads_object(text)
+    if parsed is not None:
+        return parsed
     # Strip markdown fences
     stripped = re.sub(r"^```[a-zA-Z]*\s*|```\s*$", "", text, flags=re.MULTILINE).strip()
-    try:
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-    # Extract the FIRST complete {...} object by brace balancing.
-    #
-    # This used to be a greedy re.search(r"\{.*\}"), which spans from the first
-    # brace to the LAST one. When the model emits several actions in a row —
-    # {"action":"edit_file",…},{"action":"verify_syntax",…},{"action":"run_code",…}
-    # — that match is not valid JSON, so the whole response was discarded, the
-    # identical retry was issued up to 3×, and the turn ended with no tool call
-    # at all. Measured 2026-07-30: this is what actually killed uc1-t4/t5/t6
-    # (0/3 each), NOT a context-length cliff. Batching is a natural response to
-    # rules that prescribe an edit→verify→run sequence, so take the first
-    # action and let the loop drive the rest.
-    for candidate in _iter_json_objects(text):
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            continue
+    parsed = _loads_object(stripped)
+    if parsed is not None:
+        return parsed
+    # Nothing decodable from the first brace. Batched actions ({edit}{verify}
+    # {run}) are handled above: raw_decode takes the FIRST object and ignores
+    # the rest, and the loop drives the next step (measured 2026-07-30: the
+    # old greedy match discarded such replies and killed uc1-t4/t5/t6). A
+    # broken first object is a malformed reply, never skipped for a later
+    # one: on 2026-09-13 the finish behind an unparseable write_file was
+    # accepted and the turn claimed a file it had not written. The loop
+    # retries with the decoder's complaint (describe_json_error).
     return None
 
 

@@ -44,7 +44,16 @@ if /I "%5"=="--case" (
 
 echo === %NAME%: full candidate, 5 runs, seed %SEED% === >> %LOG%
 python -u evals\cases_extended.py --runs 5 --seed %SEED% < NUL >> %LOG% 2>&1
-echo suite exit %ERRORLEVEL% >> %LOG%
+set SUITE_EXIT=%ERRORLEVEL%
+echo suite exit %SUITE_EXIT% >> %LOG%
+if not "%SUITE_EXIT%"=="0" (
+    rem An aborted suite leaves the previous results file in place; gating
+    rem that as the candidate produced a verdict against stale data on
+    rem 2026-09-13. Stop here and say so.
+    echo === %NAME% ABORTED: suite exit %SUITE_EXIT%, no candidate written, no gate run === >> %LOG%
+    echo === %NAME% done === >> %LOG%
+    exit /b %SUITE_EXIT%
+)
 copy /Y evals\results\extended_v2_results.json %OUT% >nul
 
 echo === %NAME%: gate === >> %LOG%

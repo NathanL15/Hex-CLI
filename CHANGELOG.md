@@ -6,6 +6,30 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- A reply whose first JSON object does not decode is never "finished" by a
+  later object in the same reply. The owner's 2026-09-13 session: asked for
+  a calculator page, the model answered with a `write_file` holding 1.6K of
+  HTML and, behind it, a `finish` saying the file was created. Fifteen
+  attribute quotes (`onclick=\"input('7')">`) were unescaped, the string
+  closed early, the object failed to decode, the parser moved on to the
+  next complete object, accepted the finish, and the turn claimed a file it
+  never wrote; the next turn found nothing to open. `parse_json_object` now
+  decodes the first object from the first brace with `raw_decode` (batched
+  actions still take the first and let the loop drive the rest), repairs a
+  stray quote inside a string value up to sixty-four times by escaping the
+  last unescaped quote before the decoder's error (a truncated string is
+  left alone), accepts raw control characters inside strings, and returns
+  nothing when the first object still fails, so the loop's existing retry
+  fires. That retry now tells the model the decoder's complaint, the
+  character offset, the text around it and the quoting rule instead of
+  "not valid JSON". The session's reply, verbatim, is a fixture: it decodes
+  to the write with all 1,466 characters of HTML.
+- `run_arm.cmd` stops when the suite exits non-zero. An aborted suite (six
+  consecutive backend timeouts on a starved machine, 2026-09-13) left the
+  previous arm's results file in place, and the script copied it as the
+  candidate and gated it, which read as a RECHECK verdict against stale
+  data. It now logs the abort and writes no candidate.
+
 ## 2.9.1 — 2026-09-13
 
 A patch release: the input line and the status bar; nothing model-facing

@@ -177,6 +177,7 @@ server with the system prompt.
 - Names moved out of agent.py are re-bound there by name; tests patch `sa.<name>`. When moving code, keep the re-bind and resolve borrowed names through the hub at call time, never by copying.
 - Test fixtures built from `tempfile.mkdtemp()` must be `.resolve()`d (CI's TEMP is an 8.3 short path), or the sensitive-path check silently never fires.
 - Refusal messages must never name an alternative route; the model reads "use run_command instead" and does exactly that.
+- A reply's FIRST JSON object is the action. Never skip a broken one for a later object in the same reply: on 2026-09-13 the finish behind an undecodable `write_file` (unescaped quotes in 1.6K of HTML) was accepted and the turn claimed a file it never wrote. `parsing._loads_object` raw-decodes from the first brace, repairs stray quotes (bounded), and returns None otherwise so the loop's retry fires with `describe_json_error`. Chat logs live in `~/.shellai/chatlog/`; `python tools/chatlog_report.py --last` is the first thing to run when the owner says "look at my session".
 - `sys.stdin.isatty()` is True in a hidden/detached console; consent prompts poll `msvcrt` with an idle timeout (`ui.confirm_or_deny`) and fail closed. Non-interactive = deny.
 - `<tool_call>` is a Qwen3 special token the W4A16 detokenizer garbles; only `<action>` round-trips. Server-side tool parsing can never work on this bundle.
 

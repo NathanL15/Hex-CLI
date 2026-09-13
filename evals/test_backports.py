@@ -192,6 +192,54 @@ def test_plain_prose_is_still_a_finish() -> None:
     assert a["action"] == "finish" and "no JSON" in a["message"]
 
 
+BROKEN_WRITE = (
+    '{"action":"write_file","args":{"path":"calc.html","content":"<button onclick=\\"clear()\\">C</button>'
+    '<button onclick=\\"input(\'7\')">7</button>"}}\n'
+    '{"action":"finish","message":"Created calc.html."}'
+)
+
+
+def test_stray_quote_in_a_write_is_repaired_not_skipped() -> None:
+    """2026-09-13 session: one unescaped quote in 1.6K of HTML closed the JSON
+    string early; the parser skipped the broken write_file and took the
+    finish behind it, and the turn claimed a file it never wrote."""
+    a = sa.parse_agent_action(BROKEN_WRITE)
+    assert a["action"] == "tool" and a["tool"] == "write_file", a
+    assert a["args"]["content"] == '<button onclick="clear()">C</button><button onclick="input(\'7\')">7</button>', a["args"]
+
+
+def test_real_calculator_reply_decodes_to_the_write() -> None:
+    """The 2026-09-13 session's reply verbatim: 1.6K of HTML with fifteen
+    unescaped attribute quotes, then a finish claiming the file was created."""
+    raw = (Path(__file__).resolve().parent / "fixtures" / "reply_2026-09-13_calculator_unescaped_quotes.txt").read_text(encoding="utf-8")
+    a = sa.parse_agent_action(raw)
+    assert a["action"] == "tool" and a["tool"] == "write_file", a["action"]
+    content = a["args"]["content"]
+    assert content.startswith("<!DOCTYPE html>") and content.rstrip().endswith("</html>"), content[-80:]
+    assert content.count('onclick="input(') == 15 and "\\\"" not in content, content.count('onclick="input(')
+
+
+def test_broken_first_object_is_a_retry_not_the_finish_behind_it() -> None:
+    raw = '{"action":"write_file","args":{"path":"x","content":"abc\n{"action":"finish","message":"Created x."}'
+    a = sa.parse_agent_action(raw)
+    assert a["action"] == "finish" and a.get("fallback") == "prose", a
+    assert "Created x." not in a["message"] or "write_file" in a["message"]
+    assert "Unterminated string" in sa.parsing.describe_json_error(raw) or "Expecting" in sa.parsing.describe_json_error(raw)
+
+
+def test_batched_valid_actions_still_take_the_first() -> None:
+    raw = ('{"action":"edit_file","args":{"path":"a","old_string":"x","new_string":"y"}}'
+           '{"action":"verify_syntax","args":{"path":"a"}}')
+    a = sa.parse_agent_action(raw)
+    assert a["action"] == "tool" and a["tool"] == "edit_file"
+
+
+def test_raw_newline_inside_a_json_string_is_accepted() -> None:
+    raw = '{"action":"write_file","args":{"path":"n.txt","content":"line one\nline two"}}'.replace("\\n", "\n")
+    a = sa.parse_agent_action(raw)
+    assert a["action"] == "tool" and a["args"]["content"] == "line one\nline two"
+
+
 def test_edit_file_tier4_high_similarity_unique_match() -> None:
     """uc1-t4 live failure: the model reconstructs the line from memory and
     lands ~97% similar to exactly one region — and repeats the same wrong
@@ -251,6 +299,11 @@ def test_write_file_decodes_double_escaped_body() -> None:
 
 TESTS = [
     test_write_file_decodes_double_escaped_body,
+    test_stray_quote_in_a_write_is_repaired_not_skipped,
+    test_real_calculator_reply_decodes_to_the_write,
+    test_broken_first_object_is_a_retry_not_the_finish_behind_it,
+    test_batched_valid_actions_still_take_the_first,
+    test_raw_newline_inside_a_json_string_is_accepted,
     test_multi_action_response_yields_first_action,
     test_edit_file_tier4_high_similarity_unique_match,
     test_edit_file_tier4_rejects_weak_similarity,

@@ -318,6 +318,29 @@ def test_typoed_action_name_is_retried_with_feedback() -> None:
     assert "Recovered." in result, "typo'd action must trigger a retry, not a finish"
 
 
+def test_broken_write_then_finish_is_retried_with_the_decoder_error() -> None:
+    """The finish behind a broken write_file must not end the turn; the
+    retry feedback names the decoder's complaint and the quoting rule."""
+    seen: list[list[dict[str, Any]]] = []
+    real = sa.call_llm
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        msgs = kwargs.get("messages") if "messages" in kwargs else (args[1] if len(args) > 1 else None)
+        if isinstance(msgs, list):
+            seen.append(list(msgs))
+        return real(*args, **kwargs)
+
+    sa.set_mock_responses([
+        '{"action":"write_file","args":{"path":"x.txt","content":"abc\n{"action":"finish","message":"Created x.txt."}',
+        '{"action":"finish","message":"Recovered."}',
+    ])
+    with unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        result = sa.run_autopilot(_CFG, [], "write x.txt", _SHELL)
+    assert "Recovered." in result and "Created x.txt." not in result, result
+    feedback = [m["content"] for msgs in seen for m in msgs if m.get("role") == "user" and "not valid JSON" in str(m.get("content", ""))]
+    assert feedback and "at character" in feedback[0] and "double quote" in feedback[0], feedback
+
+
 def test_truncated_json_is_retried() -> None:
     sa.set_mock_responses([
         '{"action":"run_command","args":{"command":"echo hi"',  # truncated
@@ -1098,6 +1121,7 @@ TESTS = [
     test_fuzzy_loop_trips_on_varying_errors_same_target,
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
+    test_broken_write_then_finish_is_retried_with_the_decoder_error,
     test_truncated_json_is_retried,
     test_late_step_parse_failure_still_retried,
     test_pure_prose_is_still_an_implicit_finish,

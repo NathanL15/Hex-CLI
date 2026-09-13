@@ -1289,9 +1289,12 @@ def _run_autopilot_turn(
                         "one JSON object. No prose."
                     )
                 else:
+                    detail = parsing.describe_json_error(raw)
                     feedback = (
-                        "Your response was not valid JSON. "
-                        "Respond with exactly one JSON object as specified. No prose."
+                        "Your response was not valid JSON"
+                        + (f": {detail}. Inside a string value every double quote must be "
+                           "written as \\\". " if detail else ". ")
+                        + "Respond with exactly one JSON object as specified. No prose."
                     )
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({"role": "user", "content": feedback})
