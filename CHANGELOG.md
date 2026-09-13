@@ -6,6 +6,15 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- Installer repairs a Windows Terminal profile whose icon path 2.8.0
+  invalidated. The icon moved into the package (`hexcli/assets/`) that
+  release, but an existing "Hex CLI" profile kept pointing at the old
+  `assets/hexcli.png`; Terminal silently falls back to its own logo on a
+  missing file. `install.ps1` now rewrites a stale `hexcli.png` icon path
+  in a user's own profile with a targeted text edit, leaving the rest of
+  the profile untouched, and the fragment it writes already uses the
+  package path.
+
 - Releases carry the wheel and the source distribution and go to PyPI
   (`pip install hexcli`): `.github/workflows/publish.yml` runs when a
   release is published, builds both, attaches them and publishes through

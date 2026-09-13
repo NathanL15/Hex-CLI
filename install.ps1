@@ -400,6 +400,23 @@ if (-not $NoStartMenu) {
             if ($useTerminal) {
                 $wtSettings = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
                 $hasOwnProfile = (Test-Path $wtSettings) -and ((Get-Content $wtSettings -Raw) -match '"name"\s*:\s*"Hex CLI"')
+                if ($hasOwnProfile -and (Test-Path $iconPng)) {
+                    # The user's own copy of the profile is left alone, except
+                    # for an icon path that no longer exists (2.8.0 moved the
+                    # icon into the package): Terminal falls back to its own
+                    # logo on a missing file. A targeted text edit, so the
+                    # user's comments and formatting survive.
+                    $raw = Get-Content $wtSettings -Raw
+                    $m = [regex]::Match($raw, '"icon"\s*:\s*"((?:[^"\\]|\\.)*hexcli\.png)"')
+                    if ($m.Success) {
+                        $current = $m.Groups[1].Value.Replace('\\', '\')
+                        if (-not (Test-Path $current)) {
+                            $raw = $raw.Replace($m.Groups[1].Value, $iconPng.Replace('\', '\\'))
+                            [IO.File]::WriteAllText($wtSettings, $raw, (New-Object Text.UTF8Encoding $false))
+                            Write-Ok "Windows Terminal profile icon repaired: $iconPng"
+                        }
+                    }
+                }
                 if (-not $hasOwnProfile) {
                     $fragmentDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\Fragments\Hex CLI"
                     New-Item -ItemType Directory -Force -Path $fragmentDir | Out-Null
