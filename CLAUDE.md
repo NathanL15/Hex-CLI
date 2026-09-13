@@ -381,7 +381,7 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 | `docs/backend_study/CPU_VS_NPU.md`, `PROMPT_LEVER.md`, `RUNBOOK.md` | the measurement study and procedure | current (09-05/07) |
 | `docs/V2_PLAN.md` | §14 evidence archive only | §1–13 are superseded intent |
 | `ARCHITECTURE.md` | the reasoning behind rules and the safety layers | mostly current (2026-09-12: template location, 29 suites/798 tests, 44 cases, a dated note on top of the pre-Rewind TTFT section); §1/§3 narrative still predates the Split and the prune, read §2 and §4 for rationale/§5 for facts |
-| `docs/paper/hexcli-paper.tex` | the methodology paper, numbers current at v2.8.0 (window figure = 3,696 budget, 32/44, 35/48, backend study paragraph) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
+| `docs/paper/hexcli-paper.tex` | the methodology paper, six pages, numbers current at v2.8.0 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
 | `evals/results/LATEST.md` | scoreboard and the gate command | regenerate with `gate.py --scoreboard` |
 
 `tools/`: `gen_example_config.py`, `chatlog_report.py` (`--last`,

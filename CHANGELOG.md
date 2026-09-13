@@ -29,6 +29,14 @@ the Hexagon NPU, not single-run anecdotes.
   first token, polling-off power). ARCHITECTURE.md gets the same pass
   (template in prompts.py, 29 suites, 44 cases, a dated note on the
   pre-Rewind TTFT section) and the README's suite size reads 44.
+- Paper restructured to six pages: the abstract states the v2.8.0 numbers
+  and the thesis; the runtime lever (KV rewind, the context re-read) is
+  its own section between results and negative results; the status
+  section is one paragraph; the milestones table is one line per row; a
+  positioning paragraph names what the report sits next to; three
+  figures that duplicated prose (chip diagram, prompt anatomy, NPU/CPU
+  bars) are gone and their numbers kept in the text. Every figure in the
+  paper is unchanged from the audit above.
 
 ## 2.8.0 — 2026-09-12
 
