@@ -55,7 +55,7 @@ metric improved. The extended task suite rose from 22/35 to 24/36
 prompt-injection payloads fell from 9/9 to 0/9, and offline test coverage grew
 from 330 to 619 tests (798 at v2.8.0, on a suite that has since grown to 44
 cases with 32 passing all five runs). The negative results matter as much as the positive
-ones. Eight plausible improvements, including a new action protocol, prompt
+ones. Ten plausible improvements, including a new action protocol, prompt
 compression, a larger context window, and a runtime migration, were built or
 benchmarked, measured, and rejected with evidence. The central claim of this
 report is methodological: at the small end of the model scale, the harness is
@@ -265,7 +265,8 @@ had been blamed on context length. Beyond that, a four-tier fuzzy matcher now
 applies file edits (the most common v1 failure was edit formatting, not model
 capability), malformed actions are retried with feedback naming the specific
 defect, and context compaction was recalibrated with an exact token estimator
-so that it fires before the model's degradation cliff instead of after it.
+so that it fires before what was then taken to be the model's degradation
+cliff instead of after it.
 Figure~\ref{fig:evals} shows the aggregate effect.
 
 \begin{figure}[ht]
@@ -361,7 +362,7 @@ floor was a property of the model and the compiled 4K bundle. That
 conclusion was wrong, and \S\ref{sec:negative} records how it was overturned
 once the prefill tax was gone: the ``ceiling'' was a server constant, the
 model is flat to the bundle's real limit, and the history budget is now about
-850 tokens.
+800 tokens.
 
 \subsection{Why the NPU, when the CPU decodes faster}
 
@@ -510,7 +511,7 @@ input tokens but hit a $\sim$3K input cap and was closed as ``zero usable
 history''; the cap turned out to be a server constant inherited from
 upstream, not the model, and a second sweep to 3{,}697 tokens was equally
 flat, so the threshold was raised after all (history budget 250 $\to$
-$\sim$850) & closed, then reversed \\[3pt]
+$\sim$800) & closed, then reversed \\[3pt]
 Leaner prompt for agent steps $\ge 2$ (drop the five step-1 decision rules) &
 overall quality flat (77.8\% vs.\ 74.4\%, $p = 0.65$), but the JSON-edit case
 fell 3/3 $\to$ 1/3 with degenerate \code{old\_string} anchors — the trimming
@@ -584,7 +585,7 @@ same three cases failing at every size, and decode about 12\% slower only
 with the window actually full. The server now derives its budget from the
 bundle's context size (3,696 after a reply reserve), keeps the user's
 request when it must trim, and advertises the budget; the harness sizes
-history and tool pages against it, lifting the history budget to about 850
+history and tool pages against it, lifting the history budget to about 800
 tokens. Two defects surfaced only in multi-turn measurement: a KV-cache
 rewind on a transcript that diverges mid-conversation can return success
 with zero tokens (63 of 117 calls in one run under the old floor --- now
@@ -677,10 +678,10 @@ calls and the prompt is made byte-stable, cutting whole-turn time by 41\%
 with no regression (91/117 $\to$ 97/117). The context floor is then traced
 to two undocumented constants and removed: quality is flat to 3,697 input
 tokens, the server budget follows the compiled window, and multi-turn
-sessions go from 25/48 to 34/48 once silent empty rewinds are caught. \\
+sessions go from 25/48 to 35/48 once silent empty rewinds are caught. \\
 Sep 5--7 & A CPU-versus-NPU study settles the backend question with
 measurements (the NPU wins follow-up turns and coexistence; a new
-conversation pays a 9\,s rebuild); the fork gains host-polling control,
+conversation pays a rebuild only when the system prompt changes); the fork gains host-polling control,
 async init and a request watchdog (v2.6.0--2.6.2); the prompt-length lever
 is measured at zero and closed. \\
 Sep 10--12 & The terminal becomes the product surface: Windows Terminal, an
