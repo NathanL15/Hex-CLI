@@ -629,6 +629,12 @@ class LineEditor:
         logical: list[tuple[str, int]] = []   # (rendered text, visible width)
         for line in above:
             logical.append((line, visible_len(line)))
+        # The / menu sits between the top rule and the input row. The box is
+        # pinned to the window's last rows, so rows added BELOW the input
+        # pushed the input row and the caret up when the menu appeared; rows
+        # above it grow the box upward and the caret stays put.
+        menu = self._menu_rows() if chrome else []
+        logical.extend(menu)
         for line in prompt_lines[:-1]:
             logical.append((line, visible_len(line)))
         last_prompt = prompt_lines[-1]
@@ -647,8 +653,6 @@ class LineEditor:
             text, vis = logical[-1]
             styled = f"\033[2m{ghost}\033[0m" if self.styled else ghost
             logical[-1] = (text + styled, vis + len(ghost))
-        if chrome:
-            logical.extend(self._menu_rows())
         for line in below:
             logical.append((line, visible_len(line)))
 
@@ -656,7 +660,7 @@ class LineEditor:
         before = self.buffer[:self.pos]
         cur_line = before.count("\n")
         col_in_line = len(before) - (before.rfind("\n") + 1)
-        cursor_logical = len(above) + len(prompt_lines) - 1 + cur_line
+        cursor_logical = len(above) + len(menu) + len(prompt_lines) - 1 + cur_line
         cursor_vis = visible_len(prefixes[cur_line]) + col_in_line
 
         pieces: list[str] = []

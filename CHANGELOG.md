@@ -24,6 +24,11 @@ the Hexagon NPU, not single-run anecdotes.
   character offset, the text around it and the quoting rule instead of
   "not valid JSON". The session's reply, verbatim, is a fixture: it decodes
   to the write with all 1,466 characters of HTML.
+- The `/` command menu sits above the input row, between the top rule and
+  the prompt. The box is pinned to the window's last rows, so the rows
+  2.9.1 added below the input pushed the input row and the caret up
+  whenever the menu appeared or changed height; rows above the input grow
+  the box upward and the caret stays where it is.
 - `run_arm.cmd` stops when the suite exits non-zero. An aborted suite (six
   consecutive backend timeouts on a starved machine, 2026-09-13) left the
   previous arm's results file in place, and the script copied it as the

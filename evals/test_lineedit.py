@@ -440,6 +440,22 @@ def test_menu_rows_list_matches_with_the_pick_marked() -> None:
     assert "> /history" in joined and "> /help" in joined, repr(joined[-400:])
 
 
+def test_menu_sits_above_the_input_row_and_the_caret_stays_put() -> None:
+    comp = default_completer(COMMANDS)
+    help_ = {"/help": "show this", "/history": "list sessions"}
+    chrome = lambda w: (["-" * 10], ["=" * 10])   # noqa: E731
+    ed, out = editor(typed("/h") + [le.ESCAPE, ENTER], completer=comp, command_help=help_, chrome=chrome, width=60, height=30)
+    ed.read("> ")
+    # The render after "/h": rule, menu rows, then the input row, then the rule below.
+    frame = next(o for o in out if "/history  list sessions" in o)
+    i_rule, i_menu, i_input, i_below = frame.index("-" * 10), frame.index("▸ /help"), frame.index("> /h"), frame.index("=" * 10)
+    assert i_rule < i_menu < i_input < i_below, repr(frame)
+    # The caret is on the input row: the cursor moves back from the end of
+    # the last rendered row by exactly the rows below the input (one rule),
+    # not by the menu rows too.
+    assert "\033[1A" in frame and "\033[3A" not in frame, repr(frame)
+
+
 def test_enter_runs_the_menu_pick() -> None:
     comp = default_completer(COMMANDS)
     assert run(typed("/h") + [ENTER], completer=comp) == "/help"
@@ -1069,6 +1085,7 @@ TESTS = [
     test_unique_command_completes_fully,
     test_ambiguous_command_tab_takes_the_menu_pick,
     test_menu_rows_list_matches_with_the_pick_marked,
+    test_menu_sits_above_the_input_row_and_the_caret_stays_put,
     test_enter_runs_the_menu_pick,
     test_undo_and_redo_step_by_word,
     test_undo_covers_kills_pastes_and_history,
