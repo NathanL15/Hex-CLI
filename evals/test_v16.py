@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import tempfile
-import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +23,6 @@ if sys.platform == "win32":
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hexcli.agent as sa
-import hexcli.escalate as esc
 
 # Offline suites must never wait on a human at a consent prompt.
 sa.ui.CONFIRM_TIMEOUT_S = 0.05
@@ -33,169 +31,9 @@ sa.ui.CONFIRM_TIMEOUT_S = 0.05
 # Feature 16 — Redaction
 # ---------------------------------------------------------------------------
 
-def test_redact_sk_key() -> None:
-    text = "My API key is sk-ant-api03-abc123def456ghij and it is secret"
-    redacted = esc.redact_text(text)
-    assert "sk-ant-api03-abc123def456ghij" not in redacted
-    assert "sk-***" in redacted
-
-
-def test_redact_bearer_token() -> None:
-    text = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"
-    redacted = esc.redact_text(text)
-    assert "eyJhbGciOiJIUzI1NiJ9" not in redacted
-
-
-def test_redact_password_query_string() -> None:
-    text = "db_url?password=hunter2&host=localhost"
-    redacted = esc.redact_text(text)
-    assert "hunter2" not in redacted
-    assert "password=***" in redacted
-
-
-def test_redact_api_key_param() -> None:
-    text = "Request with api_key=super_secret_value_here in params"
-    redacted = esc.redact_text(text)
-    assert "super_secret_value_here" not in redacted
-    assert "api_key=***" in redacted
-
-
-def test_redact_token_param() -> None:
-    text = "Refresh with token=eyRefreshToken123 in body"
-    redacted = esc.redact_text(text)
-    assert "eyRefreshToken123" not in redacted
-
-
-def test_redact_postgresql_connection_string() -> None:
-    text = "DATABASE_URL=postgresql://admin:s3cr3t@db.prod.example.com:5432/mydb"
-    redacted = esc.redact_text(text)
-    assert "s3cr3t@db.prod.example.com" not in redacted
-    assert "postgresql://***" in redacted
-
-
-def test_redact_mongodb_connection_string() -> None:
-    text = "mongodb://user:pass@cluster0.mongodb.net/myapp?retryWrites=true"
-    redacted = esc.redact_text(text)
-    assert "user:pass@cluster0" not in redacted
-
-
-def test_redact_ssh_path_content() -> None:
-    ssh_path = str(Path.home() / ".ssh" / "id_rsa")
-    text = f"Reading {ssh_path}: -----BEGIN RSA PRIVATE KEY----- abc123privatekey"
-    redacted = esc.redact_text(text)
-    assert "BEGIN RSA PRIVATE KEY" not in redacted, (
-        "content following a sensitive path must be redacted"
-    )
-    assert "abc123privatekey" not in redacted
-
-
-def test_redact_aws_path_content() -> None:
-    aws_path = str(Path.home() / ".aws" / "credentials")
-    text = f"File {aws_path}: aws_access_key_id = AKIAIOSFODNN7EXAMPLE"
-    redacted = esc.redact_text(text)
-    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
-
-
-def test_redact_payload_deep_structure() -> None:
-    payload = [
-        {"role": "user", "content": "My secret sk-prod-abcdefghij1234567890 is here"},
-        {"role": "assistant", "content": "Using password=topsecret for the database"},
-    ]
-    redacted = esc.redact_payload(payload)
-    full = json.dumps(redacted)
-    assert "sk-prod-abcdefghij1234567890" not in full, "sk- key must be redacted in payload"
-    assert "topsecret" not in full, "password must be redacted in payload"
-
-
-def test_redact_leaves_benign_text_intact() -> None:
-    text = "The quick brown fox jumps over the lazy dog."
-    assert esc.redact_text(text) == text
-
-
-def test_redact_value_truncates_long_strings() -> None:
-    # Truncation is applied inside _redact_value (payload builder), not redact_text.
-    payload = [{"role": "user", "content": "a" * 1000}]
-    redacted = esc.redact_payload(payload)
-    content = redacted[0]["content"]
-    assert len(content) < 800, f"long payload strings must be truncated, got {len(content)} chars"
-    assert "truncated" in content, "truncated string must include the ellipsis marker"
-
-
 # ---------------------------------------------------------------------------
 # Feature 16 — Escalation gating
 # ---------------------------------------------------------------------------
-
-def test_escalation_returns_message_without_api_key() -> None:
-    cfg: dict[str, Any] = dict(sa.DEFAULT_CONFIG)
-    cfg["anthropic_api_key"] = ""
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with unittest.mock.patch.dict(os.environ, env, clear=True):
-        result = esc.escalate(cfg, [], [])
-    assert "ANTHROPIC_API_KEY" in result or "set" in result.lower(), (
-        "must mention how to enable when key is absent"
-    )
-
-
-def test_escalation_does_not_raise_without_api_key() -> None:
-    cfg: dict[str, Any] = dict(sa.DEFAULT_CONFIG)
-    cfg["anthropic_api_key"] = ""
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with unittest.mock.patch.dict(os.environ, env, clear=True):
-        try:
-            esc.escalate(cfg, [], [])
-        except Exception as exc:
-            assert False, f"escalate must not raise without API key, got: {exc}"
-
-
-def test_get_api_key_reads_env_var() -> None:
-    cfg: dict[str, Any] = {}
-    with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-envkey123456"}):
-        key = esc.get_api_key(cfg)
-    assert key == "sk-test-envkey123456"
-
-
-def test_get_api_key_falls_back_to_config() -> None:
-    cfg = {"anthropic_api_key": "sk-test-cfgkey987654"}
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with unittest.mock.patch.dict(os.environ, env, clear=True):
-        key = esc.get_api_key(cfg)
-    assert key == "sk-test-cfgkey987654"
-
-
-def test_get_api_key_env_takes_priority_over_config() -> None:
-    cfg = {"anthropic_api_key": "sk-config-key"}
-    with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-env-key"}):
-        key = esc.get_api_key(cfg)
-    assert key == "sk-env-key", "env var must take priority over config key"
-
-
-def test_escalation_redacts_before_sending() -> None:
-    """Verify that redaction runs on the prompt before any API call."""
-    captured_prompt: list[str] = []
-
-    def fake_call_api(api_key: str, model: str, messages: list[dict]) -> str:
-        captured_prompt.append(messages[0]["content"])
-        return "suggestion"
-
-    cfg = {"anthropic_api_key": "sk-test-fake12345678"}
-    turns = [
-        {"role": "user", "content": "password=hunter2 in my config"},
-        {"role": "assistant", "content": "I see, sk-real-abc123def456 is exposed"},
-    ]
-    with unittest.mock.patch.object(esc, "_call_api", fake_call_api):
-        esc.escalate(cfg, turns, ["run_command"])
-
-    assert captured_prompt, "API must be called when key is present"
-    sent = captured_prompt[0]
-    assert "hunter2" not in sent, "password must be redacted before sending"
-    assert "sk-real-abc123def456" not in sent, "sk- key must be redacted before sending"
-
-
-def test_escalation_new_keys_in_default_config() -> None:
-    assert "anthropic_api_key" in sa.DEFAULT_CONFIG
-    assert "escalation_model" in sa.DEFAULT_CONFIG
-    assert sa.DEFAULT_CONFIG["escalation_model"] == esc.DEFAULT_ESCALATION_MODEL
-
 
 # ---------------------------------------------------------------------------
 # Feature 18 — Per-project config merge order
@@ -342,25 +180,6 @@ def _run(fn: Any) -> bool:
 
 
 TESTS = [
-    test_redact_sk_key,
-    test_redact_bearer_token,
-    test_redact_password_query_string,
-    test_redact_api_key_param,
-    test_redact_token_param,
-    test_redact_postgresql_connection_string,
-    test_redact_mongodb_connection_string,
-    test_redact_ssh_path_content,
-    test_redact_aws_path_content,
-    test_redact_payload_deep_structure,
-    test_redact_leaves_benign_text_intact,
-    test_redact_value_truncates_long_strings,
-    test_escalation_returns_message_without_api_key,
-    test_escalation_does_not_raise_without_api_key,
-    test_get_api_key_reads_env_var,
-    test_get_api_key_falls_back_to_config,
-    test_get_api_key_env_takes_priority_over_config,
-    test_escalation_redacts_before_sending,
-    test_escalation_new_keys_in_default_config,
     test_project_config_overrides_global,
     test_global_config_overrides_defaults,
     test_defaults_apply_when_no_overrides,

@@ -187,38 +187,6 @@ def test_agent_loop_reports_block_to_model() -> None:
 # Protocol v2 must enforce the SAME boundary
 # ---------------------------------------------------------------------------
 
-def test_v2_edit_outside_workspace_blocked() -> None:
-    """Regression: loop_v2._tool_edit reimplements the edit and originally
-    called only the sensitive-path guard, so protocol v2 could edit any file
-    on disk while v1 was contained."""
-    import hexcli.agent as agent_mod
-    from hexcli import loop_v2
-    with _Workspace() as (_, outside):
-        victim = outside / "v2_victim.txt"
-        victim.write_text("original", encoding="utf-8")
-        raised = ""
-        try:
-            out = loop_v2._tool_edit(
-                agent_mod, {"path": str(victim)}, [("original", "tampered")])
-            raised = out  # dispatch converts raises to "Error: ..." strings
-        except RuntimeError as exc:
-            raised = str(exc)
-        assert "outside the workspace" in raised, raised
-        assert victim.read_text(encoding="utf-8") == "original"
-
-
-def test_v2_edit_inside_workspace_allowed() -> None:
-    import hexcli.agent as agent_mod
-    from hexcli import loop_v2
-    with _Workspace() as (root, _):
-        target = root / "ok.txt"
-        target.write_text("original", encoding="utf-8")
-        out = loop_v2._tool_edit(
-            agent_mod, {"path": str(target)}, [("original", "updated")])
-        assert "Edited" in out, out
-        assert target.read_text(encoding="utf-8") == "updated"
-
-
 # ---------------------------------------------------------------------------
 # Exhaustive: EVERY mutating entry point, both protocols
 # ---------------------------------------------------------------------------
@@ -226,21 +194,13 @@ def test_v2_edit_inside_workspace_allowed() -> None:
 def _mutating_entry_points() -> list[tuple[str, Any]]:
     """Every way the model can change a file, as (label, call-with-a-path).
 
-    Enumerated here so the guarantee is exhaustive rather than remembered. The
-    v1/v2 split has produced this exact bug once already: a reimplemented tool
-    that carried only half the gate.
+    Enumerated here so the guarantee is exhaustive rather than remembered
+    (a reimplemented tool once carried only half the gate).
     """
-    import hexcli.agent as agent_mod
-    from hexcli import loop_v2
-
     return [
-        ("v1 write_file", lambda p: sa.write_file_tool(str(p), "x")),
-        ("v1 append_file", lambda p: sa.append_file_tool(str(p), "x")),
-        ("v1 edit_file", lambda p: sa.edit_file_tool(str(p), "original", "t")),
-        ("v2 write", lambda p: loop_v2._tool_write(
-            agent_mod, {"path": str(p)}, "x")),
-        ("v2 edit", lambda p: loop_v2._tool_edit(
-            agent_mod, {"path": str(p)}, [("original", "tampered")])),
+        ("write_file", lambda p: sa.write_file_tool(str(p), "x")),
+        ("append_file", lambda p: sa.append_file_tool(str(p), "x")),
+        ("edit_file", lambda p: sa.edit_file_tool(str(p), "original", "t")),
     ]
 
 
@@ -314,8 +274,6 @@ TESTS = [
     test_every_mutating_tool_is_write_scoped,
     test_every_mutating_tool_refuses_sensitive_paths,
     test_guard_mutation_applies_both_checks,
-    test_v2_edit_outside_workspace_blocked,
-    test_v2_edit_inside_workspace_allowed,
     test_write_inside_workspace_allowed,
     test_nested_write_inside_workspace_allowed,
     test_edit_and_append_inside_workspace_allowed,

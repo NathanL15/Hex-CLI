@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """evals/replay_edits.py — replay saved edit_file attempts through the applier.
 
-The offline check for any change to `protocol_v2.apply_search_replace`: every
+The offline check for any change to `editing.apply_search_replace`: every
 edit_file call recorded in the saved multi-turn traces for one turn is run
 again against that turn's fixture, and the outcome is graded against what the
 turn wanted. No model, no server; seconds, not hours. Run it before a live arm.
@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from evals.cases_multiturn import PROCESSOR_PY  # noqa: E402
-from hexcli import protocol_v2 as p2  # noqa: E402
+from hexcli import editing as p2  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 T3_FIXED = PROCESSOR_PY.replace("result.appned(item * 2)", "result.append(item * 2)")

@@ -6,6 +6,25 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- The prune. Nothing here was used: protocol v2 (`loop_v2.py`,
+  `shell_session.py`, the v2 parser and prompt in `protocol_v2.py`, its
+  suite, the `protocol` config key), which lost its A/B at 13/36 vs 22/35
+  and doubled every safety and file-tool change; the local escalation
+  ladder (no viable bigger model on this hardware) and the cloud
+  escalation path (never configured), with their six config keys, so "no
+  code leaves the machine" is now structural rather than a default; the
+  memory dreaming daemon, off since it fabricated hardware facts; the
+  unused brace scanner in the parser; the root `shellai.py` / `shellai.cmd`
+  shims. The SEARCH/REPLACE applier that `edit_file` uses moved out of
+  `protocol_v2.py` into `hexcli/editing.py` unchanged, with its tests in
+  `evals/test_editing.py`. Internal documents (the V2 plan and roadmap, the
+  levers memo, the backend study, ARCHITECTURE.md) and the study-only bench
+  probes are no longer tracked; they live in git-ignored `docs/local/` and
+  `tools/local/` (owner rule: only the paper and user-facing docs are
+  committed). `tools/backend_bench/` keeps `stall_rate.py` and its two
+  imports, which the release gate runs. About 3,300 lines and three suites
+  gone; every remaining suite green.
+
 ## 2.11.0 — 2026-09-14
 
 A minor release: tool result text the model reads changed (`verify_syntax`

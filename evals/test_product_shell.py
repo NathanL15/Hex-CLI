@@ -391,37 +391,6 @@ def test_clarification_still_rejects_a_non_answer() -> None:
     assert not ok, "a statement that asks for nothing must not pass"
 
 
-# ---------------------------------------------------------------------------
-# Memory dreaming — off by default after the poisoning incident
-# ---------------------------------------------------------------------------
-
-def test_memory_dreaming_is_off_by_default() -> None:
-    """The dreaming daemon wrote the same five fabricated machine 'facts'
-    (wrong CPU, wrong RAM, an invented temperature) into memory_rules.md every
-    idle cycle, which workspace_snapshot injected as 'Prior knowledge' —
-    permanently locking in the model's hardware confabulations. It ships OFF
-    until it has a quality eval it passes. Do not flip this default without
-    new evidence."""
-    assert sa.DEFAULT_CONFIG.get("memory_dreaming") is False
-    assert "memory_dreaming" in sa._CONFIG_SETTABLE
-
-
-def test_repl_gates_dreaming_on_the_config_flag() -> None:
-    import inspect
-
-    source = inspect.getsource(sa.run_repl)
-    call_line = next((ln for ln in source.splitlines() if "start_dreaming" in ln), None)
-    assert call_line is not None, "run_repl no longer references the dreaming daemon at all"
-    lines = source.splitlines()
-    gate = lines[lines.index(call_line) - 1]
-    assert 'config.get("memory_dreaming"' in gate, \
-        f"start_dreaming must be gated on memory_dreaming; preceding line: {gate!r}"
-
-
-# ---------------------------------------------------------------------------
-# /search — full-text search over saved sessions
-# ---------------------------------------------------------------------------
-
 def _session(title: str, messages: list[tuple[str, str]], sid: str = "") -> dict[str, Any]:
     return {
         "id": sid or title,
@@ -431,6 +400,7 @@ def _session(title: str, messages: list[tuple[str, str]], sid: str = "") -> dict
     }
 
 
+# ---------------------------------------------------------------------------
 def test_search_finds_content_case_insensitively() -> None:
     from hexcli import sessions as sess
 
@@ -698,8 +668,6 @@ def test_launcher_hands_the_child_its_own_package_path() -> None:
 
 TESTS = [
     test_launcher_hands_the_child_its_own_package_path,
-    test_memory_dreaming_is_off_by_default,
-    test_repl_gates_dreaming_on_the_config_flag,
     test_confirm_ctrl_c_denies_without_raising,
     test_confirm_timeout_is_idle_not_absolute,
     test_confirm_backspace_erases_its_echo,

@@ -105,7 +105,7 @@ def main() -> int:
         except Exception:
             payload = {}
     payload.setdefault("suite", "extended_v2")
-    payload.setdefault("protocol", config.get("protocol", "v1"))
+    payload.setdefault("protocol", "v1")
     payload.setdefault("runs_per_case", args.runs)
     payload.setdefault("model", config.get("model"))
     payload.setdefault("overrides", overrides)

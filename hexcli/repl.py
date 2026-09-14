@@ -250,11 +250,7 @@ def _close_session_resources(session: dict[str, Any] | None) -> None:
     sid = str(session.get("id", ""))
     if not sid:
         return
-    try:
-        from . import loop_v2
-        loop_v2.close_session_shell(sid)
-    except Exception:
-        pass
+    return
 
 
 def _handle_backend_failure(config: dict[str, Any], reason: str) -> None:
@@ -406,8 +402,6 @@ def run_repl(config: dict[str, Any]) -> int:
     if live is not None:
         live.enable()   # after the banner: the banner keeps the top, the conversation grows above the box
     sa.prime_backend(config)   # warm the KV cache with this session's prompt while the banner shows
-    if config.get("memory_dreaming", False):
-        memory.start_dreaming(lambda: config, sa.llm_generate)
 
     # Rich line editing where the terminal supports it; bare input() otherwise
     # (piped stdin, CI, --raw) so nothing depends on it being available.
@@ -511,7 +505,6 @@ def run_repl(config: dict[str, Any]) -> int:
             if live is not None:
                 live.enable()
 
-        memory.touch_last_turn()
 
         if not query:
             continue

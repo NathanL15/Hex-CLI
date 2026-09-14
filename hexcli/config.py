@@ -78,22 +78,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "chat_log_enabled": True,
     "chat_log_dir": "",
     "memory_enabled": True,
-    # The dreaming consolidation daemon is OFF by default: measured 2026-08-16
-    # writing the same five fabricated machine "facts" (wrong CPU, wrong RAM,
-    # an invented temperature) into memory_rules.md every idle cycle, which
-    # workspace_snapshot then injected as "Prior knowledge" — locking the
-    # model's hardware confabulations in permanently. V2X_ROADMAP already
-    # ruled it ships only with a quality eval; the eval now exists and it
-    # failed it. Re-enable only with new evidence.
-    "memory_dreaming": False,
     "autopilot_confirm_destructive": True,
     # Sensitive-data command gate (ssh keys, credential stores, security
     # files, obfuscated execution). Separate from the destructive flag so
     # injection defense holds even when destructive confirms are disabled.
     "autopilot_confirm_sensitive": True,
-    # Agent protocol: "v1" (JSON action loop) or "v2" (native tool-call format,
-    # payload-block edits, persistent shell — see docs/V2_PLAN.md §5).
-    "protocol": "v1",
     # Auto-compact is deterministic (no LLM call) by default: summarising via
     # the same model that is already at its context cliff produced unverified
     # summaries and cost a full extra re-prefill. Set true to restore the
@@ -102,21 +91,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Override the derived history budget (tokens). Empty = derive from the
     # measured system-prompt size.
     "context_warn_tokens": 0,
-    # Local escalation ladder (docs/V2_PLAN.md §4): name of a bigger local
-    # npurun model to consult at hard moments (loop trips, ignored
-    # verification, prose-instead-of-edit). Empty = disabled. The server is
-    # spawned lazily on the bind address below and reused for the session.
-    "escalation_local_model": "",
-    "escalation_local_bind": "127.0.0.1:11436",
-    "escalation_max_output_tokens": 900,
-    "escalation_timeout_seconds": 240,
     "ollama": {"host": "http://127.0.0.1:11434"},
     "openai_compatible": {
         "base_url": "http://127.0.0.1:8000/v1",
         "api_key": "local",
     },
-    "anthropic_api_key": "",
-    "escalation_model": "claude-haiku-4-5-20251001",
 }
 
 
@@ -187,18 +166,10 @@ _CONFIG_SETTABLE: dict[str, str] = {
     "chat_log_enabled":               "bool",
     "chat_log_dir":                   "str",
     "memory_enabled":                 "bool",
-    "memory_dreaming":                "bool",
     "autopilot_confirm_destructive":  "bool",
     "autopilot_confirm_sensitive":    "bool",
-    "protocol":                       "str",
     "auto_compact_uses_llm":          "bool",
     "context_warn_tokens":            "int",
-    "escalation_local_model":         "str",
-    "escalation_local_bind":          "str",
-    "escalation_max_output_tokens":   "int",
-    "escalation_timeout_seconds":     "int",
-    "anthropic_api_key":              "str",
-    "escalation_model":               "str",
 }
 
 

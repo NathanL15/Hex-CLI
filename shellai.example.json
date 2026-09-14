@@ -33,23 +33,15 @@
   "chat_log_enabled": true,
   "chat_log_dir": "",
   "memory_enabled": true,
-  "memory_dreaming": false,
   "autopilot_confirm_destructive": true,
   "autopilot_confirm_sensitive": true,
-  "protocol": "v1",
   "auto_compact_uses_llm": false,
   "context_warn_tokens": 0,
-  "escalation_local_model": "",
-  "escalation_local_bind": "127.0.0.1:11436",
-  "escalation_max_output_tokens": 900,
-  "escalation_timeout_seconds": 240,
   "ollama": {
     "host": "http://127.0.0.1:11434"
   },
   "openai_compatible": {
     "base_url": "http://127.0.0.1:8000/v1",
     "api_key": "local"
-  },
-  "anthropic_api_key": "",
-  "escalation_model": "claude-haiku-4-5-20251001"
+  }
 }

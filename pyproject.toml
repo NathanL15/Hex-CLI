@@ -52,9 +52,7 @@ packages = ["hexcli"]
 include = [
     "hexcli/",
     "launcher.py",
-    "shellai.py",
     "Hex CLI.cmd",
-    "shellai.cmd",
     "install.ps1",
     "shellai.example.json",
     "README.md",

@@ -8,7 +8,7 @@ The deterministic merge-aware compactor, the LLM summarizer behind explicit
 Cross-cutting names (call_llm, build_autopilot_prompt, estimate_tokens,
 sync_session_store, the token estimator, and compact_history itself when
 auto-compact fires it) are resolved through the agent module AT CALL TIME —
-the same idiom loop_v2 uses — so every existing sa.<name> patch site keeps
+the same idiom the loop uses — so every existing sa.<name> patch site keeps
 intercepting. Module-local calls stay module-local only when nothing patches
 them.
 

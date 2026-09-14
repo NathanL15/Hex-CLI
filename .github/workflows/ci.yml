@@ -45,7 +45,7 @@ jobs:
         run: python evals/test_runner.py
 
       - name: Unit tests — v2 protocol + shell session
-        run: python evals/test_protocol_v2.py
+        run: python evals/test_editing.py
 
       - name: Unit tests — v2 back-ports into the v1 protocol
         run: python evals/test_backports.py
@@ -53,8 +53,6 @@ jobs:
       - name: Unit tests — context budget + deterministic compaction
         run: python evals/test_context_budget.py
 
-      - name: Unit tests — local escalation ladder
-        run: python evals/test_escalation.py
 
       - name: Unit tests — injection defense (sensitive-command gate)
         run: python evals/test_injection_defense.py
@@ -77,8 +75,6 @@ jobs:
       - name: Unit tests — input line (history, completion, multi-line)
         run: python evals/test_lineedit.py
 
-      - name: Integration tests — v2 agent loop (mock backend)
-        run: python evals/test_loop_v2.py
 
       - name: Unit tests — core coverage backfill
         run: python evals/test_core.py

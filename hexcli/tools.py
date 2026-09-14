@@ -350,8 +350,8 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     is still an error, never a guess, and a genuine no-match now reports the
     closest region with line numbers so the retry has something to work with.
     """
-    from . import protocol_v2 as p2
-    from .protocol_v2 import apply_search_replace
+    from . import editing as p2
+    from .editing import apply_search_replace
 
     path = resolve_path(path_text)
     guard_mutation(path, "edit_file", _active_config())
@@ -379,7 +379,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
 
 
 def write_file_tool(path_text: str, content: str) -> str:
-    from . import protocol_v2 as p2
+    from . import editing as p2
 
     path = resolve_path(path_text)
     guard_mutation(path, "write_file", _active_config())

@@ -326,7 +326,7 @@ Restart the NPU server before each suite. After an hour or two of steady
 use it starts returning errors for everything, which looks like a model
 regression. The runner detects this and marks those runs invalid.
 
-`ARCHITECTURE.md` describes the module layout. `docs/V2_PLAN.md` has the
+`CLAUDE.md` describes the module layout. The paper in `docs/paper/` has the
 hardware measurements, the eval method, and the reasoning behind each
 safety layer. `RELEASING.md` covers how a release is cut.
 

@@ -182,38 +182,6 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _iter_json_objects(text: str):
-    """Yield complete brace-balanced {...} substrings, in order.
-
-    String-literal aware, so braces inside JSON strings never affect depth.
-    """
-    depth = 0
-    start = -1
-    in_string = False
-    escaped = False
-    for i, ch in enumerate(text):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}":
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and start >= 0:
-                    yield text[start:i + 1]
-                    start = -1
-
-
 def parse_agent_action(raw_text: str) -> dict[str, Any]:
     parsed = parse_json_object(raw_text)
     if isinstance(parsed, dict):

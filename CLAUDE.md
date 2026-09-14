@@ -58,7 +58,7 @@ Hard numbers that shape every decision:
 | Session state | `<cwd>/.shellai/` (audit.log, logs/, vector_store/, shellai.lock) and `~/.shellai/` (history.json, chatlog/, input_history, commands/, global_vector_store/) |
 | Server log | `~/.shellai/npurun_server.log`, truncated on every start |
 | Eval results | `evals/results/` (gitignored except the tracked few). Gate baselines: `ask_rule_r5_20260905.json` + `persona_guard2_r5_20260912.json` (the 2.7.x arm, 30/44); multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
-| Study data | `docs/backend_study/{data,data_npu_ab}/` (gitignored), summaries tracked |
+| Study data and internal docs | `docs/local/` (git-ignored, owner rule 2026-09-14: only the paper and user-facing docs are committed): backend study, V2 plan/roadmap, levers memo, ARCHITECTURE, related-work survey, TODO |
 | Claude Code memory for this project | `~/.claude/projects/C--Users-Natha/memory/` (hexcli_*.md, project_local_shell_ai.md) — historical detail beyond this file |
 
 ---
@@ -144,15 +144,15 @@ Package rule: no module over ~800 lines except agent.py.
 | `safety.py` | command classifier (destructive > sensitive > safe > caution) + JSONL audit log |
 | `cancel.py` | Esc cancel via msvcrt polling. Eval runner must silence BOTH `hexcli.agent` and `hexcli.cancel` |
 | `config.py` | `DEFAULT_CONFIG`, deep-merge loader, `_CONFIG_SETTABLE` |
-| `loop_v2.py`, `protocol_v2.py`, `shell_session.py` | protocol v2 (`<action>` tags, SEARCH/REPLACE, persistent shell). Opt-in via `protocol: "v2"`; lost the A/B (13/36 vs 22/35). Safety/verification/file-tool changes must land in BOTH protocols |
-| `memory.py` | MiniLM vector memory, `search_memory`, memory rules, dreaming daemon (OFF: it fabricated hardware facts) |
+| `editing.py` | the SEARCH/REPLACE applier behind `edit_file`: exact → whitespace → indent → token-level three-way merge (2026-09-13) → closest-region report; double-escape decode. Extracted 2026-09-14 when protocol v2 (`loop_v2.py`, `protocol_v2.py`, `shell_session.py`; lost the A/B 13/36 vs 22/35) was removed |
+| `memory.py` | MiniLM vector memory, `search_memory`, memory rules (the dreaming daemon that fabricated hardware facts was removed 2026-09-14) |
 | `sessions.py` | session store; **owns `HISTORY_PATH` — patch it here, not on agent** |
 | `chatlog.py`, `telemetry.py` | full JSONL transcript per session (`~/.shellai/chatlog/`); redacted structured logs |
 | `lineedit.py`, `ui.py`, `stream_render.py`, `diffview.py` | input line (history, Tab, paste, zoom, chrome rows + idle repaint), presentation, live stream renderer, undo-snapshot diffs. One-way dependency: agent → ui |
 | `markdown_stream.py` | markdown-lite → ANSI for streamed answers, one char at a time (headings, bullets, bold, code spans, fences as dim rules). Hooked into `llm._make_live_renderer`'s emit and `ui.render_result`; invariant: whole-text and per-char feeds give identical output. A "```" line that is not `` ``` `` + a language name is released literally |
 | `statusbar.py` | the bottom section: input box + status line (`context`, `npu`, `mem`, cwd/branch). `LiveArea` wraps stdout/stderr between reads (erase box → write → redraw, one lock shared with the spinner); the editor draws the same rows as chrome while reading. NPU % = PDH `GPU Engine` counter for the LUID DirectX does not list; memory = `GlobalMemoryStatusEx`; 1 s sampler thread. `ui.LIVE_AREA` is the hook the spinner and `llm.on_tool` use |
 | `doctor.py`, `distribution.py`, `setup_wizard.py`, `commands.py` | `--doctor`, `--update`/`--uninstall`, `/setup`, custom `.md` slash commands |
-| `escalate.py`, `local_escalation.py`, `network.py`, `lockfile.py` | cloud escalation (opt-in, key), local ladder (dormant, no viable bigger model), `fetch_url` + online probe, advisory PID lock |
+| `network.py`, `lockfile.py` | `fetch_url` + online probe, advisory PID lock. (Cloud escalation and the local ladder were removed 2026-09-14: never used, no viable bigger model; "no code leaves the machine" is now structural) |
 
 **Turn flow (v1)**: early exits (help / meta / small talk, no model call) →
 sync `context_window_tokens` from the server's advertised budget → build
@@ -378,22 +378,17 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 | `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
 | `CHANGELOG.md` | what shipped and the numbers | current through 2.8.1; `Unreleased` empty |
-| `docs/V2X_ROADMAP.md` | phase status, watch items, rejected list | current (09-07) |
-| `docs/RESEARCH_NEXT_LEVERS.md` | the levers memo, Rewind arc, runtime knobs | current through 09-05 |
-| `docs/backend_study/CPU_VS_NPU.md`, `PROMPT_LEVER.md`, `RUNBOOK.md` | the measurement study and procedure | current (09-05/07) |
-| `docs/V2_PLAN.md` | §14 evidence archive only | §1–13 are superseded intent |
-| `ARCHITECTURE.md` | the reasoning behind rules and the safety layers | mostly current (2026-09-12: template location, 29 suites/798 tests, 44 cases, a dated note on top of the pre-Rewind TTFT section); §1/§3 narrative still predates the Split and the prune, read §2 and §4 for rationale/§5 for facts |
+| `docs/local/V2X_ROADMAP.md`, `RESEARCH_NEXT_LEVERS.md`, `V2_PLAN.md` (§14 evidence), `ARCHITECTURE.md`, `backend_study/` | internal: phase status, the levers memo, the evidence archive, design rationale, the measurement study | local only since 2026-09-14 (git-ignored); frozen at their 09-07/09-12 currency |
+| `docs/local/TODO.md`, `TONIGHT.md`, `RELATED_WORK.md` | the owner's task list, the overnight plan, the survey feeding the paper | local only |
 | `docs/paper/hexcli-paper.tex` | the methodology paper, six pages, numbers current at v2.8.0 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
 | `evals/results/LATEST.md` | scoreboard and the gate command | regenerate with `gate.py --scoreboard` |
 
 `tools/`: `gen_example_config.py`, `chatlog_report.py` (`--last`,
-`--session <id>`), `gen_icon.py`; `tools/backend_bench/` holds the study
-harness (`bench.py`, `analyze.py`, `guard.py`, `radar.py`, `npu_ab.py`,
-`smoke_gate.py`, `run_suite.py`) and the probes (`stall_rate.py`,
-`rewind_probe.py`, `decode_vs_context.py`, `prompt_latency_probe.py`,
-`prewarm_tail_probe.py`, `stall_hunt.py`, `battery_session.py`). All
-stdlib; `bench.BASES["npu"]` lacks `/v1`, which once made prewarm calls 404
-silently.
+`--session <id>`), `gen_icon.py`; `tools/backend_bench/` keeps only what the
+release gate runs: `stall_rate.py` and its imports `bench.py`, `npu_ab.py`
+(`bench.BASES["npu"]` lacks `/v1`, which once made prewarm calls 404
+silently). The study-only probes moved to `tools/local/` (git-ignored) on
+2026-09-14.
 
 ---
 

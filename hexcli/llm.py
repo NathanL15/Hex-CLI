@@ -4,7 +4,7 @@ and the token estimator. Lifted out of agent.py.
 
 call_llm is the single entry point the loop uses; agent.py re-binds it (and
 everything else here), so patching sa.call_llm still intercepts every model
-call in the loop, in loop_v2, and in compaction.
+call in the loop and in compaction.
 
 Two things deliberately resolve through the agent hub at call time rather
 than locally:

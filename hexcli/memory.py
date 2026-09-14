@@ -16,9 +16,7 @@ from __future__ import annotations
 import io
 import json
 import threading
-import time
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -44,25 +42,9 @@ _MAX_RULES = 50
 _GLOBAL_STORE_DIR = Path.home() / ".shellai" / "global_vector_store"
 _RULES_PATH = Path.home() / ".shellai" / "memory_rules.md"
 
-# NPU inference lock — prevents the dreaming daemon from calling the LLM
-# concurrently with the main agent loop. Acquired by call_llm in agent.py
-# and by _consolidate here with a 5-second timeout.
+# NPU inference lock — serialises LLM calls (call_llm acquires it).
 _NPU_INFERENCE_LOCK: threading.Lock = threading.Lock()
 
-# Idle timer for the dreaming daemon. touch_last_turn() resets it on each
-# user input. _consolidate fires after _IDLE_TIMEOUT seconds of silence.
-_last_turn_time: float = 0.0
-_IDLE_TIMEOUT: float = 300.0  # 5 minutes
-
-# Injected by start_dreaming() from agent.py — avoids a circular import.
-_dream_config_fn: Callable[[], dict[str, Any]] | None = None
-_dream_llm_fn: Callable[[dict[str, Any], str, str], str] | None = None
-
-_DREAM_SYSTEM = (
-    "Extract 3–5 concise factual rules from these session notes. "
-    "Return only a Markdown bullet list (one rule per line, starting with '- '). "
-    "No preamble, no commentary, no numbering."
-)
 
 
 class _Embedder:
@@ -299,12 +281,6 @@ def search_memory_tool(config: dict[str, Any], query: str, top_k: int = 3) -> st
 # Idle timer
 # ---------------------------------------------------------------------------
 
-def touch_last_turn() -> None:
-    """Reset the idle timer. Called from the REPL on every user input."""
-    global _last_turn_time
-    _last_turn_time = time.monotonic()
-
-
 # ---------------------------------------------------------------------------
 # Memory rules (Feature 15 — rules injection)
 # ---------------------------------------------------------------------------
@@ -369,48 +345,3 @@ def prune_memory_rules() -> int:
 # Dreaming daemon (Feature 14 — async consolidation)
 # ---------------------------------------------------------------------------
 
-def _consolidate() -> None:
-    """Pull recent global entries, generate rules via LLM, append to rules file."""
-    global _dream_config_fn, _dream_llm_fn
-    if _dream_config_fn is None or _dream_llm_fn is None:
-        return
-    try:
-        store = VectorStore(None, store_dir=_GLOBAL_STORE_DIR, max_entries=_GLOBAL_MAX_ENTRIES)
-        store._load()
-        if not store._meta:
-            return
-        notes = "\n".join(e.get("text", "") for e in store._meta[-20:])
-        if not notes.strip():
-            return
-
-        if not _NPU_INFERENCE_LOCK.acquire(timeout=5):
-            return  # main loop is busy; skip this dreaming cycle
-        try:
-            config = _dream_config_fn()
-            raw = _dream_llm_fn(config, _DREAM_SYSTEM, notes)
-        finally:
-            _NPU_INFERENCE_LOCK.release()
-
-        new_rules = [ln.strip() for ln in raw.splitlines() if ln.strip().startswith("- ")]
-        if new_rules:
-            _append_rules(new_rules)
-    except Exception:
-        pass
-
-
-def _dream_loop() -> None:
-    """Background daemon: check every 30 s; fire consolidation after idle timeout."""
-    while True:
-        time.sleep(30)
-        if _last_turn_time > 0 and (time.monotonic() - _last_turn_time) >= _IDLE_TIMEOUT:
-            _consolidate()
-            touch_last_turn()  # reset so it doesn't re-fire immediately
-
-
-def start_dreaming(config_fn: Callable[[], dict[str, Any]], llm_fn: Callable) -> None:
-    """Start the background consolidation daemon. Called once from run_repl."""
-    global _dream_config_fn, _dream_llm_fn
-    _dream_config_fn = config_fn
-    _dream_llm_fn = llm_fn
-    t = threading.Thread(target=_dream_loop, daemon=True)
-    t.start()

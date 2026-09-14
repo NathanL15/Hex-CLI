@@ -776,8 +776,6 @@ def run_suite_cli(
     parser.add_argument("--case", help="Run only this case/scenario id.")
     parser.add_argument("--runs", type=int, default=default_runs,
                         help=f"Runs per case (default {default_runs}).")
-    parser.add_argument("--protocol", choices=["v1", "v2"],
-                        help="Override the agent protocol for this run (A/B testing).")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                         help="Override any config key for this run (repeatable), "
                              "e.g. --set conditional_rules=false. The override is "
@@ -793,8 +791,6 @@ def run_suite_cli(
     args = parser.parse_args()
 
     config = load_live_config()
-    if args.protocol:
-        config["protocol"] = args.protocol
     seed = args.seed if args.seed is not None else int(time.time()) % 1_000_000
     order = random.Random(seed)
 
@@ -831,7 +827,7 @@ def run_suite_cli(
         "timestamp": time.time(),
         "model": config.get("model"),
         "temperature": config.get("temperature"),
-        "protocol": config.get("protocol", "v1"),
+        "protocol": "v1",
         "runs_per_case": args.runs,
         "overrides": overrides,
         "metadata": run_metadata(config),
