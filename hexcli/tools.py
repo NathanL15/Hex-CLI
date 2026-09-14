@@ -581,22 +581,205 @@ def _verify_node_syntax(path: Path) -> tuple[bool, str]:
     return False, f"FAIL: {result.stderr.strip() or result.stdout.strip()}"
 
 
+_PY_IMPLICIT = {"__name__", "__file__", "__doc__", "__builtins__", "__spec__", "__loader__",
+                "__package__", "__path__", "__annotations__", "__debug__"}
+
+
+def undefined_python_names(source: str) -> list[str]:
+    """Names the module reads but never binds anywhere and Python does not
+    provide: the cross-reference rung for Python. Scopes are collapsed to
+    the module (a name bound anywhere counts), so this never flags a name
+    that some function defines; it only catches the calculator-class
+    mistake of calling something that does not exist. A star import turns
+    the check off."""
+    import builtins
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    bound: set[str] = set(dir(builtins)) | _PY_IMPLICIT
+    loads: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            return []
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+            if not isinstance(node, ast.ClassDef):
+                args = node.args
+                for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                    bound.add(a.arg)
+                for a in (args.vararg, args.kwarg):
+                    if a is not None:
+                        bound.add(a.arg)
+        elif isinstance(node, ast.Lambda):
+            args = node.args
+            for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                bound.add(a.arg)
+            for a in (args.vararg, args.kwarg):
+                if a is not None:
+                    bound.add(a.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+        elif isinstance(node, ast.MatchAs) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchStar) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+        elif isinstance(node, ast.Name):
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                bound.add(node.id)
+            else:
+                loads.setdefault(node.id, node.lineno)
+    return [f"{name} (line {line})" for name, line in sorted(loads.items(), key=lambda kv: kv[1])
+            if name not in bound]
+
+
+_JS_BUILTIN_CALLS = {"alert", "confirm", "prompt", "eval", "parseInt", "parseFloat", "String",
+                     "Number", "Boolean", "Math", "setTimeout", "setInterval", "console",
+                     "document", "window", "event", "this", "if", "for", "while", "return",
+                     "function", "new", "Array", "Object", "JSON", "isNaN", "Date", "fetch",
+                     "requestAnimationFrame", "clearTimeout", "clearInterval", "Promise"}
+
+
+def html_wiring_report(path: Path) -> tuple[bool, str]:
+    """Cross-reference rung for a page: the handlers the markup calls must be
+    functions the scripts define, the ids the scripts look up must be
+    elements the markup has, and buttons must be wired to something. Reading
+    a page back proves the bytes; this proves the parts are connected
+    (2026-09-14: a calculator with buttons that called nothing, a script that
+    looked up an id no element had, and a function nothing called was
+    "verified" three times by read_file)."""
+    from html.parser import HTMLParser
+
+    class _Walk(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: set[str] = set()
+            self.handlers: list[str] = []
+            self.buttons = 0
+            self.scripts: list[str] = []
+            self.script_srcs: list[str] = []
+            self._in_script = False
+            self._body_closed = False
+            self.script_after_body = False
+            self._buf: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            a = {k.lower(): (v or "") for k, v in attrs}
+            if a.get("id"):
+                self.ids.add(a["id"])
+            for k, v in a.items():
+                if k.startswith("on") and v:
+                    self.handlers.extend(m for m in re.findall(r"([A-Za-z_$][\w$]*)\s*\(", v))
+            if tag == "button" or (tag == "input" and a.get("type", "").lower() in {"button", "submit"}):
+                self.buttons += 1
+            if tag == "script":
+                self._in_script = True
+                self._buf = []
+                if a.get("src"):
+                    self.script_srcs.append(a["src"])
+                if self._body_closed:
+                    self.script_after_body = True
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "script" and self._in_script:
+                self._in_script = False
+                self.scripts.append("".join(self._buf))
+            if tag in {"body", "html"}:
+                self._body_closed = True
+
+        def handle_data(self, data: str) -> None:
+            if self._in_script:
+                self._buf.append(data)
+
+    source = path.read_text(encoding="utf-8", errors="replace")
+    w = _Walk()
+    try:
+        w.feed(source)
+        w.close()
+    except Exception as exc:  # noqa: BLE001 — html.parser is lenient; anything else is a report
+        return False, f"FAIL: could not parse the page: {exc}"
+    script = "\n".join(w.scripts)
+    for src in w.script_srcs:
+        try:
+            script += "\n" + (path.parent / src).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+    defined = set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", script))
+    defined |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\(|[A-Za-z_$][\w$]*\s*=>)", script))
+    defined |= set(re.findall(r"\b(?:window\.)?([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\b", script))
+    looked_up = set(re.findall(r"getElementById\(\s*['\"]([^'\"]+)['\"]", script))
+    looked_up |= set(re.findall(r"querySelector(?:All)?\(\s*['\"]#([\w-]+)", script))
+    listeners = bool(re.search(r"addEventListener\s*\(|\.on[a-z]+\s*=", script))
+    problems: list[str] = []
+    undefined = sorted({h for h in w.handlers if h not in defined and h not in _JS_BUILTIN_CALLS})
+    if undefined:
+        problems.append("handlers the markup calls but no script defines: " + ", ".join(undefined))
+    missing = sorted(i for i in looked_up if i not in w.ids)
+    if missing:
+        problems.append("ids the script looks up but no element has: " + ", ".join(missing))
+    if w.buttons and not w.handlers and not listeners:
+        problems.append(f"{w.buttons} button(s) and none is wired to a script (no on* attribute, no addEventListener)")
+    notes: list[str] = []
+    if w.script_after_body:
+        notes.append("a <script> sits after </body>")
+    if defined and not w.handlers and not listeners:
+        notes.append("functions defined but nothing calls them: " + ", ".join(sorted(defined)))
+    if problems:
+        return False, "FAIL: parsed, cross-referenced: " + "; ".join(problems + notes)
+    summary = f"OK: parsed, cross-referenced ({len(w.handlers)} handler call(s), {len(w.ids)} id(s), {w.buttons} button(s))"
+    if notes:
+        summary += "; " + "; ".join(notes)
+    return True, summary
+
+
 def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
+    """The verification ladder. Every result says which rung was reached:
+    executed (not here: run_code does that), parsed and cross-referenced,
+    parsed only, or NOT CHECKED. A file this tool cannot check is reported
+    as unchecked, never as OK: the model used to read "OK: skipped" and
+    finish with "verified"."""
     path = resolve_path(path_text)
     if not path.exists():
         raise RuntimeError(f"File not found: {path}")
-    lang = (language or "").strip().lower() or _LANGUAGE_BY_EXT.get(path.suffix.lower(), "")
-    if lang == "python":
+    suffix = path.suffix.lower()
+    lang = (language or "").strip().lower() or _LANGUAGE_BY_EXT.get(suffix, "")
+    if suffix in {".html", ".htm"} or lang in {"html", "htm"}:
+        ok, detail = html_wiring_report(path)
+    elif lang == "python":
         ok, detail = _verify_python_syntax(path)
+        if ok and not detail.startswith("OK: skipped"):
+            undefined = undefined_python_names(path.read_text(encoding="utf-8", errors="replace"))
+            if undefined:
+                ok, detail = False, "FAIL: parsed, cross-referenced: references undefined name(s): " + ", ".join(undefined)
+            else:
+                detail = "OK: parsed, cross-referenced: no syntax errors, every name it reads is defined"
     elif lang == "json":
         ok, detail = _verify_json_syntax(path)
+        if ok:
+            detail = detail.replace("OK: valid JSON", "OK: parsed: valid JSON")
     elif lang == "powershell":
         ok, detail = _verify_powershell_syntax(path, shell_exe)
-    elif lang == "node" or path.suffix.lower() in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+        if ok and detail.startswith("OK: skipped"):
+            ok, detail = True, "NOT CHECKED: " + detail[len("OK: skipped ("):].rstrip(")")
+        elif ok:
+            detail = "OK: parsed: no syntax errors"
+    elif lang == "node" or suffix in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
         ok, detail = _verify_node_syntax(path)
+        if ok and detail.startswith("OK: skipped"):
+            ok, detail = True, "NOT CHECKED: " + detail[len("OK: skipped ("):].rstrip(")")
+        elif ok:
+            detail = "OK: parsed: no syntax errors"
     else:
-        ok, detail = True, f"OK: skipped (no syntax checker for '{path.suffix or language or 'unknown'}')"
-    ui.tool_event("verify", f"{path}  ({'pass' if ok else 'fail'})")
+        ok, detail = True, (f"NOT CHECKED: no checker for '{suffix or language or 'this file'}'. "
+                            "The file was not verified; say so if you report on it.")
+    ui.tool_event("verify", f"{path}  ({'fail' if not ok else ('unchecked' if detail.startswith('NOT CHECKED') else 'pass')})")
     return detail
 
 

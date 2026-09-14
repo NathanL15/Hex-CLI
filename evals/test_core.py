@@ -1404,7 +1404,64 @@ def test_result_box_is_skipped_when_the_answer_already_streamed() -> None:
     assert not llm.last_streamed_matches("hello")
 
 
+def test_verify_ladder_reports_wiring_and_unchecked_files() -> None:
+    """The calculator session: buttons with no handlers, a script looking up
+    an id no element has, a function nothing calls — read back and called
+    verified three times. verify_syntax now cross-references a page, and a
+    file it cannot check is NOT CHECKED, never OK."""
+    from hexcli import tools as T
+    fixtures = Path(__file__).resolve().parent / "fixtures"
+    ok, detail = T.html_wiring_report(fixtures / "calc_2026-09-13_unwired.html")
+    # The page's listeners never attach: the script dies looking up an id no
+    # element has, which is exactly what the report names.
+    assert not ok and "ids the script looks up but no element has: result" in detail, detail
+    assert "after </body>" in detail, detail
+    with tempfile.TemporaryDirectory() as tmp:
+        good = Path(tmp) / "ok.html"
+        good.write_text('<html><body><p id="out"></p><button onclick="add(1)">1</button>'
+                        '<script>function add(n){document.getElementById("out").textContent=n;}</script>'
+                        '</body></html>', encoding="utf-8")
+        ok, detail = T.html_wiring_report(good)
+        assert ok and detail.startswith("OK: parsed, cross-referenced"), detail
+        bad = Path(tmp) / "bad.html"
+        bad.write_text('<html><body><button onclick="go()">x</button><script>function stop(){}</script></body></html>',
+                       encoding="utf-8")
+        ok, detail = T.html_wiring_report(bad)
+        assert not ok and "handlers the markup calls but no script defines: go" in detail, detail
+        # The tool itself: html goes to the wiring rung, .txt is NOT CHECKED, python cross-references names.
+        assert T.verify_syntax_tool(str(good), "", "powershell.exe").startswith("OK: parsed, cross-referenced")
+        note = Path(tmp) / "n.txt"
+        note.write_text("hello", encoding="utf-8")
+        assert T.verify_syntax_tool(str(note), "", "powershell.exe").startswith("NOT CHECKED")
+        py = Path(tmp) / "s.py"
+        py.write_text("def total(data):\n    return sum(data)\n\nprint(totl([1, 2]))\n", encoding="utf-8")
+        out = T.verify_syntax_tool(str(py), "python", "powershell.exe")
+        assert out.startswith("FAIL: parsed, cross-referenced") and "totl (line 4)" in out, out
+        py.write_text("import os\nfrom x import *\nprint(anything)\n", encoding="utf-8")
+        assert T.verify_syntax_tool(str(py), "python", "powershell.exe").startswith("OK:")   # star import: check off
+        py.write_text("def f(a, *rest, k=1, **kw):\n    return [a for a in rest] + [k, kw]\n"
+                      "try:\n    f(1)\nexcept ValueError as e:\n    print(e, __name__, len)\n", encoding="utf-8")
+        assert T.verify_syntax_tool(str(py), "python", "powershell.exe").startswith("OK: parsed, cross-referenced")
+
+
+def test_behaviour_claim_detector() -> None:
+    claims = ["Created the app at C:\\x\\calc.html and ran it successfully.",
+              "The buttons now respond to clicks and update the display.",
+              "All tests pass.", "It works as expected.", "Verified that it runs."]
+    for c in claims:
+        assert sa._behaviour_claim(c), c
+    descriptions = ["Added a total function that returns the sum of the list.",
+                    "Binary search works by halving the range each step: O(log n).",
+                    "This is how the event loop works.",
+                    "Wrote calc.html with a display and buttons. I could not run it in a browser.",
+                    "The file was updated; the change was not run.", "Read the file back: it contains the edit."]
+    for d in descriptions:
+        assert not sa._behaviour_claim(d), d
+
+
 TESTS = [
+    test_verify_ladder_reports_wiring_and_unchecked_files,
+    test_behaviour_claim_detector,
     test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour,
     test_history_list_fits_the_window_width,
     test_result_box_is_skipped_when_the_answer_already_streamed,

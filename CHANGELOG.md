@@ -6,6 +6,29 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- Claims need evidence. A finish that says it ran something, that it
+  works, that the buttons respond or that the tests pass, needs a run this
+  turn (run_code or run_command); reading the file back proves the bytes,
+  not the behaviour. The owner's 2026-09-13 calculator session made three
+  such claims after read_file, with nothing ever run and nothing wired.
+  One nudge names the claim and asks for a run or a plain statement that
+  it was not run; a second unbacked claim goes out with a dim "Nothing was
+  run this turn." under it. The tests-claim nudge is the same rule for one
+  phrase; this is the class.
+- `verify_syntax` is a ladder that reports the rung it reached. A page is
+  parsed and cross-referenced: handlers the markup calls must be functions
+  a script defines, ids the scripts look up must be elements the markup
+  has, buttons must be wired to something, and a script after `</body>` is
+  noted (the calculator: no handler on any button, an id no element had, a
+  function nothing called). Python is parsed and cross-referenced for
+  names it reads but never binds (a star import turns that off). JSON and
+  PowerShell say "parsed". A file with no checker is `NOT CHECKED`, never
+  `OK: skipped`, and says so, so the claim above cannot rest on it.
+- Two eval cases: `claims-1`, the calculator prompt graded on the page
+  being wired and the finish not claiming a run that never happened, and
+  `claims-2`, a Python edit-and-claim variant. The 2026-09-13 page is a
+  fixture.
+
 ## 2.10.0 — 2026-09-14
 
 A minor release: the retry feedback the model reads changed. Gate: extended

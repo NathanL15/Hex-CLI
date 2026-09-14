@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Calculator</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background-color: #f0f0f0; }
+        .calculator { width: 300px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; padding: 20px; box-shadow: 0 0 10px #ccc; }
+        .display { font-size: 18px; text-align: right; margin-bottom: 10px; }
+        .buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        button { border: none; padding: 10px; font-size: 16px; background-color: #e0e0e0; border-radius: 5px; cursor: pointer; }</style>
+</head>
+<body>
+    <div class="calculator">
+        <div class="display">0</div>
+        <div class="buttons">
+            <button>1</button> <button>2</button> <button>3</button> <button>=</button>
+            <button>4</button> <button>5</button> <button>6</button> <button>+</button>
+            <button>7</button> <button>8</button> <button>9</button> <button>-</button>
+            <button>0</button> <button>.</button> <button>/</button> <button>*</button>
+        </div>
+    </div>
+</body>
+<script>
+// JavaScript logic for calculator
+function calculate(a, b, operator) {
+    switch (operator) {
+        case "+": return a + b;
+        case "-": return a - b;
+        case "*": return a * b;
+        case "/": return a / b;
+        default: return 0;
+    }
+}
+
+// Update display when a button is clicked
+document.getElementById("result").textContent = calculate(5, 3, "+");
+
+
+// Add event listeners to buttons
+document.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const value = btn.textContent;
+        document.getElementById('result').innerText = value;
+    });
+});
+</script>
+</html>\n    }\n});\n\n// Handle button clicks\nconst buttons = document.querySelectorAll('button');\nbuttons.forEach(btn => {\n    btn.addEventListener('click', () => {\n        const value = btn.textContent;\n        document.getElementById('result').innerText = value;\n    });\n});\n</script>

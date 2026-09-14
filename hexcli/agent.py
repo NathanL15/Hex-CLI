@@ -1193,6 +1193,9 @@ def _run_autopilot_turn(
     _tests_requested = _asks_to_run_tests(query)
     _tests_nudge_used = False
     _run_targets: list[str] = []
+    _ran_anything = False          # any run_code / run_command this turn: the evidence a behaviour claim needs
+    _claim_nudge_used = False
+    _unbacked_claim = False
     # The last test run's failure output (None once a run passes), so a
     # finish right after a failing run can be sent back once more.
     _last_test_failure: str | None = None
@@ -1338,6 +1341,21 @@ def _run_autopilot_turn(
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
                 messages.append({"role": "user", "content": _retest_nudge_text(_last_test_failure)})
                 continue
+            # Claims need evidence. "Ran it successfully", "the buttons now
+            # respond", "tests pass": a behaviour claim in the finish needs
+            # a run this turn; reading a file back proves the bytes, not the
+            # behaviour (the calculator session, 2026-09-13: three such
+            # claims, nothing ever run, nothing wired). One nudge: run it, or
+            # say plainly that it was not run. A second unbacked claim goes
+            # out with a one-line notice under it, so the user knows.
+            claim = _behaviour_claim(msg)
+            if (claim and not _ran_anything and config.get("require_verification", True)):
+                if not _claim_nudge_used:
+                    _claim_nudge_used = True
+                    messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                    messages.append({"role": "user", "content": _claim_nudge_text(claim)})
+                    continue
+                _unbacked_claim = True
             # Escalation trigger B — the verification nudge was ignored: the
             # model finished a second time without checking its own mutation.
             if (_unverified_mutation and _verify_nudge_used
@@ -1367,6 +1385,8 @@ def _run_autopilot_turn(
                 })
                 continue
             result = msg or last_tool_output or "Done."
+            if _unbacked_claim:
+                ui.cprint("  Nothing was run this turn.", C.DIM)
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="completed")
             if session:
                 _record_undo_snapshots(session, _turn_snapshots)
@@ -1398,6 +1418,7 @@ def _run_autopilot_turn(
             touched_paths.append(str(tool_path))
         if tool_name in ("run_code", "run_command") and isinstance(action.get("args"), dict):
             _run_targets.append(str(action["args"].get("path") or action["args"].get("command") or ""))
+            _ran_anything = True
 
         # Capture file state before first mutation so /undo can restore it.
         if tool_name in {"edit_file", "write_file", "append_file"} and tool_path:
@@ -1683,6 +1704,30 @@ _RUN_TESTS_RE = re.compile(
     r"|\b(make|until|so)\s+(the\s+)?tests?\s+pass\b|\bpytest\b",
     re.IGNORECASE,
 )
+
+
+_BEHAVIOUR_CLAIM_RE = re.compile(
+    r"\b(ran (?:it|the [a-z]+|successfully)(?: successfully)?|runs (?:correctly|fine|successfully|as expected)|"
+    r"(?:it|this|that|everything|the [a-z]+) (?:now |all )?works\b|works (?:as expected|correctly|now|fine)|"
+    r"(?:it|this|that|everything|the [a-z]+) is (?:now )?working(?: correctly| as expected)?|"
+    r"(?:buttons?|it|the app|the page|the script) (?:now )?responds?|"
+    r"calculates? correctly|opens? correctly|executed successfully|"
+    r"tests? (?:pass|passed|passing|succeed)|all tests pass|verified (?:that )?it (?:works|runs)|"
+    r"confirmed (?:that )?it (?:works|runs))\b", re.IGNORECASE)
+
+
+def _behaviour_claim(message: str) -> str:
+    """The first behaviour claim in a finish message, or ''. Deliberately a
+    list of ways to say "I ran it and it works", not a list of verbs: "the
+    function returns the sum" is a description, "it works" is a claim."""
+    m = _BEHAVIOUR_CLAIM_RE.search(message or "")
+    return m.group(0) if m else ""
+
+
+def _claim_nudge_text(claim: str) -> str:
+    return (f"You said \"{claim}\" but nothing was run this turn. Run it with run_code or "
+            "run_command and report what you observed, or say plainly that it was not run. "
+            "Respond with JSON only.")
 
 
 def _asks_to_run_tests(query: str) -> bool:

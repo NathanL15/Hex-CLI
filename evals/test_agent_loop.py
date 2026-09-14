@@ -341,6 +341,58 @@ def test_broken_write_then_finish_is_retried_with_the_decoder_error() -> None:
     assert feedback and "at character" in feedback[0] and "double quote" in feedback[0], feedback
 
 
+def test_behaviour_claim_without_a_run_is_nudged_then_flagged() -> None:
+    """A finish that says it ran something when nothing ran gets one nudge
+    naming the claim; a second unbacked claim goes out with the notice."""
+    seen: list[list[dict[str, Any]]] = []
+    real = sa.call_llm
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        msgs = kwargs.get("messages") if "messages" in kwargs else (args[1] if len(args) > 1 else None)
+        if isinstance(msgs, list):
+            seen.append(list(msgs))
+        return real(*args, **kwargs)
+
+    notices: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp, \
+            unittest.mock.patch.object(sa, "call_llm", side_effect=spy), \
+            unittest.mock.patch.object(sa.ui, "cprint", side_effect=lambda text, *a, **k: notices.append(text)):
+        cwd = Path(tmp).resolve()
+        target = str(cwd / "a.html").replace("\\", "\\\\")
+        sa.set_mock_responses([
+            '{"action":"write_file","args":{"path":"' + target + '","content":"<p>hi</p>"}}',
+            '{"action":"read_file","args":{"path":"' + target + '"}}',
+            '{"action":"finish","message":"Created a.html and ran it successfully."}',
+            '{"action":"finish","message":"The page works as expected."}',
+        ])
+        cfg = dict(_CFG, write_scope="anywhere")
+        result = sa.run_autopilot(cfg, [], "make a page", _SHELL)
+    assert result == "The page works as expected.", result
+    nudges = [m["content"] for msgs in seen for m in msgs if m.get("role") == "user" and "nothing was run this turn" in str(m.get("content", ""))]
+    assert nudges and "ran it successfully" in nudges[0], nudges
+    assert any("Nothing was run this turn." in n for n in notices), notices
+
+
+def test_behaviour_claim_backed_by_a_run_is_not_nudged() -> None:
+    seen: list[list[dict[str, Any]]] = []
+    real = sa.call_llm
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        msgs = kwargs.get("messages") if "messages" in kwargs else (args[1] if len(args) > 1 else None)
+        if isinstance(msgs, list):
+            seen.append(list(msgs))
+        return real(*args, **kwargs)
+
+    with unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        sa.set_mock_responses([
+            '{"action":"run_command","args":{"command":"echo hi"}}',
+            '{"action":"finish","message":"It works as expected: the command printed hi."}',
+        ])
+        result = sa.run_autopilot(_CFG, [], "say hi", _SHELL)
+    assert "works as expected" in result
+    assert not any("nothing was run" in str(m.get("content", "")) for msgs in seen for m in msgs), seen[-1]
+
+
 def test_truncated_json_is_retried() -> None:
     sa.set_mock_responses([
         '{"action":"run_command","args":{"command":"echo hi"',  # truncated
@@ -1122,6 +1174,8 @@ TESTS = [
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
+    test_behaviour_claim_without_a_run_is_nudged_then_flagged,
+    test_behaviour_claim_backed_by_a_run_is_not_nudged,
     test_truncated_json_is_retried,
     test_late_step_parse_failure_still_retried,
     test_pure_prose_is_still_an_implicit_finish,

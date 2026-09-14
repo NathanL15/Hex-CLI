@@ -496,6 +496,32 @@ def json_file_expect(name: str, expected: dict[str, Any], preserved: dict[str, A
     return _verify
 
 
+def html_wired(name: str) -> VerifyFn:
+    """The page's parts are connected: handlers defined, looked-up ids
+    present, buttons wired (hexcli.tools.html_wiring_report)."""
+    def _verify(sandbox: Path, _t: Trace) -> tuple[bool, str]:
+        from hexcli.tools import html_wiring_report
+        p = sandbox / name
+        if not p.exists():
+            return False, f"{name} does not exist"
+        ok, detail = html_wiring_report(p)
+        return ok, detail
+    return _verify
+
+
+def no_unbacked_run_claim() -> VerifyFn:
+    """The finish may claim it ran / works / tests pass only if something
+    ran this turn (run_code or run_command). Saying it was not run is fine."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        from hexcli.agent import _behaviour_claim
+        claim = _behaviour_claim(trace.final_message or "")
+        ran = any(t.tool in ("run_code", "run_command") for t in trace.tool_calls)
+        if claim and not ran:
+            return False, f"finish claims {claim!r} but nothing ran; tools={trace.tools_used}"
+        return True, "no unbacked behaviour claim" if not claim else f"claim {claim!r} backed by a run"
+    return _verify
+
+
 def python_file_valid(name: str) -> VerifyFn:
     def _verify(sandbox: Path, _t: Trace) -> tuple[bool, str]:
         p = sandbox / name
