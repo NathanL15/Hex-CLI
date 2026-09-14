@@ -250,7 +250,7 @@ Multi-turn: 23/45 to 26/45 turn-runs. Injection payloads blocked: 0/9 to
 \label{fig:evals}
 \end{figure}
 
-\subsection{Where the window goes}
+\subsection{Where the window goes}\label{sec:window}
 
 Budgeting the prompt produced the most counter-intuitive finding of the
 project. Of the 1{,}990-token template at v2.0, the 14 behavioural rules were
@@ -334,6 +334,18 @@ instead of from the file, three times in a row, or describes the change in
 prose instead of making it. The harness turns both from silent failures into
 retried or deflected ones; it cannot eliminate them. They mark where a better
 small model would help, and the instrument can judge one in an afternoon.
+The anchoring class did yield one more harness answer after v2.8: the model
+rebuilds lines from the traceback in its history rather than copying them
+(``\code{for item in data}'' where the file says \code{items}), so its
+anchor sits at 40--95\% similarity while the change it wants is one token.
+The fallback that pasted its text over the closest region at 95\%
+similarity was installing those misremembered names---five of six runs of
+one multi-turn case ended in a \code{NameError} the harness had written. A
+token-level three-way merge (the model's change applied where the file
+agrees with what it saw, the file's text kept elsewhere, conflicts refused)
+replaced the paste in v2.9.0: the affected turn went from 1--3 of 3 to 5 of
+6, a case at 0 in every baseline passed for the first time, and the extended
+suite was flat at run level ($p=1.0$).
 
 % ═══════════════════════════════════════════════════════════════
 \section{The runtime lever}
@@ -430,7 +442,7 @@ so none is re-argued from intuition.}
 \end{table}
 
 % ═══════════════════════════════════════════════════════════════
-\section{Security: assume the model is fully injectable}
+\section{Security: assume the model is fully injectable}\label{sec:security}
 
 To a 4B model, a malicious instruction hidden in a README it was asked to
 read is indistinguishable from the user. v1.7 executed all nine payloads in
@@ -450,6 +462,61 @@ spot: it had treated every \code{Format-} verb as a disk format, so the
 \code{Format-List} the model appends to live-state queries asked for a
 confirmation that unattended evals answer with a denial. The live-state
 numbers above carry that handicap; the fix is a two-line pattern.
+
+% ═══════════════════════════════════════════════════════════════
+\section{Related work}
+
+\paragraph{Terminal agents that accept a local model.} OpenCode, Crush,
+Goose, Qwen Code, Codex CLI, OpenHands, Cline, Kilo Code, Mistral Vibe, Pi and
+Aider all run against a local server, and all assume a window of 16K tokens
+or more and, in practice, a model of 20--35B parameters. OpenHands' own
+documentation calls a 4,096-token window ``way too small---not even the
+system prompt will fit''; OpenCode's compaction keeps 15K recent tokens, so
+it cannot operate inside this paper's window at all; Codex asks for at least
+32K.\footnote{\url{https://docs.openhands.dev/openhands/usage/llms/local-llms};
+\url{https://opencode.ai/v2/docs/compaction}; \url{https://ollama.com/blog/codex}.}
+Most rely on native tool calling with no text fallback; ``the model prints
+the tool call instead of executing it'' is the most-reported local failure in
+their issue trackers. None has any NPU code. No other coding or shell agent
+running on a Hexagon NPU was found in 2025--2026; the nearest neighbours are
+a bridge that feeds OpenCode from Microsoft's Phi Silica on the same 4K
+window, whose author notes that ``a real terminal agent's toolset alone
+measured nearly three times the whole window'', and AMD's GAIA, which is
+AMD-only.\footnote{\url{https://github.com/ookla-ariel-ride/npu-bridge};
+\url{https://github.com/amd/gaia}.}
+
+\paragraph{Harnesses built for small models.} The patterns this paper
+measured have precedents. mini-SWE-agent uses one action per step, a linear
+history and no tool API, and is positioned to ``run with literally any
+model''; nanocoder is the one CLI explicitly targeting 1--4B models, with a
+150--250-token prompt that drops tools, JSON and XML text fallbacks and no
+published evaluation; octofriend ships two 8B LoRA adapters that repair
+malformed SEARCH/REPLACE blocks and JSON after the fact; Aider switches to
+whole-file edits below roughly 32B because format compliance
+collapses.\footnote{\url{https://github.com/SWE-agent/mini-swe-agent};
+\url{https://github.com/Nano-Collective/nanocoder};
+\url{https://huggingface.co/syntheticlab/diff-apply};
+\url{https://aider.chat/docs/leaderboards/edit.html}.} The deterministic compaction of
+Section~\ref{sec:window} agrees with the evidence: on SWE-bench Verified,
+masking old observations matched LLM summarisation at half the cost
+(2508.21433). The security stance of Section~\ref{sec:security} matches the out-of-band
+defenses evaluated on a 7B model, where a deterministic gate cut attack
+success from 25.8\% to 4.2\% (Progent, 2606.26479), and the finding that
+4B-class models fall to essentially every prompted injection (InjecAgent,
+2403.02691).
+
+\paragraph{Evaluation practice.} Terminal-Bench 2.0 requires five trials per
+task with confidence intervals; $\tau$-bench defined
+pass\textsuperscript{k}; no published result for a 1--8B agent reports
+pass\textsuperscript{k} or a significance test, and Aider's leaderboard has
+no row below 32B.\footnote{\url{https://github.com/harbor-framework/terminal-bench-2-1};
+\url{https://arxiv.org/abs/2406.12045}.} On the runtime side, Qualcomm's
+published figure for this exact bundle on this NPU is 6.56 tok/s; an
+independent measurement of the same class of bundle found 14.2 tok/s decode
+and 787 tok/s prefill, in line with the 15 tok/s here, and confirmed that
+the static graphs impose the fixed window this paper works
+inside.\footnote{\url{https://huggingface.co/qualcomm/Qwen3-4B};
+\url{https://arxiv.org/abs/2606.11257}.}
 
 % ═══════════════════════════════════════════════════════════════
 \section{Lessons}
@@ -472,6 +539,13 @@ evidence, they keep future work from re-fighting settled questions.
 one case and broke a gated one; a loop nudge (``run the tests'' means a test
 ran, 0/5 $\to$ 5/5) and a loop guard (no edit lands on a file the request did
 not name, 1/5 $\to$ 5/5) did the job without touching the prompt.
+\item \textbf{Never paste the model's memory of a file into the file.} A
+fallback that accepts a near match and writes the model's text installs
+every name it misremembered; transfer only the change it asked for.
+\item \textbf{Reading a file back is not verification.} The model will call
+a page ``verified'' after \code{read\_file} and report that it ran when
+nothing ran; a claim of behaviour needs an execution event in the turn, and
+a verifier must say which rung it reached, including ``not checked''.
 \end{enumerate}
 
 % ═══════════════════════════════════════════════════════════════
@@ -489,8 +563,8 @@ edit-anchoring case. The other levers need a different model or runtime,
 and when a successor bundle appears for this NPU the instrument can judge it
 in an afternoon.\footnote{All figures were measured on a Snapdragon X~Elite
 (X1E78100), 16\,GB RAM, Windows 11 ARM, with Qwen3-4B-Instruct-2507 (w4a16)
-on the Hexagon NPU. Method and run-level data: \code{docs/V2\_PLAN.md} \S14,
-\code{docs/backend\_study/} and \code{evals/results/} in the repository.}
+on the Hexagon NPU. Run-level data for the gate baselines is in \code{evals/results/} in
+the repository; the fuller measurement archive is kept by the maintainer.}
 
 {\small
 \begin{longtable}{@{}lp{12.4cm}@{}}
@@ -513,6 +587,8 @@ Aug 29--31 & Compaction thrash fixed; command surface pruned to one mode ($-685$
 Sep 1--2 & Main module split into seven stages (3{,}818 $\to$ 1{,}499 lines); KV rewind on QAIRT 2.50, $-41\%$ turn time; context floor traced to two constants and lifted. \\
 Sep 5--7 & CPU-versus-NPU study; host-polling control, async init and the request watchdog (v2.6.x). \\
 Sep 10--12 & Windows Terminal surface; loop nudge and named-file guard through the gate; v2.7--2.8; PyPI package; Format-List classifier fix. \\
+Sep 13 & v2.9: three-way merge replaces the closest-match paste in \code{edit\_file}; double-escaped arguments decoded; the launcher found running a stale installed copy for two days; input line undo/redo, command menu, flicker fix (v2.9.1). \\
+Sep 14 & v2.10: a broken first JSON object is repaired or retried, never skipped for the finish behind it. v2.11: a behaviour claim in a finish needs a run in the turn; \code{verify\_syntax} reports the rung it reached, including ``not checked''; protocol v2, both escalation paths and the dreaming daemon removed. \\
 \end{longtable}}
 
 \end{document}
