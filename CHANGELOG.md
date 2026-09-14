@@ -6,6 +6,14 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.11.1 — 2026-09-14
+
+A patch release: nothing model-facing and nothing the launcher hands the
+server; code and documents nobody used are gone. Gate: every remaining
+suite green (27 suites, 798 tests before, 776 after), smoke on a fresh server
+9/10 then 10/10 (the miss was factual-1, a no-tool knowledge answer that
+missed once in every arm today), CI green on main and the tag.
+
 - The prune. Nothing here was used: protocol v2 (`loop_v2.py`,
   `shell_session.py`, the v2 parser and prompt in `protocol_v2.py`, its
   suite, the `protocol` config key), which lost its A/B at 13/36 vs 22/35
