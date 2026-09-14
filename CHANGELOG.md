@@ -6,6 +6,13 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.10.0 — 2026-09-14
+
+A minor release: the retry feedback the model reads changed. Gate: extended
+suite at 5 runs, seed 20260914, 32/44 pass^5 (the 2.7.x baseline is 32/44), run-level
+159/205 vs 165/208 (p=0.72); one gate case missed once and passed its 6-run
+recheck; CI green on main and the tag.
+
 - A reply whose first JSON object does not decode is never "finished" by a
   later object in the same reply. The owner's 2026-09-13 session: asked for
   a calculator page, the model answered with a `write_file` holding 1.6K of
