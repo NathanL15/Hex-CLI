@@ -609,6 +609,21 @@ def backend_preflight(config: dict[str, Any]) -> str | None:
 
 
 _INVALID_STREAK_ABORT = 6  # consecutive backend failures ⇒ the server is down/degraded
+_SLOT_WAIT_ATTEMPTS = 20   # × _SLOT_WAIT_SLEEP_S: up to ten minutes for an abandoned request to end
+_SLOT_WAIT_SLEEP_S = 30.0
+
+
+def wait_for_free_slot(config: dict[str, Any], sleep: Any = time.sleep) -> bool:
+    """After a client timeout the abandoned request keeps the server's one
+    inference slot until it finishes, and the next run would queue behind it,
+    time out too, and take the whole scenario down as invalid (uc3 on
+    2026-09-13, twice). Probe until the server answers again, then continue.
+    Returns True when the slot came free."""
+    for _ in range(_SLOT_WAIT_ATTEMPTS):
+        if backend_preflight(config) is None:
+            return True
+        sleep(_SLOT_WAIT_SLEEP_S)
+    return False
 
 
 def run_cases(config: dict[str, Any], cases: list[Case], runs: int,
@@ -623,6 +638,11 @@ def run_cases(config: dict[str, Any], cases: list[Case], runs: int,
             outcome = run_case_once(config, case)
             if outcome.invalid and outcome.detail.startswith("backend"):
                 invalid_streak += 1
+                if "timed out" in outcome.detail:
+                    if progress:
+                        print("  backend timed out; waiting for the inference slot...", file=sys.stderr, flush=True)
+                    if wait_for_free_slot(config):
+                        invalid_streak -= 1   # the slot is back: this one was the abandoned request, not a dead server
                 if invalid_streak >= _INVALID_STREAK_ABORT:
                     raise RuntimeError(
                         f"Aborting suite: {invalid_streak} consecutive backend failures "

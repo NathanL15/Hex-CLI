@@ -536,7 +536,21 @@ def test_suite_definitions_valid() -> None:
         f"multiturn suite lost turns vs v1 (6+6+3): {len(UC1.turns)}+{len(UC2.turns)}+{len(UC3.turns)}"
 
 
+def test_wait_for_free_slot_probes_until_the_backend_answers() -> None:
+    import unittest.mock
+
+    from evals import runner as R
+    answers = iter(["backend unreachable: timed out", "backend HTTP 429", None])
+    slept: list[float] = []
+    with unittest.mock.patch.object(R, "backend_preflight", side_effect=lambda cfg: next(answers)):
+        assert R.wait_for_free_slot({}, sleep=slept.append) is True
+    assert slept == [R._SLOT_WAIT_SLEEP_S, R._SLOT_WAIT_SLEEP_S], slept
+    with unittest.mock.patch.object(R, "backend_preflight", return_value="backend unreachable: timed out"):
+        assert R.wait_for_free_slot({}, sleep=lambda s: None) is False
+
+
 TESTS = [
+    test_wait_for_free_slot_probes_until_the_backend_answers,
     test_clarification_grader_rejects_empty_completions_and_bare_question_marks,
     test_grounded_answer_grader,
     test_live_state_patterns_are_word_bounded,
