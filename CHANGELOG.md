@@ -10,7 +10,7 @@ the Hexagon NPU, not single-run anecdotes.
 
 A patch release: nothing model-facing and nothing the launcher hands the
 server; code and documents nobody used are gone. Gate: every remaining
-suite green (27 suites, 798 tests before, 776 after), smoke on a fresh server
+suite green (27 suites, 739 tests; 29 suites and 798 tests before), smoke on a fresh server
 9/10 then 10/10 (the miss was factual-1, a no-tool knowledge answer that
 missed once in every arm today), CI green on main and the tag.
 
