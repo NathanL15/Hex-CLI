@@ -56,3 +56,7 @@ tools/backend_bench/.battery_probe.ps1
 
 # python -m build output
 dist/
+
+# Local-only notes: research surveys and working documents that are not user-facing.
+# Only the paper (docs/paper) and user-facing docs are committed (owner rule, 2026-09-14).
+docs/local/
