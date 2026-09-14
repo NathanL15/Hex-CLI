@@ -6,6 +6,11 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+## 2.11.0 — 2026-09-14
+
+A minor release: tool result text the model reads changed (`verify_syntax`
+reports its rung) and a new nudge was added. Gate: extended suite at 5 runs, seed 20260914, gate PASS after a 6-run recheck (five cases missed once, all 5/6 or better on recheck; run-level 156/205 vs 165/208, p=0.48); multi-turn at 3 runs on a fresh server with 0 invalid runs, no 3/3 case lost, uc3-t7 gained (38/48 vs 33/44, p=0.80); smoke 10/10; stall probe clean; CI green on main and the tag.
+
 - Claims need evidence. A finish that says it ran something, that it
   works, that the buttons respond or that the tests pass, needs a run this
   turn (run_code or run_command); reading the file back proves the bytes,
@@ -28,6 +33,13 @@ the Hexagon NPU, not single-run anecdotes.
   being wired and the finish not claiming a run that never happened, and
   `claims-2`, a Python edit-and-claim variant. The 2026-09-13 page is a
   fixture.
+- The eval runner waits for the inference slot after a client timeout.
+  An abandoned request keeps the server's one slot until it finishes; the
+  next run queued behind it, timed out too, and took a whole scenario
+  down as invalid (uc3, 2026-09-13, twice). After a timed-out run the
+  runner probes until the backend answers again, up to ten minutes, and
+  the timeout no longer counts toward the abort streak once the slot is
+  back.
 
 ## 2.10.0 — 2026-09-14
 
