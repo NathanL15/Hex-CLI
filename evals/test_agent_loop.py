@@ -393,6 +393,60 @@ def test_behaviour_claim_backed_by_a_run_is_not_nudged() -> None:
     assert not any("nothing was run" in str(m.get("content", "")) for msgs in seen for m in msgs), seen[-1]
 
 
+def _spy_on_messages() -> tuple[list, Any]:
+    seen: list[list[dict[str, Any]]] = []
+    real = sa.call_llm
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        msgs = kwargs.get("messages") if "messages" in kwargs else (args[1] if len(args) > 1 else None)
+        if isinstance(msgs, list):
+            seen.append([dict(m) for m in msgs])
+        return real(*args, **kwargs)
+
+    return seen, spy
+
+
+def test_a_cut_off_write_is_told_to_send_it_in_two_parts() -> None:
+    """Not "escape your quotes": the reply ran out of output room, so the fix
+    is write_file then append_file, and the failed attempt leaves only a head
+    in the context so the retry has the room back (claims-1, 2026-09-14)."""
+    seen, spy = _spy_on_messages()
+    cut = ('{"action":"write_file","args":{"path":"big.txt","content":"'
+           + "long content " * 200)
+    sa.set_mock_responses([cut, '{"action":"finish","message":"Recovered."}'])
+    with unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        result = sa.run_autopilot(_CFG, [], "write big.txt", _SHELL)
+    assert "Recovered." in result, result
+    feedback = [m["content"] for msgs in seen for m in msgs
+                if m.get("role") == "user" and "cut off" in str(m.get("content", ""))]
+    assert feedback and "append_file" in feedback[0], feedback
+    assert "double quote" not in feedback[0], feedback[0]
+    echoed = [m["content"] for msgs in seen for m in msgs
+              if m.get("role") == "assistant" and m.get("content", "").startswith('{"action":"write_file"')]
+    assert echoed and len(echoed[0]) < 600, len(echoed[0]) if echoed else None
+    assert "cut here for the retry" in echoed[0], echoed[0][-80:]
+
+
+def test_prose_after_a_decode_failure_earns_one_more_retry() -> None:
+    """The model narrates the fix it thinks it made instead of resending the
+    action, and the turn used to end there having written nothing."""
+    seen, spy = _spy_on_messages()
+    sa.set_mock_responses([
+        '{"action":"write_file","args":{"path":"x.txt","content":"a\\"b\\"c unterminated',
+        "Corrected the JSON with properly escaped content.",
+        '{"action":"finish","message":"Recovered."}',
+    ])
+    with unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        result = sa.run_autopilot(_CFG, [], "write x.txt", _SHELL)
+    assert "Recovered." in result, result
+    nudge = [m["content"] for msgs in seen for m in msgs
+             if m.get("role") == "user" and "prose, not an action" in str(m.get("content", ""))]
+    assert nudge, [m for msgs in seen for m in msgs if m.get("role") == "user"]
+    # Prose with no decode failure before it is still a plain finish.
+    sa.set_mock_responses(["The time complexity is O(log n)."])
+    assert "O(log n)" in sa.run_autopilot(_CFG, [], "how fast is binary search", _SHELL)
+
+
 def test_truncated_json_is_retried() -> None:
     sa.set_mock_responses([
         '{"action":"run_command","args":{"command":"echo hi"',  # truncated
@@ -1176,6 +1230,8 @@ TESTS = [
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
     test_behaviour_claim_without_a_run_is_nudged_then_flagged,
     test_behaviour_claim_backed_by_a_run_is_not_nudged,
+    test_a_cut_off_write_is_told_to_send_it_in_two_parts,
+    test_prose_after_a_decode_failure_earns_one_more_retry,
     test_truncated_json_is_retried,
     test_late_step_parse_failure_still_retried,
     test_pure_prose_is_still_an_implicit_finish,

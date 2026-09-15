@@ -6,6 +6,32 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- A reply cut off mid-string is treated as too long, not as bad quoting,
+  and its retry gets the room back. A `write_file` holding more than about
+  1,500 characters runs out of output budget in a 4,096-token window and
+  stops inside the content string. Until now the whole cut-off reply stayed
+  in the context for its own retry, so the retry had *less* room than the
+  attempt before it and was cut shorter still: 1,957 then 1,369 characters
+  in one run of the calculator case, which sat at 2 of 5. Three changes.
+  `parsing.looks_truncated` tells a reply that stopped mid-string (the
+  decoder reports an unterminated string and the braces never close) from
+  one that is merely malformed, after the same stray-quote repairs the
+  parser already makes; the 2026-09-13 calculator reply, which has fifteen
+  unescaped quotes but is complete, is correctly not truncated. A truncated
+  reply is answered with "send it in two steps, `write_file` with the first
+  half then `append_file` with the rest" instead of the quoting rule. And a
+  failed attempt now leaves only its first 400 characters in the context,
+  marked as cut, rather than all of it — the head shows the model what it
+  was doing, and the rest is exactly what it has to send again.
+- Prose arriving right after a reply that failed to decode earns one more
+  retry. The model narrates the fix it believes it made ("Corrected the
+  JSON with properly escaped content.") and the turn used to end there
+  having written nothing. Plain prose with no failed attempt before it is
+  still a normal finish, which is the direct-answer path.
+- `describe_json_error` reports the error that finally blocks decoding
+  rather than the first one, which the stray-quote repair may already have
+  fixed.
+
 ## 2.11.1 — 2026-09-14
 
 A patch release: nothing model-facing and nothing the launcher hands the

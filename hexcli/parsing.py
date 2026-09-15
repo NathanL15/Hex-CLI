@@ -144,18 +144,54 @@ def _loads_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _decode_failure(text: str) -> tuple[json.JSONDecodeError | None, str]:
+    """The error that finally blocks decoding the first object in `text`,
+    after the same stray-quote repairs `parse_json_object` makes, together
+    with the repaired text it was raised against. (None, text) when it
+    decodes. Reporting the FIRST error instead would describe a quote the
+    repair already fixed."""
+    start = text.find("{")
+    if start < 0:
+        return None, text
+    last: json.JSONDecodeError | None = None
+    for _ in range(_MAX_QUOTE_REPAIRS + 1):
+        try:
+            _DECODER.raw_decode(text, start)
+            return None, text
+        except json.JSONDecodeError as err:
+            last = err
+            fixed = _repair_stray_quote(text, err)
+            if fixed is None:
+                return err, text
+            text = fixed
+    return last, text
+
+
+def looks_truncated(raw_text: str) -> bool:
+    """True when the reply stops mid-string instead of being malformed: the
+    model was still writing when its output budget ran out. The decoder
+    reports an unterminated string and the braces never close. A write_file
+    holding more than ~1,500 characters hits this in a 4K window, and the
+    model cannot fix it by re-quoting — it has to send the content in two
+    parts (claims-1, 2026-09-14)."""
+    text = strip_thinking(raw_text).strip()
+    if text.endswith("}"):
+        return False
+    err, _repaired = _decode_failure(text)
+    return err is not None and err.msg.startswith("Unterminated string")
+
+
 def describe_json_error(raw_text: str) -> str:
     """What is wrong with the first JSON object in a reply, for the retry
     feedback: the decoder's message, the character offset and the text
     around it. Empty when the object decodes."""
     text = strip_thinking(raw_text).strip()
-    start = max(0, text.find("{"))
-    try:
-        _DECODER.raw_decode(text, start)
+    err, repaired = _decode_failure(text)
+    if err is None:
         return ""
-    except json.JSONDecodeError as err:
-        lo, hi = max(0, err.pos - 40), min(len(text), err.pos + 20)
-        return f"{err.msg} at character {err.pos - start}, near: {text[lo:hi]!r}"
+    start = max(0, repaired.find("{"))
+    lo, hi = max(0, err.pos - 40), min(len(repaired), err.pos + 20)
+    return f"{err.msg} at character {err.pos - start}, near: {repaired[lo:hi]!r}"
 
 
 def parse_json_object(raw_text: str) -> dict[str, Any] | None:

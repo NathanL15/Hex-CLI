@@ -1184,6 +1184,7 @@ def _run_autopilot_turn(
         # Up to 2 retries on bad JSON
         raw = ""
         action: dict[str, Any] = {}
+        decode_error_before = False   # the previous attempt did not decode
         for attempt in range(3):
             _probe(probe, "on_request", step, attempt, [dict(m) for m in messages])
             llm_start = time.monotonic()
@@ -1212,9 +1213,17 @@ def _run_autopilot_turn(
             # other empty generation instead of finishing with a blank message
             # — which used to surface the raw tool output as the "answer".
             empty_reply = not strip_thinking(raw).strip()
+            # Prose arriving right after a reply that failed to decode is never
+            # an answer to "send the JSON again": the model narrates the fix it
+            # believes it made ("Corrected JSON with properly escaped content.")
+            # and the turn ends having written nothing (claims-1, 2026-09-14).
+            decode_failed = (fallback == "prose" and not empty_reply
+                             and parse_json_object(raw) is None
+                             and _looks_like_botched_action(raw))
             should_retry = attempt < 2 and action["action"] == "finish" and (
                 (fallback == "unknown-action" and action.get("bad_action"))
-                or (fallback == "prose" and (empty_reply or _looks_like_botched_action(raw)))
+                or (fallback == "prose" and (empty_reply or _looks_like_botched_action(raw)
+                                             or decode_error_before))
             )
             if should_retry:
                 if fallback == "unknown-action":
@@ -1228,6 +1237,20 @@ def _run_autopilot_turn(
                     feedback = (
                         "Your response was empty. Respond with exactly one JSON "
                         "object as specified. No prose."
+                    )
+                elif decode_error_before and not decode_failed:
+                    feedback = (
+                        "That was prose, not an action. Your previous reply did not "
+                        "decode as JSON; send the SAME action again as one JSON "
+                        "object. No prose."
+                    )
+                elif parsing.looks_truncated(raw):
+                    feedback = (
+                        "Your reply was cut off in the middle of a string: it is too "
+                        "long for one response. Send it in two steps instead — "
+                        "write_file with the first half of the content, then "
+                        "append_file with the rest. Respond with exactly one JSON "
+                        "object. No prose."
                     )
                 elif parse_json_object(raw):
                     feedback = (
@@ -1244,8 +1267,9 @@ def _run_autopilot_turn(
                            "written as \\\". " if detail else ". ")
                         + "Respond with exactly one JSON object as specified. No prose."
                     )
-                messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                messages.append({"role": "assistant", "content": _retry_echo(raw)})
                 messages.append({"role": "user", "content": feedback})
+                decode_error_before = decode_failed
                 continue
             break
 
@@ -1635,6 +1659,26 @@ def _claim_nudge_text(claim: str) -> str:
     return (f"You said \"{claim}\" but nothing was run this turn. Run it with run_code or "
             "run_command and report what you observed, or say plainly that it was not run. "
             "Respond with JSON only.")
+
+
+_RETRY_ECHO_MAX = 400
+
+
+def _retry_echo(raw: str) -> str:
+    """What a failed attempt leaves in the context for its own retry.
+
+    The whole reply used to stay, on the reasoning that the model needs the
+    evidence to adapt. For a long write that backfires: a write_file cut off
+    at the output limit left ~2,000 characters in a 4,096-token window, so
+    the retry had LESS room than the attempt before it and was cut shorter
+    still (1,957 then 1,369 characters in one claims-1 run, 2026-09-14).
+    The head is enough to show what it was doing; the rest is exactly what
+    it has to send again."""
+    text = strip_thinking(raw).strip()
+    if len(text) <= _RETRY_ECHO_MAX:
+        return text
+    return (text[:_RETRY_ECHO_MAX]
+            + f"\n…[cut here for the retry: {len(text) - _RETRY_ECHO_MAX} more characters]")
 
 
 def _asks_to_run_tests(query: str) -> bool:

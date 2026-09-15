@@ -219,6 +219,37 @@ def test_real_calculator_reply_decodes_to_the_write() -> None:
     assert content.count('onclick="input(') == 15 and "\\\"" not in content, content.count('onclick="input(')
 
 
+def test_truncated_reply_is_told_apart_from_a_malformed_one() -> None:
+    """A reply cut off mid-string cannot be fixed by re-quoting; the model has
+    to send the content in two parts. The 2026-09-13 calculator reply (stray
+    quotes, but complete) must NOT be called truncated — it is repairable."""
+    complete = (Path(__file__).resolve().parent / "fixtures"
+                / "reply_2026-09-13_calculator_unescaped_quotes.txt").read_text(encoding="utf-8")
+    assert not sa.parsing.looks_truncated(complete)
+    assert sa.parse_agent_action(complete)["action"] == "tool"
+    cut = '{"action":"write_file","args":{"path":"c.html","content":"<html>\\n<button onclick=\\"go()'
+    assert sa.parsing.looks_truncated(cut)
+    assert not sa.parsing.looks_truncated('{"action":"finish","message":"done"}')
+    assert not sa.parsing.looks_truncated("I could not do that.")
+
+
+def test_json_error_describes_what_finally_blocks_decoding() -> None:
+    """Not the first stray quote, which the repair already fixed."""
+    cut = '{"action":"write_file","args":{"path":"c.html","content":"a\\"b\\"c then cut off'
+    detail = sa.parsing.describe_json_error(cut)
+    assert detail.startswith("Unterminated string"), detail
+    assert sa.parsing.describe_json_error('{"action":"finish","message":"ok"}') == ""
+
+
+def test_retry_echo_keeps_only_a_head_of_a_long_failed_reply() -> None:
+    """The cut-off reply used to stay whole in the retry context, so the retry
+    had less room than the attempt before it and was cut shorter still."""
+    assert sa._retry_echo('{"action":"finish"}') == '{"action":"finish"}'
+    echoed = sa._retry_echo("y" * 2000)
+    assert len(echoed) < 500 and echoed.startswith("y" * 400)
+    assert "1600 more characters" in echoed
+
+
 def test_broken_first_object_is_a_retry_not_the_finish_behind_it() -> None:
     raw = '{"action":"write_file","args":{"path":"x","content":"abc\n{"action":"finish","message":"Created x."}'
     a = sa.parse_agent_action(raw)
@@ -301,6 +332,9 @@ TESTS = [
     test_write_file_decodes_double_escaped_body,
     test_stray_quote_in_a_write_is_repaired_not_skipped,
     test_real_calculator_reply_decodes_to_the_write,
+    test_truncated_reply_is_told_apart_from_a_malformed_one,
+    test_json_error_describes_what_finally_blocks_decoding,
+    test_retry_echo_keeps_only_a_head_of_a_long_failed_reply,
     test_broken_first_object_is_a_retry_not_the_finish_behind_it,
     test_batched_valid_actions_still_take_the_first,
     test_raw_newline_inside_a_json_string_is_accepted,
