@@ -6,6 +6,16 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+> **Gate status, 2026-09-15.** The two entries below are on `main` but have
+> NOT passed a ship gate and must not be released without one. The extended
+> arm (seed 20260915) returned RECHECK on `ambiguous-1` and `self-correct-1`,
+> and the 6-run recheck came back 4/6 and 5/6: **FAIL**. The failure is
+> unlikely to be theirs — `ambiguous-1` had no decode failures in any run, so
+> the new retry path never executed, and a control of the two cases on the
+> unchanged 2.11.1 code on the same warm server scored 6/6 and 3/6, the same
+> 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
+> failures. Re-gate on a quiet platform before releasing, or revert.
+
 - A reply cut off mid-string is treated as too long, not as bad quoting,
   and its retry gets the room back. A `write_file` holding more than about
   1,500 characters runs out of output budget in a 4,096-token window and
