@@ -7,6 +7,8 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import psparse
+
 # Patterns checked in order: first match wins.  Destructive > safe > caution.
 
 _DESTRUCTIVE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
@@ -84,13 +86,19 @@ _SAFE: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
 ]]
 
 
-def classify_command(cmd: str) -> str:
-    """Return 'safe', 'caution', 'sensitive', or 'destructive'.
+_SEVERITY = {"safe": 0, "caution": 1, "sensitive": 2, "destructive": 3}
 
-    Priority: destructive > sensitive > safe > caution. Sensitive must outrank
-    the safe list, or read-only cmdlet prefixes whitelist credential access.
-    """
-    s = cmd.strip()
+
+def _worse(a: str, b: str) -> str:
+    """The more severe of two verdicts. An unknown or empty verdict ranks
+    below every real one, so "nothing to say about this name" can never
+    displace `safe` — it did while the default was `caution`'s rank, which
+    turned `Get-ChildItem` into an empty classification."""
+    return a if _SEVERITY.get(a, -1) >= _SEVERITY.get(b, -1) else b
+
+
+def _classify_text(s: str) -> str:
+    """The pattern tiers, matched against the command as written."""
     for pat in _DESTRUCTIVE:
         if pat.search(s):
             return "destructive"
@@ -101,6 +109,52 @@ def classify_command(cmd: str) -> str:
         if pat.match(s):
             return "safe"
     return "caution"
+
+
+def _tier_for_name(name: str) -> str:
+    """What the tiers would say about a bare command name. Deriving this from
+    the same patterns is deliberate: resolving an alias must not invent a
+    policy, only apply the existing one to the name the shell will really
+    run. `ri` becomes `remove-item` and is destructive because
+    `Remove-Item` always was; `clc` becomes `clear-content` and stays
+    caution because `Clear-Content` is caution today."""
+    probe = name + " "
+    for pat in _DESTRUCTIVE:
+        if pat.search(probe):
+            return "destructive"
+    for pat in _SENSITIVE:
+        if pat.search(probe):
+            return "sensitive"
+    return ""
+
+
+def classify_command(cmd: str) -> str:
+    """Return 'safe', 'caution', 'sensitive', or 'destructive'.
+
+    Priority: destructive > sensitive > safe > caution. Sensitive must outrank
+    the safe list, or read-only cmdlet prefixes whitelist credential access.
+
+    Text alone is not enough. Measured 2026-09-15: `ri C:\\data`,
+    `rmdir C:\\data` and `$c='Remove-Item'; & ($a+$b)` all ran with no
+    confirmation, because an alias or a computed name never appears in a
+    pattern. `hexcli.psparse` resolves the command names the shell will
+    actually run (the agent's shell is `-NoProfile`, so only built-in
+    aliases exist) and reports a name that is not a literal at all. The
+    result can only ever be MORE severe than the text verdict: when the
+    parser is unavailable this is exactly the behaviour it always had.
+    """
+    s = cmd.strip()
+    verdict = _classify_text(s)
+    facts = psparse.facts(s)
+    if not facts.ok:
+        return verdict
+    for name in facts.names:
+        verdict = _worse(verdict, _tier_for_name(name))
+    if facts.nonliteral:
+        # `& ($a + $b)` — the name is computed, so nothing can be checked
+        # about it before it runs. Confirm rather than assume.
+        verdict = _worse(verdict, "sensitive")
+    return verdict
 
 
 def append_audit_log(

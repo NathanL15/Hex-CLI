@@ -548,6 +548,52 @@ def test_check_sensitive_path_blocks_aws() -> None:
 # safety.classify_command
 # ============================================================================
 
+def test_aliases_and_computed_names_cannot_slip_past_the_classifier() -> None:
+    """Measured 2026-09-15: `ri C:\\data`, `rmdir C:\\data` and a name built at
+    runtime all ran with NO confirmation, because an alias never appears in a
+    pattern. The command names the shell will really run are resolved by
+    hexcli.psparse; the agent's shell is -NoProfile, so built-in aliases are
+    the only ones that can exist."""
+    from hexcli import psparse
+    if not psparse.facts("Get-ChildItem").ok:
+        return  # no PowerShell here: the patterns stand alone, covered below
+    for cmd in ("ri C:" + chr(92) + "data", "rmdir C:" + chr(92) + "data",
+                "ri -Recurse -Force C:" + chr(92) + "data", "del C:" + chr(92) + "data"):
+        assert safety.classify_command(cmd) == "destructive", cmd
+    # A computed command name cannot be checked at all before it runs.
+    assert safety.classify_command("& ('Remove' + '-Item') C:" + chr(92) + "x") == "sensitive"
+    # Resolution must not invent policy: Clear-Content is caution today, so
+    # its alias is caution too, and an ordinary read stays safe.
+    assert safety.classify_command("clc notes.txt") == safety.classify_command("Clear-Content notes.txt")
+    assert safety.classify_command("Get-ChildItem") == "safe"
+    assert safety.classify_command("Get-Process | Format-Table") == "safe"
+    # A word that merely starts like an alias is not one.
+    assert safety.classify_command("ripsecret.txt") != "destructive"
+
+
+def test_classifier_keeps_the_pattern_verdict_when_no_parser_is_available() -> None:
+    """The parser is an escalation layer, never a dependency: with it gone the
+    classifier must behave exactly as it did before it existed."""
+    import unittest.mock
+
+    from hexcli import psparse
+    with unittest.mock.patch.object(psparse, "facts", return_value=psparse.UNAVAILABLE):
+        assert safety.classify_command("Remove-Item -Recurse C:" + chr(92) + "x") == "destructive"
+        assert safety.classify_command("Get-ChildItem") == "safe"
+        assert safety.classify_command("gc ~/.ssh/id_rsa") == "sensitive"
+        assert safety.classify_command("ri C:" + chr(92) + "data") == "caution"   # the old blind spot
+        assert safety.classify_command("somecmd --flag") == "caution"
+
+
+def test_severity_merge_never_lets_an_unknown_verdict_win() -> None:
+    from hexcli.safety import _worse
+    assert _worse("safe", "") == "safe"
+    assert _worse("", "safe") == "safe"
+    assert _worse("caution", "destructive") == "destructive"
+    assert _worse("destructive", "sensitive") == "destructive"
+    assert _worse("sensitive", "caution") == "sensitive"
+
+
 def test_classify_safe_get_commands() -> None:
     for cmd in ["Get-Process", "Get-ChildItem .", "Get-Content file.txt"]:
         assert safety.classify_command(cmd) == "safe", f"expected safe: {cmd!r}"
@@ -1574,6 +1620,9 @@ TESTS = [
     test_check_sensitive_path_allows_project_dir,
     test_check_sensitive_path_blocks_windows_credential_store,
     test_check_sensitive_path_blocks_aws,
+    test_aliases_and_computed_names_cannot_slip_past_the_classifier,
+    test_classifier_keeps_the_pattern_verdict_when_no_parser_is_available,
+    test_severity_merge_never_lets_an_unknown_verdict_win,
     test_classify_safe_get_commands,
     test_classify_safe_ls_dir,
     test_classify_safe_git_read,
