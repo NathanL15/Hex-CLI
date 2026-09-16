@@ -17,6 +17,16 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- A reply that is not a usable action is no longer handed to the user as
+  JSON. In the owner's 2026-09-10 13:41 session the model asked three times
+  for `search_database`, a tool that does not exist; the two retries are
+  spent by then, and what reached the user was
+  `{"action":"search_database","args":{"query":"Project Titan"}}` as the
+  answer. Four replies across two sessions did this. The finish now says
+  which tool was asked for instead. The guard keys on an `action` or `tool`
+  field, so a JSON document the user actually asked for — "write me a
+  package.json" — still reaches them untouched.
+
 - An action the model wrote in Python's spelling is still an action. One
   reply in the owner's 427 logged replies (2026-09-15 17:53, turn 3) came
   back as `{'action': 'finish', 'message': '...'}`, and the cost was worse

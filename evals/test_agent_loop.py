@@ -587,6 +587,26 @@ def test_every_not_found_tool_carries_the_hint() -> None:
                 raise AssertionError(f"{tool} did not fail on a missing path")
 
 
+def test_an_unusable_action_is_not_handed_to_the_user_as_json() -> None:
+    """2026-09-10 13:41: the model asked three times for a tool that does not
+    exist, and after the retries ran out the user was shown
+    {"action":"search_database",...} as the reply."""
+    sa.set_mock_responses(['{"action":"search_database","args":{"query":"Project Titan"}}'] * 4)
+    result = sa.run_autopilot(_CFG, [], "find project titan", _SHELL)
+    assert result == "No answer: the reply asked for search_database, which is not a tool.", result
+
+    sa.set_mock_responses(['{"action":"turn_on_light","args":{"room":"living room"}}'] * 4)
+    assert "turn_on_light" in sa.run_autopilot(_CFG, [], "turn on the light", _SHELL)
+
+
+def test_json_the_user_asked_for_still_reaches_them() -> None:
+    """The guard keys on an action or tool field, so a JSON document the user
+    wanted is not mistaken for a botched action."""
+    body = '{"name":"demo","version":"1.0.0","scripts":{"test":"pytest"}}'
+    sa.set_mock_responses([body] * 4)
+    assert sa.run_autopilot(_CFG, [], "write me a package.json", _SHELL) == body
+
+
 def _spy_on_messages() -> tuple[list, Any]:
     seen: list[list[dict[str, Any]]] = []
     real = sa.call_llm
@@ -1422,6 +1442,8 @@ TESTS = [
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
+    test_an_unusable_action_is_not_handed_to_the_user_as_json,
+    test_json_the_user_asked_for_still_reaches_them,
     test_a_mistyped_filename_gets_the_real_name_back,
     test_missing_path_hint_is_silent_where_it_should_be,
     test_every_not_found_tool_carries_the_hint,

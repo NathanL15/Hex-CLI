@@ -1348,6 +1348,20 @@ def _run_autopilot_turn(
                     "content": "You have run_command and other tools available. Use them. Output JSON only.",
                 })
                 continue
+            # A reply that is a JSON object but not a usable action has
+            # already had its two retries by here. It must not go out as the
+            # answer: in the owner's 2026-09-10 session the model asked three
+            # times for a tool that does not exist and the user was shown
+            # {"action":"search_database","args":{"query":"Project Titan"}}
+            # as the reply. Say what happened instead.
+            # Only an object that TRIED to be an action, never one the user
+            # asked for: "write me a package.json" answered with the file's
+            # JSON has no action key and must reach them untouched.
+            if action.get("fallback") == "prose":
+                obj = parse_json_object(raw)
+                bad = str((obj or {}).get("action") or (obj or {}).get("tool") or "").strip()
+                if isinstance(obj, dict) and bad:
+                    msg = f"No answer: the reply asked for {bad}, which is not a tool."
             result = msg or last_tool_output or "Done."
             if _unbacked_claim:
                 ui.cprint("  Nothing was run this turn.", C.DIM)
