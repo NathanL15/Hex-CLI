@@ -7,8 +7,8 @@ the Hexagon NPU, not single-run anecdotes.
 ## Unreleased
 
 > **Gate status, 2026-09-15.** The long-write and parser entries below are
-> on `main` but have
-> NOT passed a ship gate and must not be released without one. The extended
+> on `main` but have NOT passed a ship gate and must not be released
+> without one. The extended
 > arm (seed 20260915) returned RECHECK on `ambiguous-1` and `self-correct-1`,
 > and the 6-run recheck came back 4/6 and 5/6: **FAIL**. The failure is
 > unlikely to be theirs — `ambiguous-1` had no decode failures in any run, so
