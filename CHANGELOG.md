@@ -129,7 +129,10 @@ the Hexagon NPU, not single-run anecdotes.
   success — the exact false claim this gate exists to stop, reintroduced by
   the gate's own wording. The nudge now leads with `read_file` and appends
   the checker for code, and the test pins the ordering rather than the
-  earlier, wrong assertion.
+  earlier, wrong assertion. Re-measured at 15 runs: `agentic-3` 10/14 -> 15/15
+  (p=0.042), fully recovered; `claims-2` 10/15, not significantly different
+  from its pre-change 9/10 (p=0.34), its failures being `edit_file` misses
+  rather than the nudge.
 
 - A reply that is not a usable action is no longer handed to the user as
   JSON. In the owner's 2026-09-10 13:41 session the model asked three times
