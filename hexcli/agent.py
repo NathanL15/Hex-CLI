@@ -1167,6 +1167,7 @@ def _run_autopilot_turn(
     _run_targets: list[str] = []
     _ran_anything = False          # any run_code / run_command this turn: the evidence a behaviour claim needs
     _claim_nudge_used = False
+    _intent_nudge_used = False
     _unbacked_claim = False
     # The last test run's failure output (None once a run passes), so a
     # finish right after a failing run can be sent back once more.
@@ -1325,6 +1326,19 @@ def _run_autopilot_turn(
                     messages.append({"role": "user", "content": _claim_nudge_text(claim)})
                     continue
                 _unbacked_claim = True
+            # The turn did none of the work the request implies (see
+            # _intent_nudge): asked to run and ran nothing, refused for want
+            # of tools it has, reported nothing found without searching, or
+            # claimed to have checked with no tool call at all.
+            if not _intent_nudge_used and config.get("require_verification", True):
+                _intent_text = _intent_nudge(
+                    query, msg, mutated=bool(touched_paths), ran=_ran_anything,
+                    tools_used=tools_used)
+                if _intent_text:
+                    _intent_nudge_used = True
+                    messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                    messages.append({"role": "user", "content": _intent_text})
+                    continue
             # Nudge once if the model refused to use tools
             if (step == 0 and not direct_stage
                     and any(phrase in msg.lower() for phrase in REFUSAL_PHRASES)):
@@ -1679,6 +1693,118 @@ def _retry_echo(raw: str) -> str:
         return text
     return (text[:_RETRY_ECHO_MAX]
             + f"\n…[cut here for the retry: {len(text) - _RETRY_ECHO_MAX} more characters]")
+
+
+# ── Intent: the request implies a class of work, the turn must do it ──────
+#
+# Five of the owner's sessions (2026-09-13..15) ended "successfully" having
+# done nothing of the kind asked for: a web app request refused with "no
+# tools available"; "make a HiLo game AND RUN IT" that never ran; three
+# turns claiming "Checked the file system" with zero tool calls; and "find
+# my current resume" that ran Get-Date and reported no resume found.
+#
+# Matching the VERB alone is not safe here: the trap cases are deliberately
+# phrased as "Use run_command to calculate the factorial of 5" and "Run a
+# search to find out what 2+2 is", where using any tool is the failure.
+# Each rule below therefore pairs the verb with evidence from the OUTCOME,
+# which is what separates a real request from bait:
+#
+#   run    — a file was mutated this turn and nothing was executed
+#   create — nothing was mutated and the finish denies having the means
+#   find   — no search-class tool ran and the finish asserts a negative
+#   check  — the finish claims it checked and no qualifying tool ran
+#
+# A trap answers from knowledge, mutates nothing and denies nothing, so
+# none of the four can fire on it. evals/test_agent_loop.py pins that.
+#
+# Every guard below is here because an earlier draft fired on something
+# that was already RIGHT. They were found by replaying 306 real chat-log
+# turns and 1,366 recorded eval runs against the detectors:
+#
+#   * "the condition is checked before the loop" — prose about code the
+#     user pasted, in an answer that never touches the filesystem (two real
+#     turns), so a claim of checking must also name a file or the workspace.
+#   * "...can also be listed with 'git stash list'" in the factual-6 answer,
+#     so `listed` and `reviewed` are out of the verb set entirely.
+#   * "Unable to write content to the file." — error-recovery-2 reporting a
+#     DENIED write honestly, 7 runs of a 5/5 case, so `write` is out of the
+#     denial verbs: a refusal of the MEANS says build/create/make.
+#   * "fix it and run the tests" — _asks_to_run_tests already owns that
+#     request and nudges better; two nudges for one miss is a wasted step.
+#   * Dropping the "the request asked to find something" condition, so that
+#     ANY negative claim made without a tool call counts, looks strictly
+#     better and is not: it fires on "Error: Permission Denied ... the file
+#     does not exist" (13 runs of error-recovery-2, a 5/5 case) and on
+#     error-recovery-1's "File Not Found: config.json" (26 runs). An honest
+#     report of a tool that was DENIED reads exactly like a fabricated one,
+#     because a denied call is not in tools_used. Telling them apart needs
+#     the denial recorded, which is a separate change.
+#
+# After the guards, 11 of the 306 real turns fire and every one is a
+# genuine miss; 1 of the 1,366 eval runs fires, a self-correct-1 run that
+# claimed to have checked and fixed with no tool call at all.
+
+_WANTS_RUN_RE = re.compile(
+    r"\b(and|then|,)\s+(run|execute|start|launch)\s+(it|them|the\s+\w+)\b"
+    r"|\brun\s+(it|the\s+(script|program|file|app|game|code))\b"
+    r"|\b(execute|try)\s+it\b", re.IGNORECASE)
+_WANTS_CREATE_RE = re.compile(
+    r"\b(create|build|make|write|generate|scaffold)\b", re.IGNORECASE)
+_WANTS_FIND_RE = re.compile(
+    r"\b(find|locate|search\s+for|look\s+for|where\s+is|which\s+file)\b", re.IGNORECASE)
+
+# "I cannot do this at all", as this model phrases it — impersonal and
+# clipped. Never a judgement call ("I should not"), only a claim of missing
+# means, which for a file-writing agent is false.
+_DENIES_MEANS_RE = re.compile(
+    r"\b(no tools? (are )?available|not feasible|unable to (build|create|make|generate)"
+    r"|cannot be (built|created|done) (in|within) this environment"
+    r"|outside the (scope|capabilities)|no (tool|way|mechanism) (to|for)\b)", re.IGNORECASE)
+
+_CLAIMS_NEGATIVE_RE = re.compile(
+    r"\b(no|none|not|nothing|couldn't|could not|unable to)\b[^.]{0,40}"
+    r"\b(found|find|locate|exists?|present)\b", re.IGNORECASE)
+
+_CLAIMS_CHECKED_RE = re.compile(
+    r"\b(checked|checking|verified|verifying|confirmed|inspected|tested)\b"
+    r"|\bi have (checked|verified|confirmed|looked|tested)\b", re.IGNORECASE)
+
+# The claim has to be about something on this machine. Without this, an
+# answer that only discusses code ("the condition is checked", "can be
+# listed with git stash list") reads as a claim of having looked.
+_NAMES_WORKSPACE_RE = re.compile(
+    r"\b(file|files|directory|directories|folder|workspace|codebase|repo|repository"
+    r"|project|path|disk|system)\b"
+    r"|\S+\.(py|ps1|html|js|txt|md|json|csv|ts|css)\b", re.IGNORECASE)
+
+_SEARCH_TOOLS = frozenset({"find_files", "search_files", "list_directory", "grep", "shell"})
+
+
+def _intent_nudge(query: str, msg: str, *, mutated: bool, ran: bool,
+                  tools_used: list[str]) -> str:
+    """One nudge when the turn did none of the work the request implies.
+    Empty string when there is nothing to say."""
+    if (_WANTS_RUN_RE.search(query) and mutated and not ran
+            and not _asks_to_run_tests(query)):
+        return ("You were asked to run it and nothing was run this turn. Run it now "
+                "with run_code (or run_command) and report the output you actually "
+                "saw. Respond with JSON only.")
+    if _WANTS_CREATE_RE.search(query) and not mutated and _DENIES_MEANS_RE.search(msg):
+        return ("You do have the tools for this: write_file creates a file of any kind "
+                "and run_command runs anything the shell can. Create it now. "
+                "Respond with JSON only.")
+    if (_WANTS_FIND_RE.search(query) and _CLAIMS_NEGATIVE_RE.search(msg)
+            and _NAMES_WORKSPACE_RE.search(msg)
+            and not (_SEARCH_TOOLS & set(tools_used))):
+        return ("You reported that nothing was found, but nothing was searched this "
+                "turn. Use find_files (or list_directory) to look, then report what "
+                "the search actually returned. Respond with JSON only.")
+    if (_CLAIMS_CHECKED_RE.search(msg) and not tools_used
+            and _NAMES_WORKSPACE_RE.search(msg)):
+        return ("You said you checked, but this turn made no tool call at all. "
+                "Check it with a tool and report what the tool returned, or say "
+                "plainly that you did not check. Respond with JSON only.")
+    return ""
 
 
 def _asks_to_run_tests(query: str) -> bool:

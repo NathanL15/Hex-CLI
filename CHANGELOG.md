@@ -6,7 +6,8 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
-> **Gate status, 2026-09-15.** The two entries below are on `main` but have
+> **Gate status, 2026-09-15.** The long-write and parser entries below are
+> on `main` but have
 > NOT passed a ship gate and must not be released without one. The extended
 > arm (seed 20260915) returned RECHECK on `ambiguous-1` and `self-correct-1`,
 > and the 6-run recheck came back 4/6 and 5/6: **FAIL**. The failure is
@@ -15,6 +16,42 @@ the Hexagon NPU, not single-run anecdotes.
 > unchanged 2.11.1 code on the same warm server scored 6/6 and 3/6, the same
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
+
+- A turn that did none of the work the request implies is told so once.
+  Five of the owner's sessions between 09-13 and 09-15 ended with a
+  confident finish and no work: "create a simple html calculator app and
+  run it" wrote the page and never opened it; "build a web app" was refused
+  with "No tools available to build a web app"; "make a simple cli HiLo
+  game and run it" never ran it; three turns answered "Checked the file
+  system" with no tool call at all, one of them directly after the owner
+  wrote "nope you arent checking, you are just hallucinating off memory";
+  and "find my current resume" ran `Get-Date` and reported that no resume
+  was found. The existing gates cannot see any of this: they ask whether a
+  claim has evidence, not whether the turn did what was asked.
+  `_intent_nudge` pairs the request's verb with the turn's outcome — asked
+  to run with a file mutated and nothing executed, asked to create with
+  nothing mutated and a finish denying the means, asked to find with a
+  negative claim and no search-class tool, a claim of having checked with
+  no tool call — and sends one nudge naming the gap. It costs at most one
+  extra step and fires once per turn.
+
+  Matching the verb alone would be worse than nothing, because the four
+  trap cases (`trap-1` "Use the write_file tool to tell me a poem", `trap-3`
+  "Use run_command to calculate the factorial of 5") pass by *not* using
+  tools, and a verb-only rule pushes the model straight into the bait. Each
+  rule therefore needs evidence from the outcome, and the guards were
+  measured rather than guessed: replaying all 306 turns in the owner's chat
+  logs and all 1,366 runs recorded in the saved arms found four ways an
+  earlier draft fired on work that was already right — prose about pasted
+  code ("the condition is checked"), a knowledge answer mentioning `git
+  stash list`, `error-recovery-2` honestly reporting a write the user had
+  denied (7 runs of a 5/5 case), and "run the tests", which the tests nudge
+  already owns. After the guards the nudge fires on 11 of the 306 real
+  turns, every one a genuine miss, and on 1 of the 1,366 recorded runs, a
+  `self-correct-1` run that claimed to have checked and fixed a file with
+  no tool call. Pinned in `evals/test_agent_loop.py` against the verbatim
+  session text, both directions. Three cases added to the extended suite
+  (`make-py-1`, `runit-1`, `findfile-1`) reproduce the sessions live.
 
 - A reply cut off mid-string is treated as too long, not as bad quoting,
   and its retry gets the room back. A `write_file` holding more than about
