@@ -6,16 +6,37 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
-> **Gate status, 2026-09-15.** The long-write and parser entries below are
-> on `main` but have NOT passed a ship gate and must not be released
-> without one. The extended
-> arm (seed 20260915) returned RECHECK on `ambiguous-1` and `self-correct-1`,
-> and the 6-run recheck came back 4/6 and 5/6: **FAIL**. The failure is
-> unlikely to be theirs — `ambiguous-1` had no decode failures in any run, so
-> the new retry path never executed, and a control of the two cases on the
-> unchanged 2.11.1 code on the same warm server scored 6/6 and 3/6, the same
-> 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
-> failures. Re-gate on a quiet platform before releasing, or revert.
+> **Gate status, 2026-09-16: FAIL, and NOT released.** Everything under
+> Unreleased is on `main` and has been gated once, together, on a quiet
+> machine (8 invalid runs of 245, 3.3 %, against 23 of 205 the night
+> before). The arm returned RECHECK on four cases; three recovered at 6
+> runs and `factual-1` came back 4/6, which is BROKEN by the gate's rule,
+> so nothing ships.
+>
+> What the FAIL is: `factual-1` asks for a list comprehension and is
+> answered by the direct no-tools stage, which none of these changes
+> touch. The two misses answer with the even numbers instead of their
+> squares. A control of that case alone on the unchanged pre-2.12 tree,
+> same warm server, scored **3/6 — worse than the candidate's 4/6, with
+> the same failure mode** (`evals/results/control_factual1_20260916.json`).
+> The case was 6/6 in the 2026-09-05 baseline and is unstable tonight on
+> both trees. Across the whole arm the two trees are at parity: run level
+> 164/202 vs 165/208, Fisher p=0.71; pass^k 29 vs 31, McNemar p=0.625,
+> three cases lost and one gained.
+>
+> The rule is that a FAIL surviving its recheck does not ship, and a
+> control that explains a FAIL is evidence, not an exemption, so this
+> stays unreleased until a gate passes outright. What a re-gate needs is a
+> night when `factual-1` is stable on unchanged code; if it is not, the
+> case belongs on the ceiling panel and that is a change to the gate set,
+> which is the owner's call, not one to make while the arm is running.
+>
+> Measured gains in the same arm, reported not gated: `trap-4` 0/5 → 2/4,
+> `ambiguous-2` 0/5 → 2/5, `numeric-1` 1/5 → 3/5, `lint-1` 3/5 → 5/5, and
+> of the three new cases `make-py-1` 4/4 and `runit-1` 4/5 — the two that
+> reproduce the sessions this work exists for. `findfile-1` is 2/5: the
+> model now searches, and then names the wrong file in its answer, which
+> is a real defect the case was written to expose.
 
 - Every suite reports the platform it ran on. An arm's invalid runs are a
   property of the machine, not of the code, and on 2026-09-15 that
