@@ -115,6 +115,22 @@ the Hexagon NPU, not single-run anecdotes.
   it fires on 1 of the 309 real turns, the contradiction above, and on 0 of
   the 1,366 recorded runs.
 
+- The verification nudge asks for the file to be READ, then checked — the
+  first version of it, earlier the same night, said "check it with
+  verify_syntax" INSTEAD of "read_file", and that was wrong in a way a 5-run
+  arm could not see. A checker proves a file parses; it does not prove the
+  edit landed. Measured at 15 runs: `agentic-3` ("read config.json, add a
+  key, then read it again to confirm") used `verify_syntax` in 4 of 14 runs
+  and no read-class tool at all in 3, against 0 of 37 runs across the seven
+  arms before the change (p=0.004), and fell to 10/14 from a pooled 89-91 %.
+  `claims-2` used a read-class tool in 0 of 5 runs against 7 of 10 before
+  (p=0.026), and its failures are the damning ones: the edit missed,
+  `verify_syntax` passed on the unchanged file, and the finish claimed
+  success — the exact false claim this gate exists to stop, reintroduced by
+  the gate's own wording. The nudge now leads with `read_file` and appends
+  the checker for code, and the test pins the ordering rather than the
+  earlier, wrong assertion.
+
 - A reply that is not a usable action is no longer handed to the user as
   JSON. In the owner's 2026-09-10 13:41 session the model asked three times
   for `search_database`, a tool that does not exist; the two retries are

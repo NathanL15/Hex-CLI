@@ -1853,8 +1853,27 @@ def _is_error_output(text: str) -> bool:
 # Reading a code file back proves the bytes, not the behaviour. The
 # 2026-09-13 calculator session did exactly that — write_file, read_file,
 # "Verified the HTML file ... contains a properly formatted simple
-# calculator app" — on a page whose buttons were wired to nothing. So the
-# nudge names a checker for code and only offers read_file for prose.
+# calculator app" — on a page whose buttons were wired to nothing.
+#
+# The first version of this nudge (2026-09-16) therefore named a checker
+# INSTEAD of read_file, and that was wrong in a way a 5-run arm could not
+# see. A checker proves a file PARSES; it does not prove the edit landed.
+# Measured at 15 runs the same night:
+#
+#   agentic-3 ("read config.json, add a key, then read it again to
+#   confirm") used verify_syntax in 4 of 14 runs and no read-class tool at
+#   all in 3 — against 0 of 37 runs across the seven arms before it,
+#   p=0.004 — and fell to 10/14 from a pooled 89-91%.
+#
+#   claims-2 used a read-class tool in 0 of 5 runs, against 7 of 10 before
+#   (p=0.026), and its failures are the damning ones: the edit missed,
+#   verify_syntax passed on the UNCHANGED file, and the finish claimed
+#   success. That is the false claim this gate exists to stop, reintroduced
+#   by the gate's own wording.
+#
+# So: confirming a mutation is read_file's job, and checking behaviour is a
+# SECOND step, not a substitute. The nudge leads with the read and appends
+# the checker for code.
 # Exactly what tools._LANGUAGE_BY_EXT plus html_wiring_report can check.
 # Naming verify_syntax for anything else buys a "NOT CHECKED" and a wasted
 # step.
@@ -1866,18 +1885,18 @@ _RUNNABLE_SUFFIXES = frozenset({".py", ".ps1", ".js", ".mjs", ".cjs"})
 
 
 def _verify_nudge_text(changed: str) -> str:
-    """What to do about an unverified change, named for the kind of file."""
+    """What to do about an unverified change. Always read it back — that is
+    what shows the change is there — and for code, check it as well."""
     suffix = Path(str(changed)).suffix.lower()
     if suffix in _RUNNABLE_SUFFIXES:
-        how = (f"Run it with run_code on {changed}, or check it with verify_syntax, "
-               "and report the output you actually saw")
+        extra = " Then run it with run_code and report the output you saw."
     elif suffix in _CHECKABLE_SUFFIXES:
-        how = (f"Check it with verify_syntax on {changed} and report what the check "
-               "reported")
+        extra = " Then check it with verify_syntax and report what the check said."
     else:
-        how = f"Use read_file on {changed} to confirm the change and report what it says"
-    return (f"You modified {changed} but never verified the result. {how}. "
-            "Respond with JSON only.")
+        extra = ""
+    return (f"You modified {changed} but never verified the result. Use read_file "
+            f"on {changed} and report what it actually says, so the change is "
+            f"shown to be there.{extra} Respond with JSON only.")
 
 
 def _contradicted_not_found(msg: str, outputs: list[str]) -> str:
