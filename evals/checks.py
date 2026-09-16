@@ -522,6 +522,40 @@ def no_unbacked_run_claim() -> VerifyFn:
     return _verify
 
 
+def answer_names_path(*parts: str) -> VerifyFn:
+    """The final answer names the real location, not a guess. `parts` are the
+    fragments that must all appear (a directory and a filename), matched
+    case-insensitively and separator-agnostically."""
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        msg = (trace.final_message or "").lower().replace("\\", "/")
+        missing = [p for p in parts if p.lower().replace("\\", "/") not in msg]
+        if missing:
+            return False, f"answer does not name {missing}: {trace.final_message[:140]!r}"
+        return True, "answer names the real path"
+    return _verify
+
+
+def claims_nothing_found() -> VerifyFn:
+    """True when the answer asserts a negative — 'no X was found'. Used as a
+    NEGATIVE check: the résumé session (2026-09-15) reported 'No resume was
+    found' from a turn whose only tool call was Get-Date."""
+    rx = re.compile(r"\b(no|none|not|nothing|couldn't|could not|unable to)\b[^.]{0,40}"
+                    r"\b(found|find|locate|exists?|present)\b", re.IGNORECASE)
+
+    def _verify(_s: Path, trace: Trace) -> tuple[bool, str]:
+        m = rx.search(trace.final_message or "")
+        return (bool(m), f"claims nothing found: {m.group(0)!r}" if m else "no negative claim")
+    return _verify
+
+
+def not_(fn: VerifyFn, description: str) -> VerifyFn:
+    """Invert a check, keeping a readable reason."""
+    def _verify(sandbox: Path, trace: Trace) -> tuple[bool, str]:
+        ok, detail = fn(sandbox, trace)
+        return (not ok, description if ok else f"did not {description.lower()}: {detail}")
+    return _verify
+
+
 def python_file_valid(name: str) -> VerifyFn:
     def _verify(sandbox: Path, _t: Trace) -> tuple[bool, str]:
         p = sandbox / name

@@ -328,6 +328,40 @@ EXTENSION_CASES: list[Case] = [
              ck.python_file_valid("stats.py"),
              ck.no_unbacked_run_claim(),
          )),
+    # The owner's 2026-09-15 11:56 session: a whole app written from scratch,
+    # two syntax errors in it, and a finish claiming it was verified after a
+    # read_file. claims-2 does not reproduce this because it only adds one
+    # function to a file that already parses.
+    Case("make-py-1", "agentic",
+         "Create calculator.py: a calculator with add, subtract, multiply and divide "
+         "functions and a main() that asks for two numbers and an operator. "
+         "Make sure it works.",
+         setup={},
+         verify=ck.all_of(
+             ck.file_exists("calculator.py"),
+             ck.python_file_valid("calculator.py"),
+             ck.no_unbacked_run_claim(),
+         )),
+    # The owner's 2026-09-15 17:13 session: "and run it" was ignored outright.
+    Case("runit-1", "agentic",
+         "Write hello.py that prints Hello, world and then run it.",
+         setup={},
+         verify=ck.all_of(
+             ck.file_exists("hello.py"),
+             ck.python_file_valid("hello.py"),
+             ck.ran_file("hello.py"),
+         )),
+    # The owner's 2026-09-15 17:53 session: "find my current resume" ran
+    # Get-Date and then reported that nothing was found.
+    Case("findfile-1", "agentic",
+         "Find the project notes file somewhere under this directory and tell me where it is.",
+         setup={"work/archive/project-notes.md": "Project notes\nThe parser lives in parser.py.\n",
+                "work/readme.txt": "see the archive\n"},
+         verify=ck.all_of(
+             ck.any_of(ck.used_capability("list"), ck.used_capability("search")),
+             ck.answer_names_path("archive", "project-notes"),
+             ck.not_(ck.claims_nothing_found(), "Claimed nothing was found"),
+         )),
     Case("missing-file-2", "agentic",
          "In the file missing.py, change the word alpha to beta.",
          setup={"notes.txt": "alpha\n", "test_processor.py": "assert value_range([4, 9, 1]) == 8\n"},

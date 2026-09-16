@@ -220,6 +220,43 @@ def test_backend_failures_are_invalid_not_model_failures() -> None:
     assert is_backend_failure(ValueError("bad args")) is None
 
 
+def _trace(final: str, tools: list[str] | None = None) -> Any:
+    """A Trace with just the fields the graders read."""
+    from evals.runner import ToolCall, Trace
+    t = Trace()
+    t.final_message = final
+    t.tool_calls = [ToolCall(step=i, tool=name, args={}, output="ok", latency_s=0.0, status="ok")
+                    for i, name in enumerate(tools or [])]
+    return t
+
+
+def test_graders_for_the_find_a_file_case() -> None:
+    """From the owner's 2026-09-15 17:53 session: "find my current resume" ran
+    Get-Date and finished "No resume was found in the workspace directory"."""
+    from evals import checks as ck
+
+    real = "The current date is September 15, 2026. No resume was found in the workspace directory."
+    assert ck.claims_nothing_found()(Path("."), _trace(real))[0]
+    # The inverted form is what the case actually uses.
+    negative = ck.not_(ck.claims_nothing_found(), "Claimed nothing was found")
+    assert not negative(Path("."), _trace(real))[0]
+    good = "The notes are at work/archive/project-notes.md."
+    assert negative(Path("."), _trace(good))[0]
+    assert ck.answer_names_path("archive", "project-notes")(Path("."), _trace(good))[0]
+    # Separator-agnostic and case-insensitive.
+    assert ck.answer_names_path("archive", "project-notes")(
+        Path("."), _trace(r"Found it: WORK\ARCHIVE\Project-Notes.md"))[0]
+    assert not ck.answer_names_path("archive")(Path("."), _trace("It is in work/readme.txt"))[0]
+    # A search-class tool is required; Get-Date (run_command) is not one.
+    searched = ck.any_of(ck.used_capability("list"), ck.used_capability("search"))
+    assert not searched(Path("."), _trace(real, ["run_command"]))[0]
+    assert searched(Path("."), _trace(good, ["find_files"]))[0]
+    assert searched(Path("."), _trace(good, ["search_files"]))[0]
+    # A plain statement of fact must not read as a negative claim.
+    assert not ck.claims_nothing_found()(
+        Path("."), _trace("The file contains four functions and a main block."))[0]
+
+
 def test_wilson_interval_known_values() -> None:
     lo, hi = wilson_interval(5, 5)
     assert lo > 0.5 and hi == 1.0, (lo, hi)
@@ -568,6 +605,7 @@ TESTS = [
     test_eval_env_restores_cwd_and_patches,
     test_sandbox_prompt_parity_includes_conditional_schema,
     test_backend_failures_are_invalid_not_model_failures,
+    test_graders_for_the_find_a_file_case,
     test_wilson_interval_known_values,
     test_aggregate_pass_semantics,
     test_int_grading_rejects_digit_concatenation,
