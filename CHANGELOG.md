@@ -27,7 +27,11 @@ the Hexagon NPU, not single-run anecdotes.
   reports what was written during the suite: "Platform: 23 invalid of 205
   runs; 67 Rewind failures in 509 requests (13%); 225 busy-slot retries",
   saved into the results file so `compare.py` and `gate.py` read a verdict
-  with its conditions attached. Five per cent invalid or more also raises a
+  with its conditions attached. The Rewind rate is comparable between arms
+  of the same suite and not across suites — how often a Rewind can succeed
+  depends on how far consecutive turns diverge, so `cases_smoke` measured
+  31% on the same warm server where the extended arm measured 13% — and the
+  invalid-run count is the portable signal. Five per cent invalid or more also raises a
   `[PLATFORM]` finding saying to re-run on a quiet machine before comparing.
   Any backend without that log reports nothing.
 

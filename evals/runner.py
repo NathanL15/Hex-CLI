@@ -696,6 +696,14 @@ def run_scenarios(config: dict[str, Any], scenarios: list[Scenario], runs: int,
 # behind them and long turns then running out their 300 s client timeout.
 # A verdict reported without these numbers invites reading a platform night
 # as a code regression, so the suite reads them itself.
+#
+# Read the rate with care. Every failure is a real rebuild, but how often a
+# Rewind CAN succeed depends on how far consecutive turns diverge from the
+# cached prefix, which is a property of the suite: measured 2026-09-16 on
+# one warm server, cases_smoke (ten unrelated cases back to back) ran at
+# 31% while the 2026-09-15 extended arm ran at 13%. Compare this number
+# between arms of the same suite, never across suites. The invalid-run
+# count below is the portable signal.
 
 _REWIND_FAIL_RE = re.compile(r"Rewind query failed", re.IGNORECASE)
 _SLOT_BUSY_RE = re.compile(r"inference slot busy", re.IGNORECASE)
