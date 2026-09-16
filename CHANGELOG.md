@@ -17,6 +17,24 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- A "not found" that the turn's own listing disproves gets one nudge. From
+  the owner's 2026-09-15 17:53 session, verbatim: "The folder 'Applications'
+  was not found in the Documents directory. However, the directory
+  'Applications' exists under the path C:\Users\Natha\Documents\Applications."
+  The `list_directory` call in that same turn had returned `Applications/`
+  as its first line. No gate reads tool output, so nothing caught it. The
+  finish gate now looks for a named thing the answer says is missing and
+  checks it against the listings this turn actually returned.
+
+  Only a successful `list_directory`, `find_files`, `search_files` or `grep`
+  counts as evidence. Every other tool echoes the name back when it fails
+  ("File not found: ...missing.py"), and taking that as proof fired on 80 of
+  1,366 recorded runs, including every run of `missing-file-1` and
+  `missing-file-2` — 5/5 cases whose correct answer is precisely "missing.py
+  was not found; notes.txt and other.txt are present". With the restriction
+  it fires on 1 of the 309 real turns, the contradiction above, and on 0 of
+  the 1,366 recorded runs.
+
 - A reply that is not a usable action is no longer handed to the user as
   JSON. In the owner's 2026-09-10 13:41 session the model asked three times
   for `search_database`, a tool that does not exist; the two retries are

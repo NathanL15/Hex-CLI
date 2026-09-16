@@ -1146,6 +1146,7 @@ def _run_autopilot_turn(
     _probe(probe, "on_start", system_prompt, [dict(m) for m in messages])
 
     last_tool_output = ""
+    _turn_listings: list[str] = []        # successful listings, for _contradicted_not_found
     total_eval = 0
     tools_used: list[str] = []
     touched_paths: list[str] = []
@@ -1168,6 +1169,7 @@ def _run_autopilot_turn(
     _ran_anything = False          # any run_code / run_command this turn: the evidence a behaviour claim needs
     _claim_nudge_used = False
     _intent_nudge_used = False
+    _contradiction_nudge_used = False
     _unbacked_claim = False
     # The last test run's failure output (None once a run passes), so a
     # finish right after a failing run can be sent back once more.
@@ -1326,6 +1328,18 @@ def _run_autopilot_turn(
                     messages.append({"role": "user", "content": _claim_nudge_text(claim)})
                     continue
                 _unbacked_claim = True
+            # A "not found" the turn's own tool output disproves. One
+            # nudge naming the line that contradicts it.
+            if (not _contradiction_nudge_used and config.get("require_verification", True)):
+                _contradicted = _contradicted_not_found(msg, _turn_listings)
+                if _contradicted:
+                    _contradiction_nudge_used = True
+                    messages.append({"role": "assistant", "content": strip_thinking(raw)})
+                    messages.append({"role": "user", "content": (
+                        f"Your own tool output this turn lists {_contradicted}. Read it "
+                        f"again and answer from what it says, not from memory. "
+                        f"Respond with JSON only.")})
+                    continue
             # The turn did none of the work the request implies (see
             # _intent_nudge): asked to run and ran nothing, refused for want
             # of tools it has, reported nothing found without searching, or
@@ -1457,6 +1471,9 @@ def _run_autopilot_turn(
                 pass
 
         last_tool_output = tool_output
+        if tool_name in _LISTING_TOOLS and not _is_error_output(tool_output):
+            _turn_listings.append(tool_output[:4000])
+            del _turn_listings[:-6]
         if _run_targets and tool_name in ("run_code", "run_command") and _ran_tests(_run_targets[-1:]):
             _last_test_failure = _test_failure_tail(tool_output)
         _is_error = tool_output.lstrip().startswith("Error:")
@@ -1792,6 +1809,70 @@ _NAMES_WORKSPACE_RE = re.compile(
     r"|\S+\.(py|ps1|html|js|txt|md|json|csv|ts|css)\b", re.IGNORECASE)
 
 _SEARCH_TOOLS = frozenset({"find_files", "search_files", "list_directory", "grep", "shell"})
+
+
+# ── A "not found" that the turn's own tool output disproves ──────────────
+#
+# 2026-09-15 17:53 turn 4, verbatim: "The folder 'Applications' was not
+# found in the Documents directory. However, the directory 'Applications'
+# exists under the path C:\\Users\\Natha\\Documents\\Applications." The
+# list_directory call in that same turn returned "Applications/" as its
+# first line. The model is not missing evidence here, it is contradicting
+# evidence it already has, and no existing gate reads tool output.
+
+_NOT_FOUND_NAME_RE = re.compile(
+    # "Applications was not found", "hilo.ps1 does not exist"
+    r"(?:the\s+)?(?:folder|directory|file|path|script)?\s*"
+    r"['\"]?(?P<subject>[\w.\-]{3,64})['\"]?\s+(?:was|is|were|are|does|do)\s+"
+    r"(?:not|n't)\s+(?:found|there|present|exist)"
+    # "no matches were found for 'threeSum'", "nothing found matching hilo"
+    r"|\bno(?:thing)?\s+[\w]*\s*(?:was|were)?\s*found\s+(?:for|matching|named|called)\s+"
+    r"['\"]?(?P<target>[\w.\-]{3,64})['\"]?"
+    # "no resume was found"
+    r"|\bno\s+['\"]?(?P<thing>[\w.\-]{3,64})['\"]?\s+(?:was|were)?\s*found",
+    re.IGNORECASE)
+
+# Words that name nothing in particular, and the protocol's own vocabulary:
+# "old_string was not found in the file" is edit_file reporting a failure,
+# which is the harness talking, not a claim about the workspace.
+_NOT_A_NAME = frozenset({
+    "old_string", "new_string", "file", "files", "folder", "directory", "path",
+    "the", "any", "such", "match", "matches", "error", "content", "string",
+    "result", "results", "data", "text", "line", "lines", "name", "item",
+})
+
+
+# Only these tools answer "what is there"; only their output can disprove a
+# "not found". Every other tool ECHOES the name the model asked for when it
+# fails ("File not found: ...missing.py", and A3's hint besides), and reading
+# that back as evidence fired on 80 of 1,366 recorded runs, including every
+# run of missing-file-1 and missing-file-2, which are 5/5 cases whose correct
+# answer IS "missing.py was not found; notes.txt and other.txt are present".
+_LISTING_TOOLS = frozenset({"list_directory", "find_files", "search_files", "grep"})
+
+
+def _is_error_output(text: str) -> bool:
+    """A tool result that reports a failure rather than an answer."""
+    head = (text or "").lstrip()[:80].lower()
+    return head.startswith("error:") or head.startswith("file not found") or \
+        head.startswith("directory not found")
+
+
+def _contradicted_not_found(msg: str, outputs: list[str]) -> str:
+    """The name a finish says is missing, when a listing this turn returned
+    contains it. `outputs` holds successful listing output only. Empty string
+    when there is no contradiction."""
+    if not outputs:
+        return ""
+    haystack = "\n".join(outputs).lower()
+    for match in _NOT_FOUND_NAME_RE.finditer(msg or ""):
+        name = (match.group("subject") or match.group("target")
+                or match.group("thing") or "").strip(" .'\"")
+        if len(name) < 3 or name.lower() in _NOT_A_NAME:
+            continue
+        if name.lower() in haystack:
+            return name
+    return ""
 
 
 def _intent_nudge(query: str, msg: str, *, mutated: bool, ran: bool,

@@ -607,6 +607,78 @@ def test_json_the_user_asked_for_still_reaches_them() -> None:
     assert sa.run_autopilot(_CFG, [], "write me a package.json", _SHELL) == body
 
 
+# ── A "not found" the turn's own listing disproves ───────────────────────
+
+_DOCS_LISTING = ("Applications/\nAutoHotkey/\nCustom Office Templates/\nflocus-local/\n"
+                 "GitHub/\nminitube/\nMy Games/\n")
+
+
+def test_a_not_found_claim_against_this_turns_listing_is_caught() -> None:
+    """2026-09-15 17:53 turn 4, verbatim: list_directory had just returned
+    Applications/ as its first line."""
+    real = ("The folder 'Applications' was not found in the Documents directory. However, "
+            "the directory 'Applications' exists under the path "
+            "'C:\\Users\\Natha\\Documents\\Applications'.")
+    assert sa._contradicted_not_found(real, [_DOCS_LISTING]) == "Applications"
+    assert sa._contradicted_not_found("No matches were found for 'threeSum'.",
+                                      ["def threeSum(self, nums):"]) == "threeSum"
+    assert sa._contradicted_not_found("Nothing found matching hilo.ps1.",
+                                      ["hilo.ps1\nnotes.md\n"]) == "hilo.ps1"
+
+
+def test_an_honest_not_found_is_left_alone() -> None:
+    for msg, listings, why in [
+        ("No resume was found in the workspace directory.", [_DOCS_LISTING],
+         "the name really is not in the listing"),
+        ("hilo.ps1 was not found in that directory.", ["hielo.ps1\nnotes.md\n"],
+         "a near miss is not a match"),
+        ("The file config.json does not exist.", [], "no listing ran"),
+        ("Error: old_string was not found in the file.", [_DOCS_LISTING],
+         "the harness's own edit failure, not a claim about the workspace"),
+        ("No errors were found in the file.", ["OK: parsed\n"], "errors is not a name"),
+        ("missing.py was not found in the workspace. Similar files present: notes.txt.",
+         ["notes.txt\nother.txt\n"], "missing-file-1's correct answer, 5/5"),
+    ]:
+        assert sa._contradicted_not_found(msg, listings) == "", why
+
+
+def test_only_a_successful_listing_counts_as_evidence() -> None:
+    """A failing tool echoes the name back, and A3's hint names neighbours
+    besides; reading that as evidence fired on 80 of 1,366 recorded runs."""
+    seen, spy = _spy_on_messages()
+    with tempfile.TemporaryDirectory() as tmp, \
+            unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        cwd = Path(tmp).resolve()
+        (cwd / "notes.txt").write_text("notes", encoding="utf-8")
+        target = str(cwd / "missing.py").replace("\\", "\\\\")
+        sa.set_mock_responses([
+            '{"action":"read_file","args":{"path":"' + target + '"}}',
+            '{"action":"finish","message":"missing.py was not found in the workspace."}',
+        ] + ['{"action":"finish","message":"missing.py was not found in the workspace."}'] * 3)
+        result = sa.run_autopilot(dict(_CFG, write_scope="anywhere"),
+                                  [], "read missing.py", _SHELL)
+    assert "missing.py" in result, result
+    assert not any("lists missing.py" in str(m.get("content", ""))
+                   for msgs in seen for m in msgs)
+
+
+def test_the_contradiction_nudge_fires_once_in_the_loop() -> None:
+    seen, spy = _spy_on_messages()
+    with tempfile.TemporaryDirectory() as tmp, \
+            unittest.mock.patch.object(sa, "call_llm", side_effect=spy):
+        cwd = Path(tmp).resolve()
+        (cwd / "Applications").mkdir()
+        (cwd / "GitHub").mkdir()
+        listing = str(cwd).replace("\\", "\\\\")
+        sa.set_mock_responses([
+            '{"action":"list_directory","args":{"path":"' + listing + '"}}',
+        ] + ['{"action":"finish","message":"The folder Applications was not found."}'] * 4)
+        sa.run_autopilot(dict(_CFG, write_scope="anywhere"), [], "check applications", _SHELL)
+    nudges = [str(m["content"]) for msgs in seen for m in msgs
+              if m.get("role") == "user" and "lists Applications" in str(m.get("content", ""))]
+    assert len(set(nudges)) == 1, nudges
+
+
 def _spy_on_messages() -> tuple[list, Any]:
     seen: list[list[dict[str, Any]]] = []
     real = sa.call_llm
@@ -1442,6 +1514,10 @@ TESTS = [
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
+    test_a_not_found_claim_against_this_turns_listing_is_caught,
+    test_an_honest_not_found_is_left_alone,
+    test_only_a_successful_listing_counts_as_evidence,
+    test_the_contradiction_nudge_fires_once_in_the_loop,
     test_an_unusable_action_is_not_handed_to_the_user_as_json,
     test_json_the_user_asked_for_still_reaches_them,
     test_a_mistyped_filename_gets_the_real_name_back,
