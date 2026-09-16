@@ -679,6 +679,28 @@ def test_the_contradiction_nudge_fires_once_in_the_loop() -> None:
     assert len(set(nudges)) == 1, nudges
 
 
+def test_the_verification_nudge_names_a_checker_for_code() -> None:
+    """The 2026-09-13 calculator session verified a dead page by reading it
+    back, which the old nudge offered first: "Use read_file on {file} (or
+    run_code / verify_syntax if it is code)"."""
+    runnable = sa._verify_nudge_text("hilo.py")
+    assert "run_code" in runnable and "read_file" not in runnable, runnable
+
+    page = sa._verify_nudge_text("calculator.html")
+    assert "verify_syntax" in page and "read_file" not in page, page
+
+    # Prose has no checker, so reading it back is the right move.
+    prose = sa._verify_nudge_text("notes.md")
+    assert "read_file" in prose, prose
+
+    # Nothing is offered that the checker cannot actually check: a suffix
+    # outside tools._LANGUAGE_BY_EXT would only earn a "NOT CHECKED".
+    for name in ("style.css", "data.csv", "the file"):
+        assert "verify_syntax" not in sa._verify_nudge_text(name), name
+    for suffix in sa._CHECKABLE_SUFFIXES - {".html", ".htm"}:
+        assert suffix in sa.tools._LANGUAGE_BY_EXT, suffix
+
+
 def _spy_on_messages() -> tuple[list, Any]:
     seen: list[list[dict[str, Any]]] = []
     real = sa.call_llm
@@ -1514,6 +1536,7 @@ TESTS = [
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
+    test_the_verification_nudge_names_a_checker_for_code,
     test_a_not_found_claim_against_this_turns_listing_is_caught,
     test_an_honest_not_found_is_left_alone,
     test_only_a_successful_listing_counts_as_evidence,

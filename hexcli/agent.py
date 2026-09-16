@@ -1283,15 +1283,7 @@ def _run_autopilot_turn(
                 _verify_nudge_used = True
                 changed = touched_paths[-1] if touched_paths else "the file"
                 messages.append({"role": "assistant", "content": strip_thinking(raw)})
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"You modified {changed} but never verified the result. "
-                        f"Use read_file on {changed} (or run_code / verify_syntax if it "
-                        "is code) to confirm the change, then report what you actually "
-                        "observed. Respond with JSON only."
-                    ),
-                })
+                messages.append({"role": "user", "content": _verify_nudge_text(changed)})
                 continue
             # Tests nudge — the user asked for the tests to be run and no run
             # tool executed a test this turn (live tour 2026-09-12: "fix it
@@ -1856,6 +1848,36 @@ def _is_error_output(text: str) -> bool:
     head = (text or "").lstrip()[:80].lower()
     return head.startswith("error:") or head.startswith("file not found") or \
         head.startswith("directory not found")
+
+
+# Reading a code file back proves the bytes, not the behaviour. The
+# 2026-09-13 calculator session did exactly that — write_file, read_file,
+# "Verified the HTML file ... contains a properly formatted simple
+# calculator app" — on a page whose buttons were wired to nothing. So the
+# nudge names a checker for code and only offers read_file for prose.
+# Exactly what tools._LANGUAGE_BY_EXT plus html_wiring_report can check.
+# Naming verify_syntax for anything else buys a "NOT CHECKED" and a wasted
+# step.
+_CHECKABLE_SUFFIXES = frozenset({
+    ".py", ".pyw", ".json", ".ps1", ".psm1", ".psd1",
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".htm",
+})
+_RUNNABLE_SUFFIXES = frozenset({".py", ".ps1", ".js", ".mjs", ".cjs"})
+
+
+def _verify_nudge_text(changed: str) -> str:
+    """What to do about an unverified change, named for the kind of file."""
+    suffix = Path(str(changed)).suffix.lower()
+    if suffix in _RUNNABLE_SUFFIXES:
+        how = (f"Run it with run_code on {changed}, or check it with verify_syntax, "
+               "and report the output you actually saw")
+    elif suffix in _CHECKABLE_SUFFIXES:
+        how = (f"Check it with verify_syntax on {changed} and report what the check "
+               "reported")
+    else:
+        how = f"Use read_file on {changed} to confirm the change and report what it says"
+    return (f"You modified {changed} but never verified the result. {how}. "
+            "Respond with JSON only.")
 
 
 def _contradicted_not_found(msg: str, outputs: list[str]) -> str:

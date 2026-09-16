@@ -17,6 +17,18 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- The verification nudge no longer offers `read_file` for a code file.
+  Reading a file back proves the bytes, not the behaviour, and the nudge
+  put that option first: "Use read_file on {file} (or run_code /
+  verify_syntax if it is code)". The 2026-09-13 calculator session took
+  exactly that route — write_file, read_file, "Verified the HTML file ...
+  contains a properly formatted simple calculator app" — on a page whose
+  buttons were wired to nothing. A runnable file is now told to run, a
+  checkable one to run the checker, and only prose is told to read. The
+  checkable set is exactly what `tools._LANGUAGE_BY_EXT` and
+  `html_wiring_report` handle, so the nudge never sends the model somewhere
+  that can only answer "NOT CHECKED"; a test pins the two sets together.
+
 - A "not found" that the turn's own listing disproves gets one nudge. From
   the owner's 2026-09-15 17:53 session, verbatim: "The folder 'Applications'
   was not found in the Documents directory. However, the directory
