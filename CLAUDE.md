@@ -57,7 +57,7 @@ Hard numbers that shape every decision:
 | Per-user config | `~/.shellai/shellai.json`; per-project `.shellai/config.json` deep-merged over it |
 | Session state | `<cwd>/.shellai/` (audit.log, logs/, vector_store/, shellai.lock) and `~/.shellai/` (history.json, chatlog/, input_history, commands/, global_vector_store/) |
 | Server log | `~/.shellai/npurun_server.log`, truncated on every start |
-| Eval results | `evals/results/` (gitignored except the tracked few). Gate baselines: `ask_rule_r5_20260905.json` + `persona_guard2_r5_20260912.json` (the 2.7.x arm, 30/44); multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
+| Eval results | `evals/results/` (gitignored except the tracked few). Gate baselines: **UNPINNED, and that changes verdicts — see §6.** This line has long named `ask_rule_r5_20260905.json` + `persona_guard2_r5_20260912.json` (the 2.7.x arm, 30/44) while the command in §6 uses `ask_rule` + `baseline_20260905.json`; the two pairs give gate sets of 29 and 27 cases and disagree about four of them, including `ambiguous-1`, which broke the gate on 09-15 and is not even gated under the §6 pair; multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
 | Study data and internal docs | `docs/local/` (git-ignored, owner rule 2026-09-14: only the paper and user-facing docs are committed): backend study, V2 plan/roadmap, levers memo, ARCHITECTURE, related-work survey, TODO |
 | Claude Code memory for this project | `~/.claude/projects/C--Users-Natha/memory/` (hexcli_*.md, project_local_shell_ai.md) — historical detail beyond this file |
 
@@ -251,6 +251,33 @@ are the superseded v1 instrument; do not use them.
 (27 of 41 today). A candidate must keep every one; one miss at 3 runs =
 RECHECK at 6 runs with one miss allowed; the rest is a ceiling panel,
 reported not gated. Canary drift > 2× flags every late case.
+
+**The gate is mis-calibrated, measured 2026-09-16 — read this before
+believing a FAIL.** Run `python evals/gate.py --baseline <b1> --baseline
+<b2> --calibrate <arm.json> ...` for the current numbers. "3/3 in every
+baseline" filters for luck, not reliability: a case at a true 86 % is 3/3
+in one arm about 64 % of the time. Five members of the set are in exactly
+that position over the deduplicated production arms — `factual-1` 86–90 %,
+`self-correct-1` 87–92 %, `agentic-3` 89–91 %, `regression-anchor-1` 91 %,
+`agentic-2` 94 % — and the rule then demands 5/5 from each. Consequences,
+all three measured and agreeing:
+
+| | |
+|---|---|
+| a candidate that changed NOTHING takes a clean PASS | 1–3 % of the time |
+| …and is declared FAIL | 16–31 % of the time |
+| gate runs on file that went to RECHECK first | 8 of 8 |
+| of those, ended FAIL | 3 — `factual-1`, `agentic-3`, `ambiguous-1` |
+| those three cases' place in the calibration table | all flagged not-gate-worthy |
+
+Two of those three FAILs (09-15, 09-16) were overturned by a control on
+unchanged code, which is what a false alarm looks like. The gate set also
+depends on WHICH baselines are passed — 27, 29, 31 or 32 cases for the
+pairs in use — and nothing pins them, so the same candidate can pass under
+one documented command and fail under the other. Re-basing the set (drop
+the five, or judge each case against its own measured rate) is a change to
+the instrument and is the owner's call; until then, answer a FAIL with a
+control on unchanged code and read the whole-arm statistics.
 
 ```powershell
 python evals/gate.py --baseline evals/results/ask_rule_r5_20260905.json --baseline evals/results/baseline_20260905.json evals/results/<candidate>.json
