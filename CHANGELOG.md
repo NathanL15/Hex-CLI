@@ -17,6 +17,18 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- An action the model wrote in Python's spelling is still an action. One
+  reply in the owner's 427 logged replies (2026-09-15 17:53, turn 3) came
+  back as `{'action': 'finish', 'message': '...'}`, and the cost was worse
+  than a wasted retry: with no JSON to decode, the prose fallback handed the
+  whole literal back as the finish message, so the user read a Python dict
+  where the answer should have been. `parsing._loads_python_object` reads it
+  with `ast.literal_eval`, which evaluates no calls, names or operators, and
+  accepts the result only when it is JSON-shaped (no tuples, no sets, string
+  keys) and actually looks like an action. A dict mentioned in prose, a
+  literal holding a call, and anything else stay prose, and a reply that
+  contains real JSON never reaches the fallback at all.
+
 - A not-found error names the closest file that does exist. "File not
   found: C:\...\hielo.ps1" is a dead end, and the 4B model does not treat
   it as one. In the owner's 2026-09-15 17:13 session it wrote hilo.ps1,

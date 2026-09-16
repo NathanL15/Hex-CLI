@@ -13,6 +13,7 @@ verbatim — behavior changes do not belong in split commits.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -218,8 +219,55 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     return None
 
 
+def _loads_python_object(text: str) -> dict[str, Any] | None:
+    """A dict the model wrote in Python's spelling rather than JSON's:
+    {'action': 'finish', 'message': '...'}. One reply in the owner's 427
+    logged replies is this (2026-09-15 17:53 turn 3), and the cost is worse
+    than a retry: with no JSON to decode, the prose fallback hands the whole
+    literal back as the finish message, so the user reads
+    "{'action': 'finish', 'message': ...}" as the answer.
+
+    ast.literal_eval evaluates no calls, names or operators, so this cannot
+    run anything; the result is still restricted to JSON-shaped data, and to
+    a dict that actually looks like an action, so that a stray Python dict
+    inside prose does not become one."""
+    start = text.find("{")
+    if start < 0 or "'" not in text[start:start + 200]:
+        return None
+    for end in range(len(text), start, -1):
+        if text[end - 1] != "}":
+            continue
+        try:
+            value = ast.literal_eval(text[start:end])
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            continue
+        if not isinstance(value, dict) or not _json_shaped(value):
+            return None
+        if not {"action", "tool", "message"} & set(value):
+            return None
+        return {str(k): v for k, v in value.items()}
+    return None
+
+
+def _json_shaped(value: Any, depth: int = 0) -> bool:
+    """True when `value` holds only what JSON can hold. A tuple or a set is
+    the model writing Python, not an action we should act on."""
+    if depth > 6:
+        return False
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, list):
+        return all(_json_shaped(v, depth + 1) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _json_shaped(v, depth + 1)
+                   for k, v in value.items())
+    return False
+
+
 def parse_agent_action(raw_text: str) -> dict[str, Any]:
     parsed = parse_json_object(raw_text)
+    if not isinstance(parsed, dict):
+        parsed = _loads_python_object(strip_thinking(raw_text))
     if isinstance(parsed, dict):
         action = str(parsed.get("action", "")).strip().lower()
         args = parsed.get("args")

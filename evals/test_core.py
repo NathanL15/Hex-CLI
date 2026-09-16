@@ -385,6 +385,44 @@ def test_parse_json_object_returns_none_for_cot_only() -> None:
 # parse_agent_action
 # ============================================================================
 
+def test_an_action_written_in_python_is_still_an_action() -> None:
+    """Verbatim from the owner's 2026-09-15 17:53 session, turn 3. Before
+    this, the prose fallback handed the whole literal back as the answer and
+    the user read a Python dict where the reply should have been."""
+    raw = ("{'action': 'finish', 'message': 'No further action required. The request to "
+           "check documents/applications was not executed as the workspace directory "
+           "was not accessible.'}")
+    result = sa.parse_agent_action(raw)
+    assert result["action"] == "finish", result
+    assert result.get("fallback") is None, result
+    assert result["message"].startswith("No further action required."), result
+    assert "{" not in result["message"], result
+
+    tool = sa.parse_agent_action("{'action': 'read_file', 'args': {'path': 'a.py'}}")
+    assert tool == {"action": "tool", "tool": "read_file", "args": {"path": "a.py"}}, tool
+
+
+def test_python_literal_fallback_refuses_everything_that_is_not_an_action() -> None:
+    for raw, why in [
+        ("Here is a dict: {'a': 1} in my answer.", "a dict in prose is not an action"),
+        ("I think {'x': 2} is the right shape.", "no action, tool or message key"),
+        ("{'action': 'finish', 'message': ('a', 'b')}", "a tuple is not JSON-shaped"),
+        ("{'action': 'finish', 'message': {1: 'x'}}", "a non-string key is not JSON-shaped"),
+        ("{'action': 'finish', 'message': open('x')}", "literal_eval evaluates no calls"),
+        ("The answer is 42.", "plain prose stays prose"),
+    ]:
+        result = sa.parse_agent_action(raw)
+        assert result.get("fallback") == "prose", (why, result)
+        assert result["message"] == sa.strip_thinking(raw).strip(), (why, result)
+
+
+def test_json_still_wins_over_the_python_reading() -> None:
+    """The fallback runs only when there is no JSON object to decode, so a
+    reply that is both stays exactly as it was."""
+    result = sa.parse_agent_action('{"action":"finish","message":"it\'s fine"}')
+    assert result == {"action": "finish", "message": "it\'s fine"}, result
+
+
 def test_parse_agent_action_tool_by_action_field() -> None:
     for tool in list(sa.TOOL_NAMES)[:3]:
         raw = json.dumps({"action": tool, "args": {"path": "."}})
@@ -1517,6 +1555,9 @@ TESTS = [
     test_parse_json_object_returns_none_for_plain_text,
     test_parse_json_object_returns_none_for_empty_string,
     test_parse_json_object_returns_none_for_cot_only,
+    test_an_action_written_in_python_is_still_an_action,
+    test_python_literal_fallback_refuses_everything_that_is_not_an_action,
+    test_json_still_wins_over_the_python_reading,
     test_parse_agent_action_tool_by_action_field,
     test_parse_agent_action_explicit_tool_field,
     test_parse_agent_action_finish_action,
