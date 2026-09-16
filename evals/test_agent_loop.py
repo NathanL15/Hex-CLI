@@ -525,6 +525,68 @@ def test_intent_nudge_does_not_fire_when_the_run_happened() -> None:
                    for msgs in seen for m in msgs)
 
 
+# ── A path that is not there ─────────────────────────────────────────────
+
+
+def _hint_sandbox(tmp: str) -> Path:
+    cwd = Path(tmp).resolve()
+    (cwd / "hilo.ps1").write_text("$x = 1", encoding="utf-8")
+    (cwd / "notes.md").write_text("notes", encoding="utf-8")
+    (cwd / "archive").mkdir()
+    (cwd / "archive" / "old.txt").write_text("old", encoding="utf-8")
+    return cwd
+
+
+def test_a_mistyped_filename_gets_the_real_name_back() -> None:
+    """The 2026-09-15 17:13 session in one line: the model wrote hilo.ps1,
+    asked for hielo.ps1, and got a dead end it then argued with."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = _hint_sandbox(tmp)
+        hint = sa.tools.missing_path_hint(cwd / "hielo.ps1")
+        assert "Did you mean" in hint and "hilo.ps1" in hint, hint
+        # Same stem, different extension — the one the HiLo session needed next.
+        assert "hilo.ps1" in sa.tools.missing_path_hint(cwd / "hilo.py")
+        # A missing directory is named, so the model does not look in the leaf.
+        deep = sa.tools.missing_path_hint(cwd / "sub" / "deep" / "thing.py")
+        assert "sub does not exist" in deep, deep
+        assert "archive" in sa.tools.missing_path_hint(cwd / "archve" / "old.txt")
+        # Nothing close: say so, and say what to call instead of guessing.
+        far = sa.tools.missing_path_hint(cwd / "qqqqqqq.dat")
+        assert "list_directory" in far, far
+
+
+def test_missing_path_hint_is_silent_where_it_should_be() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = Path(tmp).resolve()
+        assert "is empty" in sa.tools.missing_path_hint(cwd / "anything.txt")
+        # A sensitive directory is never enumerated, not even as a hint.
+        with unittest.mock.patch.object(sa.tools, "_check_sensitive_path",
+                                        side_effect=RuntimeError("refused")):
+            assert sa.tools.missing_path_hint(cwd / "id_rsa") == ""
+
+
+def test_every_not_found_tool_carries_the_hint() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = _hint_sandbox(tmp)
+        cfg = dict(_CFG, write_scope="anywhere")
+        calls = [
+            ("read_file", {"path": str(cwd / "hielo.ps1")}),
+            ("list_directory", {"path": str(cwd / "arcive")}),
+            ("run_code", {"path": str(cwd / "hielo.ps1")}),
+            ("verify_syntax", {"path": str(cwd / "hielo.ps1")}),
+            ("edit_file", {"path": str(cwd / "hielo.ps1"), "old_string": "a", "new_string": "b"}),
+        ]
+        for tool, args in calls:
+            try:
+                sa.execute_tool_call(cfg, {"tool": tool, "args": args}, _SHELL)
+            except Exception as exc:                       # noqa: BLE001 - the message is the point
+                text = str(exc)
+                assert "not found" in text.lower(), (tool, text)
+                assert "Did you mean" in text or "list_directory" in text, (tool, text)
+            else:
+                raise AssertionError(f"{tool} did not fail on a missing path")
+
+
 def _spy_on_messages() -> tuple[list, Any]:
     seen: list[list[dict[str, Any]]] = []
     real = sa.call_llm
@@ -1360,6 +1422,9 @@ TESTS = [
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
     test_broken_write_then_finish_is_retried_with_the_decoder_error,
+    test_a_mistyped_filename_gets_the_real_name_back,
+    test_missing_path_hint_is_silent_where_it_should_be,
+    test_every_not_found_tool_carries_the_hint,
     test_intent_nudge_fires_on_every_real_miss,
     test_intent_nudge_is_silent_on_traps_knowledge_and_finished_work,
     test_intent_nudge_fires_in_the_loop_and_only_once,

@@ -21,6 +21,8 @@ apart from that lookup.
 from __future__ import annotations
 
 import ast
+import difflib
+import itertools
 import json
 import os
 import queue
@@ -273,12 +275,74 @@ def run_command_tool(
     return trim_text(f"Exit code: {process.returncode}\n{output}".strip(), output_limit)
 
 
+# ── A path that is not there ─────────────────────────────────────────────
+#
+# "File not found: C:\\...\\hielo.ps1" is a dead end, and the 4B model does
+# not treat it as one: in the owner's 2026-09-15 17:13 session it had just
+# written hilo.ps1, asked for hielo.ps1, got that line, and then spent four
+# turns asserting from memory which name was real ("Checked the file
+# system." with no tool call) while the owner told it it was hallucinating.
+# The directory holds the answer, so the error carries it.
+
+_HINT_SCAN_LIMIT = 2000
+
+
+def missing_path_hint(path: Path) -> str:
+    """A sentence to append to a not-found error: the closest existing names
+    in the nearest directory that does exist, or a pointer at list_directory
+    when nothing is close. Returns "" when there is nothing useful to say."""
+    try:
+        parent = path.parent
+        near = parent
+        while not near.is_dir() and near != near.parent:
+            near = near.parent
+        if not near.is_dir():
+            return ""
+        try:                                    # never name what we would refuse to read
+            _check_sensitive_path(near, "read_file")
+        except Exception:
+            return ""
+        names: list[str] = []
+        for child in itertools.islice(near.iterdir(), _HINT_SCAN_LIMIT):
+            names.append(child.name)
+        # Below the nearest existing directory, the first missing component
+        # is the one to correct, not the filename the model asked for.
+        try:
+            wanted = path.relative_to(near).parts[0]
+        except ValueError:
+            wanted = path.name
+        # Name the component that is actually missing when it is a directory
+        # further up: "thing.py is not there" would send the model looking in
+        # the wrong place.
+        if near == parent:
+            where, lead = "that directory", ""
+        else:
+            where, lead = str(near), f" {wanted} does not exist in {near}."
+        if not names:
+            return lead or f" {near} is empty."
+        close = difflib.get_close_matches(wanted, names, n=3, cutoff=0.6)
+        # Same name, different extension: hilo.py for hilo.ps1. get_close_matches
+        # ranks by whole-string ratio and can miss it on a short stem.
+        stem = Path(wanted).stem.lower()
+        close += [n for n in names if Path(n).stem.lower() == stem and n not in close]
+        if close:
+            return f"{lead} Did you mean {', '.join(close[:3])}, in {where}?"
+        if lead:
+            return f"{lead} Call list_directory on it to see what is there."
+        return (" Nothing with a similar name is in that directory. "
+                "Call list_directory on it to see what is there.")
+    except OSError:
+        return ""
+
+
 def read_file_tool(path_text: str, output_limit: int,
                    offset: int = 0, limit: int = 0) -> str:
     """Read a file. With offset/limit (1-based line numbers), read one page —
     v1.7 could only ever see the head of a large file, with no way to page."""
     path = resolve_path(path_text)
     _check_sensitive_path(path, "read_file")
+    if not path.exists():
+        raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
     if path.is_dir():
         raise RuntimeError(
             f"{path} is a directory, not a file. Use list_directory to see its contents."
@@ -358,7 +422,7 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     if not old_string:
         raise RuntimeError("edit_file requires a non-empty 'old_string'. Use write_file to overwrite the whole file.")
     if not path.exists():
-        raise RuntimeError(f"File not found: {path}")
+        raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
     content = path.read_text(encoding="utf-8")
     tier = "exact"
     if content.count(old_string) == 1:
@@ -411,7 +475,7 @@ def list_directory_tool(path_text: str, output_limit: int) -> str:
     path = resolve_path(path_text or ".")
     _check_sensitive_path(path, "list_directory")
     if not path.exists():
-        raise RuntimeError(f"Directory not found: {path}")
+        raise RuntimeError(f"Directory not found: {path}.{missing_path_hint(path)}")
     if not path.is_dir():
         raise RuntimeError(f"Not a directory: {path}")
     entries = []
@@ -747,7 +811,7 @@ def verify_syntax_tool(path_text: str, language: str, shell_exe: str) -> str:
     finish with "verified"."""
     path = resolve_path(path_text)
     if not path.exists():
-        raise RuntimeError(f"File not found: {path}")
+        raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
     suffix = path.suffix.lower()
     lang = (language or "").strip().lower() or _LANGUAGE_BY_EXT.get(suffix, "")
     if suffix in {".html", ".htm"} or lang in {"html", "htm"}:
@@ -788,7 +852,7 @@ def lint_code_tool(path_text: str) -> str:
         raise RuntimeError("ruff is not on PATH — lint_code is unavailable.")
     path = resolve_path(path_text)
     if not path.exists():
-        raise RuntimeError(f"File not found: {path}")
+        raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
     try:
         result = subprocess.run(
             [_RUFF, "check", "--output-format=concise", str(path)],
@@ -823,7 +887,7 @@ def run_code_tool(
     cwd = Path.cwd().resolve()
     path = resolve_path(path_text)
     if not path.exists():
-        raise RuntimeError(f"File not found: {path}")
+        raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
     if not path.is_relative_to(cwd):
         raise RuntimeError(
             f"run_code is restricted to files under the working directory ({cwd}). "

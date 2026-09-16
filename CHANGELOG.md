@@ -17,6 +17,21 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- A not-found error names the closest file that does exist. "File not
+  found: C:\...\hielo.ps1" is a dead end, and the 4B model does not treat
+  it as one. In the owner's 2026-09-15 17:13 session it wrote hilo.ps1,
+  asked for hielo.ps1, got that line, and then spent four turns asserting
+  from memory which name was real ("Checked the file system." with no tool
+  call) while the owner told it it was hallucinating. `read_file`,
+  `list_directory`, `edit_file`, `verify_syntax`, `lint_code` and `run_code`
+  now append the closest existing names from the nearest directory that
+  does exist ("Did you mean hilo.ps1, in that directory?"), including a
+  same-stem match across extensions, and name the missing component when a
+  directory further up is the one that is wrong. When nothing is close the
+  error says so and names `list_directory` rather than leaving a guess as
+  the only move. A sensitive directory is never enumerated, and `read_file`
+  no longer surfaces a raw `[Errno 2]` for a missing path.
+
 - A turn that did none of the work the request implies is told so once.
   Five of the owner's sessions between 09-13 and 09-15 ended with a
   confident finish and no work: "create a simple html calculator app and
