@@ -38,6 +38,24 @@ the Hexagon NPU, not single-run anecdotes.
 > model now searches, and then names the wrong file in its answer, which
 > is a real defect the case was written to expose.
 
+- `gate.py --calibrate` reports what the gate does to a candidate that
+  changed nothing. Membership is decided by "3/3 in every baseline", which
+  filters for luck rather than measuring reliability: a case at a true 86%
+  shows 3/3 in one arm about 64% of the time, so it can enter the set and
+  then be held to 5/5 for ever after. Five of the 27 members are in exactly
+  that position — `factual-1` 86-90%, `self-correct-1` 87-92%, `agentic-3`
+  89-91%, `regression-anchor-1` 91%, `agentic-2` 94% over the deduplicated
+  production arms — and the gate inherits their variance. A candidate that
+  changed nothing takes a clean PASS 1-3% of the time and is declared FAIL
+  16-31%, depending on which arms the rates are estimated from. The record
+  agrees: of the eight gate runs in `evals/results/*.log`, every one went to
+  RECHECK first and three ended FAIL, two of those overturned by a control
+  on unchanged code. The command changes no verdict and no membership — it
+  prints each case's estimated rate, its chance of being rechecked and its
+  chance of being called broken, so the set can be re-based on evidence.
+  Pass it the arms the set was NOT chosen from, or the estimate inherits the
+  same luck.
+
 - Every suite reports the platform it ran on. An arm's invalid runs are a
   property of the machine, not of the code, and on 2026-09-15 that
   distinction decided a release: the undisturbed arm still lost 23 of 205

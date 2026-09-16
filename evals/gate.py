@@ -27,6 +27,7 @@ import argparse
 import json
 import sys
 import time
+from math import comb
 from pathlib import Path
 from typing import Any
 
@@ -182,13 +183,131 @@ def scoreboard(path: Path, extra_baselines: list[Path] = ()) -> str:
     return "\n".join(lines) + "\n"
 
 
+
+# ---------------------------------------------------------------------------
+# Calibration — what the gate does to a candidate that changed NOTHING
+# ---------------------------------------------------------------------------
+#
+# Membership is decided by "3/3 in every baseline", which is a filter on luck,
+# not a measurement of reliability: a case at a true 86% is 3/3 in one arm 64%
+# of the time, so it can enter the set and then be held to 5/5 forever after.
+#
+# Measured 2026-09-16 over the deduplicated production arms, five members of
+# the 27-case set are nowhere near reliable — factual-1 86%, self-correct-1
+# 87%, agentic-3 90%, regression-anchor-1 92%, agentic-2 95% — and the gate
+# inherits their variance: a regression-free candidate takes a clean PASS
+# about 1% of the time and is declared FAIL about 30% of the time. The record
+# agrees: of the eight gate runs in evals/results/*.log, EVERY one went to
+# RECHECK first and three ended FAIL, two of those overturned by a control on
+# unchanged code.
+#
+# This function does not change any verdict. It reports what the rule implies,
+# so the gate set can be re-based on evidence instead of on one lucky arm.
+
+
+def _binom_pmf(k: int, n: int, p: float) -> float:
+    return comb(n, k) * (p ** k) * ((1.0 - p) ** (n - k))
+
+
+def _p_at_least(k: int, n: int, p: float) -> float:
+    return sum(_binom_pmf(i, n, p) for i in range(k, n + 1))
+
+
+def case_reliability(rate: float, arm_runs: int = 5,
+                     recheck_runs: int = RECHECK_RUNS) -> tuple[float, float]:
+    """(P(this case goes to recheck), P(it is declared broken)) at a true
+    pass rate, under this module's own rule: clean only at arm_runs/arm_runs,
+    then broken below recheck_runs - 1 of recheck_runs."""
+    p_recheck = 1.0 - rate ** arm_runs
+    p_survives = _p_at_least(recheck_runs - 1, recheck_runs, rate)
+    return p_recheck, p_recheck * (1.0 - p_survives)
+
+
+def calibrate(baselines: list[dict[str, Any]], arms: list[dict[str, Any]],
+              arm_runs: int = 5) -> dict[str, Any]:
+    """Estimate each gate case's true pass rate from `arms` — which must NOT
+    be the baselines that selected the set, or the estimate inherits the same
+    luck — and report what the rule does to a candidate that changed nothing.
+
+    The rate uses a Jeffreys posterior mean, (k + 0.5) / (n + 1), so a case
+    seen 10 times and passing 10 does not read as a certain 100%.
+    """
+    gate, _ = gate_sets(*[b.get("cases", {}) for b in baselines])
+    pooled: dict[str, list[int]] = {cid: [0, 0] for cid in gate}
+    for arm in arms:
+        for cid in gate:
+            c = (arm.get("cases") or {}).get(cid)
+            if c and c.get("runs"):
+                pooled[cid][0] += c["passes"]
+                pooled[cid][1] += c["runs"]
+    rows = []
+    for cid in gate:
+        k, n = pooled[cid]
+        if n < 8:
+            rows.append({"case": cid, "passes": k, "runs": n, "rate": None,
+                         "p_recheck": None, "p_broken": None})
+            continue
+        rate = (k + 0.5) / (n + 1)
+        p_recheck, p_broken = case_reliability(rate, arm_runs)
+        rows.append({"case": cid, "passes": k, "runs": n, "rate": rate,
+                     "p_recheck": p_recheck, "p_broken": p_broken})
+    scored = [r for r in rows if r["rate"] is not None]
+    p_clean = 1.0
+    p_no_break = 1.0
+    for r in scored:
+        p_clean *= 1.0 - r["p_recheck"]
+        p_no_break *= 1.0 - r["p_broken"]
+    return {
+        "rows": sorted(rows, key=lambda r: (r["rate"] is None, r["rate"] or 0)),
+        "scored": len(scored), "gate_size": len(gate), "arms": len(arms),
+        "p_clean_pass": p_clean, "p_false_fail": 1.0 - p_no_break,
+        "unscored": [r["case"] for r in rows if r["rate"] is None],
+    }
+
+
+def print_calibration(rep: dict[str, Any], threshold: float = 0.97) -> None:
+    print(f"\nCALIBRATION  {rep['gate_size']} gate cases, "
+          f"{rep['scored']} with enough data, estimated from {rep['arms']} arm(s)")
+    print("  Pass the arms the gate set was NOT chosen from, or the estimate "
+          "inherits the same luck.\n")
+    print(f"  {'case':28}{'observed':>12}{'rate':>9}{'P(recheck)':>12}{'P(broken)':>11}")
+    print("  " + "-" * 70)
+    for r in rep["rows"]:
+        if r["rate"] is None:
+            print(f"  {r['case']:28}{str(r['passes']) + '/' + str(r['runs']):>12}"
+                  f"{'too few runs':>32}")
+            continue
+        flag = "  <- not gate-worthy" if r["rate"] < threshold else ""
+        print(f"  {r['case']:28}{str(r['passes']) + '/' + str(r['runs']):>12}"
+              f"{r['rate']:>8.1%}{r['p_recheck']:>11.1%}{r['p_broken']:>11.1%}{flag}")
+    print("\n  A candidate that changed NOTHING:")
+    print(f"    clean PASS, no recheck   {rep['p_clean_pass']:6.1%}")
+    print(f"    declared FAIL            {rep['p_false_fail']:6.1%}")
+    weak = [r["case"] for r in rep["rows"] if r["rate"] is not None and r["rate"] < threshold]
+    if weak:
+        print(f"\n  Below {threshold:.0%}, so they carry that risk without earning it:")
+        print(f"    {', '.join(weak)}")
+        print("  Moving them to the ceiling panel is a change to the gate SET, which is"
+              "\n  the owner's call; this command only reports what the rule implies.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("candidate", type=Path, nargs="?")
     ap.add_argument("--baseline", type=Path, action="append", default=[],
                     help="Baseline results file (repeatable: the gate set is the intersection).")
     ap.add_argument("--scoreboard", type=Path, help="Write results/LATEST.md from this results file.")
+    ap.add_argument("--calibrate", type=Path, action="append", default=[],
+                    help="Arm results to estimate each gate case's true rate from "
+                         "(repeatable). Reports what the rule does to a candidate "
+                         "that changed nothing. Never pass the baselines here.")
     args = ap.parse_args()
+    if args.calibrate:
+        if not args.baseline:
+            ap.error("--calibrate needs --baseline to know the gate set")
+        print_calibration(calibrate([_load(p) for p in args.baseline],
+                                    [_load(p) for p in args.calibrate]))
+        return 0
     if args.scoreboard:
         SCOREBOARD.write_text(scoreboard(args.scoreboard, args.baseline), encoding="utf-8")
         print(f"wrote {SCOREBOARD}")

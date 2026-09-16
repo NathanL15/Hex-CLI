@@ -267,6 +267,70 @@ _SERVER_LOG_SAMPLE = """\
 """
 
 
+def _arm(cases: dict[str, tuple[int, int]]) -> dict[str, Any]:
+    """A results payload with just the fields the gate reads."""
+    return {"cases": {cid: {"passes": k, "runs": n, "pass_all_k": k == n}
+                      for cid, (k, n) in cases.items()}}
+
+
+def test_case_reliability_matches_the_binomial() -> None:
+    from evals.gate import case_reliability
+
+    # A case that never misses is never rechecked and never broken.
+    assert case_reliability(1.0) == (0.0, 0.0)
+
+    # A 90% case: 1 - 0.9^5 = 41.0% rechecked, and once rechecked it survives
+    # six runs 88.6% of the time, so 4.7% of no-op candidates lose it.
+    p_recheck, p_broken = case_reliability(0.9)
+    assert abs(p_recheck - 0.40951) < 1e-5, p_recheck
+    assert abs(p_broken - 0.046793) < 1e-5, p_broken
+
+    # Reliability is monotonic: a worse case is rechecked and broken more.
+    rates = [0.99, 0.95, 0.9, 0.85, 0.8]
+    rechecks = [case_reliability(r)[0] for r in rates]
+    brokens = [case_reliability(r)[1] for r in rates]
+    assert rechecks == sorted(rechecks), rechecks
+    assert brokens == sorted(brokens), brokens
+
+
+def test_calibrate_reports_what_the_rule_does_to_a_no_op_candidate() -> None:
+    """The gate set is chosen by '3/3 in every baseline', which admits a case
+    that was merely lucky; calibrate estimates the rate from other arms."""
+    from evals.gate import calibrate
+
+    # Two baselines agree that both cases are perfect, so both are gated.
+    baselines = [_arm({"solid-1": (3, 3), "flaky-1": (3, 3)}),
+                 _arm({"solid-1": (5, 5), "flaky-1": (5, 5)})]
+    # Other arms tell the truth: one case is reliable, the other is not.
+    arms = [_arm({"solid-1": (10, 10), "flaky-1": (8, 10)}),
+            _arm({"solid-1": (10, 10), "flaky-1": (9, 10)})]
+    rep = calibrate(baselines, arms)
+
+    assert rep["gate_size"] == 2 and rep["scored"] == 2, rep
+    by_case = {r["case"]: r for r in rep["rows"]}
+    assert by_case["solid-1"]["rate"] > 0.95, by_case["solid-1"]
+    assert 0.75 < by_case["flaky-1"]["rate"] < 0.9, by_case["flaky-1"]
+    # The flaky case carries essentially all of the false-failure risk.
+    assert by_case["flaky-1"]["p_broken"] > 20 * by_case["solid-1"]["p_broken"]
+    # A perfect record still is not read as a certain 100%.
+    assert by_case["solid-1"]["rate"] < 1.0, by_case["solid-1"]
+    assert 0.0 < rep["p_clean_pass"] < 1.0 and 0.0 < rep["p_false_fail"] < 1.0, rep
+    # Sanity: dropping the flaky case makes the gate far less trigger-happy.
+    rep2 = calibrate([_arm({"solid-1": (3, 3)}), _arm({"solid-1": (5, 5)})], arms)
+    assert rep2["p_false_fail"] < rep["p_false_fail"] / 10, (rep2, rep)
+
+
+def test_calibrate_will_not_score_a_case_it_has_barely_seen() -> None:
+    from evals.gate import calibrate
+
+    baselines = [_arm({"rare-1": (3, 3)}), _arm({"rare-1": (5, 5)})]
+    rep = calibrate(baselines, [_arm({"rare-1": (3, 3)})])
+    assert rep["unscored"] == ["rare-1"], rep
+    assert rep["scored"] == 0, rep
+    # With nothing scored the report must not claim a probability of anything.
+    assert rep["p_clean_pass"] == 1.0 and rep["p_false_fail"] == 0.0, rep
+
+
 def test_platform_reading_counts_only_this_suites_traffic() -> None:
     """Invalid runs are a reading of the machine. The 2026-09-15 arm lost 23
     of 205 runs with 67 Rewind failures in 509 requests behind them, and the
@@ -665,6 +729,9 @@ TESTS = [
     test_sandbox_prompt_parity_includes_conditional_schema,
     test_backend_failures_are_invalid_not_model_failures,
     test_graders_for_the_find_a_file_case,
+    test_case_reliability_matches_the_binomial,
+    test_calibrate_reports_what_the_rule_does_to_a_no_op_candidate,
+    test_calibrate_will_not_score_a_case_it_has_barely_seen,
     test_platform_reading_counts_only_this_suites_traffic,
     test_platform_reading_survives_a_truncated_or_missing_log,
     test_describe_platform_reads_as_one_line,
