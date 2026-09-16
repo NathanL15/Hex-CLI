@@ -38,6 +38,17 @@ the Hexagon NPU, not single-run anecdotes.
 > model now searches, and then names the wrong file in its answer, which
 > is a real defect the case was written to expose.
 
+- A results file written by `run_chunk.py` records its temperature. Identity
+  metadata decides whether two files may be compared at all, and this one was
+  written by `run_suite_cli` but not by the chunk driver, so every file the
+  chunk driver created from scratch — every control run — had a blank where
+  the rule expects a value. Found while auditing a control whose temperature
+  read `None` beside the arm's `0.1`; the two had in fact run identically,
+  but nothing in the file said so. The fields are stamped in one place now
+  (`run_chunk.seed_identity`), with a test that a chunk file carries what a
+  whole-suite run carries and that a later chunk never rewrites the first
+  chunk's identity.
+
 - `gate.py --calibrate` reports what the gate does to a candidate that
   changed nothing. Membership is decided by "3/3 in every baseline", which
   filters for luck rather than measuring reliability: a case at a true 86%

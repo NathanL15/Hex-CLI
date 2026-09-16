@@ -273,6 +273,28 @@ def _arm(cases: dict[str, tuple[int, int]]) -> dict[str, Any]:
                       for cid, (k, n) in cases.items()}}
 
 
+def test_a_chunk_file_carries_the_same_identity_as_a_whole_suite_run() -> None:
+    """A recheck is merged INTO an arm and then gated against it, so the two
+    files have to be comparable. `temperature` was missing from chunk files
+    until 2026-09-16: run_suite_cli wrote it, run_chunk did not, and every
+    control run this driver created had a blank where the comparison rule
+    expects a value."""
+    from evals.run_chunk import IDENTITY_FIELDS, seed_identity
+
+    config = {"model": "qwen3-4b", "temperature": 0.1}
+    payload = seed_identity({}, config, 6, {}, 42)
+    for field in IDENTITY_FIELDS:
+        assert field in payload, field
+    assert payload["temperature"] == 0.1, payload
+    assert payload["runs_per_case"] == 6 and payload["seed"] == 42, payload
+
+    # The first chunk owns the identity; a later chunk joins it and must not
+    # rewrite it, or a merged file would describe conditions it never ran in.
+    joined = seed_identity({"temperature": 0.7, "seed": 1, "model": "other"},
+                           config, 3, {}, 99)
+    assert (joined["temperature"], joined["seed"], joined["model"]) == (0.7, 1, "other"), joined
+
+
 def test_case_reliability_matches_the_binomial() -> None:
     from evals.gate import case_reliability
 
@@ -729,6 +751,7 @@ TESTS = [
     test_sandbox_prompt_parity_includes_conditional_schema,
     test_backend_failures_are_invalid_not_model_failures,
     test_graders_for_the_find_a_file_case,
+    test_a_chunk_file_carries_the_same_identity_as_a_whole_suite_run,
     test_case_reliability_matches_the_binomial,
     test_calibrate_reports_what_the_rule_does_to_a_no_op_candidate,
     test_calibrate_will_not_score_a_case_it_has_barely_seen,

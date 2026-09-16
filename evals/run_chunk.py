@@ -41,6 +41,32 @@ from evals.runner import (  # noqa: E402
     run_metadata,
 )
 
+IDENTITY_FIELDS = ("suite", "protocol", "runs_per_case", "model", "temperature",
+                   "overrides", "metadata", "seed")
+
+
+def seed_identity(payload: dict[str, Any], config: dict[str, Any], runs: int,
+                  overrides: dict[str, Any], seed: int) -> dict[str, Any]:
+    """Stamp the fields that decide whether two results files may be compared.
+
+    A chunk file must carry the same identity as a whole-suite run, because a
+    recheck is merged INTO an arm and then gated against it. `temperature` was
+    missing until 2026-09-16: run_suite_cli wrote it and run_chunk did not, so
+    a file this driver created from scratch — every control run — had a blank
+    where the comparison rule ("comparable only when identity agrees") expects
+    a value. Existing keys are never overwritten: the first chunk owns the
+    identity and later chunks join it.
+    """
+    payload.setdefault("suite", "extended_v2")
+    payload.setdefault("protocol", "v1")
+    payload.setdefault("runs_per_case", runs)
+    payload.setdefault("model", config.get("model"))
+    payload.setdefault("temperature", config.get("temperature"))
+    payload.setdefault("overrides", overrides)
+    payload.setdefault("metadata", run_metadata(config))
+    payload.setdefault("seed", seed)
+    return payload
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -104,13 +130,7 @@ def main() -> int:
             payload = json.loads(out.read_text(encoding="utf-8"))
         except Exception:
             payload = {}
-    payload.setdefault("suite", "extended_v2")
-    payload.setdefault("protocol", "v1")
-    payload.setdefault("runs_per_case", args.runs)
-    payload.setdefault("model", config.get("model"))
-    payload.setdefault("overrides", overrides)
-    payload.setdefault("metadata", run_metadata(config))
-    payload.setdefault("seed", seed)
+    seed_identity(payload, config, args.runs, overrides, seed)
     payload["timestamp"] = time.time()
     payload.setdefault("chunks", []).append({
         "seed": seed, "cases": [c.id for c in selected],
