@@ -16,6 +16,7 @@ import os
 import stat
 import sys
 import tempfile
+import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -255,6 +256,64 @@ def test_graders_for_the_find_a_file_case() -> None:
     # A plain statement of fact must not read as a negative claim.
     assert not ck.claims_nothing_found()(
         Path("."), _trace("The file contains four functions and a main block."))[0]
+
+
+_SERVER_LOG_SAMPLE = """\
+2026-09-15T02:10:01.001Z  INFO npurun_server::openai: chat completion request model=qwen3-4b
+2026-09-15T02:10:02.002Z  INFO npurun_server::openai: REWIND continuation: skipping prefill
+2026-09-15T02:10:07.003Z  WARN npurun_core::engine: Rewind query failed; recreating dialog
+2026-09-15T02:10:09.004Z  WARN npurun_server::openai: inference slot busy, returning 503
+2026-09-15T02:10:11.005Z  INFO npurun_server::openai: chat completion request model=qwen3-4b
+"""
+
+
+def test_platform_reading_counts_only_this_suites_traffic() -> None:
+    """Invalid runs are a reading of the machine. The 2026-09-15 arm lost 23
+    of 205 runs with 67 Rewind failures in 509 requests behind them, and the
+    verdict was only readable with those numbers beside it."""
+    from evals import runner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp).resolve() / "npurun_server.log"
+        log.write_text("older traffic, not ours\n", encoding="utf-8")
+        with unittest.mock.patch.object(runner.paths, "npurun_log_path", return_value=log):
+            offset = runner._server_log_size()
+            with log.open("a", encoding="utf-8") as fh:
+                fh.write(_SERVER_LOG_SAMPLE)
+            reading = runner.platform_reading(offset)
+    assert reading["requests"] == 2, reading
+    assert reading["rewind_failures"] == 1, reading
+    assert reading["slot_busy"] == 1, reading
+    assert reading["rewind_failure_rate"] == 0.5, reading
+
+
+def test_platform_reading_survives_a_truncated_or_missing_log() -> None:
+    from evals import runner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp).resolve() / "npurun_server.log"
+        with unittest.mock.patch.object(runner.paths, "npurun_log_path", return_value=log):
+            assert runner._server_log_size() == 0            # no log at all
+            assert runner.platform_reading(0) == {}
+            # A server restart truncates the log mid-suite: read what is there
+            # rather than seeking past the end and reporting nothing.
+            log.write_text(_SERVER_LOG_SAMPLE, encoding="utf-8")
+            assert runner.platform_reading(10_000)["requests"] == 2
+            # A log with none of our markers is not a reading.
+            log.write_text("DSP_INFO UNSUPPORTED_KEY: 1\n", encoding="utf-8")
+            assert runner.platform_reading(0) == {}
+
+
+def test_describe_platform_reads_as_one_line() -> None:
+    from evals import runner
+
+    line = runner.describe_platform(
+        {"requests": 509, "rewind_failures": 67, "slot_busy": 225,
+         "rewind_failure_rate": 0.132}, 23, 205)
+    assert line == ("23 invalid of 205 runs; 67 Rewind failures in 509 requests (13%); "
+                    "225 busy-slot retries"), line
+    assert runner.describe_platform({}, 0, 0) == ""
+    assert runner.describe_platform({}, 0, 40) == "0 invalid of 40 runs"
 
 
 def test_wilson_interval_known_values() -> None:
@@ -606,6 +665,9 @@ TESTS = [
     test_sandbox_prompt_parity_includes_conditional_schema,
     test_backend_failures_are_invalid_not_model_failures,
     test_graders_for_the_find_a_file_case,
+    test_platform_reading_counts_only_this_suites_traffic,
+    test_platform_reading_survives_a_truncated_or_missing_log,
+    test_describe_platform_reads_as_one_line,
     test_wilson_interval_known_values,
     test_aggregate_pass_semantics,
     test_int_grading_rejects_digit_concatenation,

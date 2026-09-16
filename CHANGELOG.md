@@ -17,6 +17,20 @@ the Hexagon NPU, not single-run anecdotes.
 > 9 of 12 in total. That arm also carried 23 invalid runs from 67 Rewind
 > failures. Re-gate on a quiet platform before releasing, or revert.
 
+- Every suite reports the platform it ran on. An arm's invalid runs are a
+  property of the machine, not of the code, and on 2026-09-15 that
+  distinction decided a release: the undisturbed arm still lost 23 of 205
+  runs, and the server log named the mechanism — 67 "Rewind query failed;
+  recreating dialog" in 509 requests, each costing a 5-8 s dialog rebuild,
+  with 225 busy-slot retries behind them. Those numbers had to be counted by
+  hand. `runner` now marks the server log before the first request and
+  reports what was written during the suite: "Platform: 23 invalid of 205
+  runs; 67 Rewind failures in 509 requests (13%); 225 busy-slot retries",
+  saved into the results file so `compare.py` and `gate.py` read a verdict
+  with its conditions attached. Five per cent invalid or more also raises a
+  `[PLATFORM]` finding saying to re-run on a quiet machine before comparing.
+  Any backend without that log reports nothing.
+
 - The verification nudge no longer offers `read_file` for a code file.
   Reading a file back proves the bytes, not the behaviour, and the nudge
   put that option first: "Use read_file on {file} (or run_code /

@@ -28,6 +28,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -685,6 +686,73 @@ def run_scenarios(config: dict[str, Any], scenarios: list[Scenario], runs: int,
     return results
 
 
+# ── Platform reading ─────────────────────────────────────────────────────
+#
+# An arm's invalid runs are a property of the machine, not of the code, and
+# on 2026-09-15 that distinction decided a release. The undisturbed arm that
+# night still lost 23 of 205 runs, and the server log named the mechanism:
+# 67 "Rewind query failed; recreating dialog" in 509 requests (13%), each
+# costing a 5-8 s dialog rebuild, with 225 "inference slot busy" retries
+# behind them and long turns then running out their 300 s client timeout.
+# A verdict reported without these numbers invites reading a platform night
+# as a code regression, so the suite reads them itself.
+
+_REWIND_FAIL_RE = re.compile(r"Rewind query failed", re.IGNORECASE)
+_SLOT_BUSY_RE = re.compile(r"inference slot busy", re.IGNORECASE)
+# What the fork logs once per request (npurun_server::openai).
+_REQUEST_RE = re.compile(r"chat completion request", re.IGNORECASE)
+
+
+def _server_log_size() -> int:
+    """Where the server log ends now, so the suite counts only its own
+    traffic. The log is truncated on every server start, but a suite may run
+    against a server that was already up."""
+    try:
+        return paths.npurun_log_path().stat().st_size
+    except OSError:
+        return 0
+
+
+def platform_reading(start_offset: int) -> dict[str, Any]:
+    """Rewind failures, busy slots and requests in the server log written
+    since `start_offset`. Empty when there is no log (any backend but the
+    NPU path, or a server whose log we cannot read)."""
+    try:
+        log = paths.npurun_log_path()
+        size = log.stat().st_size
+        if size < start_offset:        # truncated mid-suite: read the lot
+            start_offset = 0
+        with log.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(start_offset)
+            text = fh.read()
+    except OSError:
+        return {}
+    requests = len(_REQUEST_RE.findall(text))
+    rewind = len(_REWIND_FAIL_RE.findall(text))
+    busy = len(_SLOT_BUSY_RE.findall(text))
+    if not (requests or rewind or busy):
+        return {}
+    reading: dict[str, Any] = {"requests": requests, "rewind_failures": rewind,
+                               "slot_busy": busy}
+    if requests:
+        reading["rewind_failure_rate"] = round(rewind / requests, 3)
+    return reading
+
+
+def describe_platform(reading: dict[str, Any], invalid_runs: int, total_runs: int) -> str:
+    """One line for the report, or "" when there is nothing to say."""
+    parts = []
+    if total_runs:
+        parts.append(f"{invalid_runs} invalid of {total_runs} runs")
+    if reading.get("requests"):
+        rate = reading.get("rewind_failure_rate", 0)
+        parts.append(f"{reading['rewind_failures']} Rewind failures in "
+                     f"{reading['requests']} requests ({rate:.0%})")
+    if reading.get("slot_busy"):
+        parts.append(f"{reading['slot_busy']} busy-slot retries")
+    return "; ".join(parts)
+
+
 def print_case_report(results: dict[str, Any], runs: int) -> list[str]:
     findings: list[str] = []
     print()
@@ -821,6 +889,7 @@ def run_suite_cli(
               "Restart the inference server before running a suite — a degraded "
               "server manufactures false regressions.", file=sys.stderr)
         return 2
+    log_offset = _server_log_size()
     canary_start = latency_canary(config)
     payload: dict[str, Any] = {
         "suite": suite_name,
@@ -862,6 +931,24 @@ def run_suite_cli(
 
     canary_end = latency_canary(config)
     payload["canary_s"]["end"] = canary_end
+    # The platform reading for this arm: invalid runs are the symptom, the
+    # server log has the cause. Both go in the file so a later comparison
+    # can tell a bad night from a bad change.
+    invalid_runs = sum(r.get("invalid_runs", 0) for r in payload.get("cases", {}).values())
+    total_runs = sum(r.get("runs", 0) + r.get("invalid_runs", 0)
+                     for r in payload.get("cases", {}).values())
+    reading = platform_reading(log_offset)
+    payload["platform"] = {**reading, "invalid_runs": invalid_runs, "total_runs": total_runs}
+    summary = describe_platform(reading, invalid_runs, total_runs)
+    if summary:
+        print(f"Platform: {summary}")
+        payload["platform"]["summary"] = summary
+    if invalid_runs and total_runs and invalid_runs / total_runs >= 0.05:
+        findings.append(
+            f"[PLATFORM] {summary}. A double-digit invalid count is a reading of the "
+            "machine, not a code regression; re-run on a quiet platform before "
+            "comparing this file with another.")
+        print(f"\nWARNING {findings[-1]}")
     payload["llm_calls"] = count_llm_calls(payload.get("cases", {})) + count_llm_calls(payload.get("scenarios", {}))
     if canary_start and canary_end and canary_end > 2.0 * canary_start:
         findings.append(f"[SERVER-DRIFT] canary {canary_start}s -> {canary_end}s: the server slowed "
