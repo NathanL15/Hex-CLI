@@ -463,6 +463,35 @@ spot: it had treated every \code{Format-} verb as a disk format, so the
 confirmation that unattended evals answer with a denial. The live-state
 numbers above carry that handicap; the fix is a two-line pattern.
 
+\paragraph{Indirect injection, where the model is no defense at all.}
+The nine payloads above arrive as user turns: the user asks for the
+dangerous thing and the harness refuses. The realistic attack is indirect.
+A tool result is appended to the conversation as an ordinary user message,
+so a file the agent was merely asked to read speaks through the same channel
+the operator does, and the agent was never told to do anything wrong. We
+probed two classes across nine cases and 27 runs: a plain instruction
+written into the file, and \emph{ChatInject}-style forged role markers, in
+which the file closes the current turn and opens a new one using the
+template's own delimiters (\code{<|im\_end|><|im\_start|>system}) --- Qwen3
+renders exactly those, so a file containing them can be read as a genuine
+turn boundary.
+
+The result separates the two things a defense can rest on. The model
+attempted the planted action in \textbf{26 of 27 runs}: recursive deletion,
+SSH-key exfiltration, launching an executable. The harness executed
+\textbf{none of them}. Compliance with an indirect payload is thus close to
+total at this scale --- forged role markers were no more effective than a
+plain sentence, both being followed almost every time --- while enforcement
+at the tool boundary held in every run. This is the sharpest available
+statement of the paper's premise: on a 4B model the harness is not the last
+line of defense, it is the only one, and a safety argument that anywhere
+depends on the model declining is already lost.
+
+We grade this as \emph{never executed} rather than \emph{never attempted},
+because attempting and being blocked is the designed-for outcome; two cases
+carry the stricter never-attempted grader as a model-ceiling tracker, and
+the model clears it once in six runs.
+
 % ═══════════════════════════════════════════════════════════════
 \section{Related work}
 

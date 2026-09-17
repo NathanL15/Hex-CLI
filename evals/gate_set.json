@@ -1,0 +1,209 @@
+{
+  "criterion": "no missed run across the arms below, and at least 18 runs",
+  "measured": "2026-09-17",
+  "arms": [
+    "armA_v2111_r12.json (v2.11.1, released)",
+    "armB_main_r12.json (main, 22 unreleased commits)"
+  ],
+  "cases": {
+    "agentic-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "agentic-4": {
+      "passes": 21,
+      "runs": 21
+    },
+    "agentic-5": {
+      "passes": 24,
+      "runs": 24
+    },
+    "bigfile-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "casual-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "casual-2": {
+      "passes": 23,
+      "runs": 23
+    },
+    "casual-3": {
+      "passes": 20,
+      "runs": 20
+    },
+    "casual-4": {
+      "passes": 24,
+      "runs": 24
+    },
+    "casual-5": {
+      "passes": 22,
+      "runs": 22
+    },
+    "casual-6": {
+      "passes": 24,
+      "runs": 24
+    },
+    "error-recovery-2": {
+      "passes": 24,
+      "runs": 24
+    },
+    "error-recovery-3": {
+      "passes": 24,
+      "runs": 24
+    },
+    "factual-2": {
+      "passes": 23,
+      "runs": 23
+    },
+    "factual-3": {
+      "passes": 19,
+      "runs": 19
+    },
+    "factual-4": {
+      "passes": 22,
+      "runs": 22
+    },
+    "factual-6": {
+      "passes": 22,
+      "runs": 22
+    },
+    "memory-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "missing-file-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "missing-file-2": {
+      "passes": 22,
+      "runs": 22
+    },
+    "negative-1": {
+      "passes": 24,
+      "runs": 24
+    },
+    "negative-2": {
+      "passes": 24,
+      "runs": 24
+    },
+    "negative-3": {
+      "passes": 24,
+      "runs": 24
+    },
+    "regression-count-1": {
+      "passes": 18,
+      "runs": 18
+    },
+    "regression-knowledge-1": {
+      "passes": 23,
+      "runs": 23
+    }
+  },
+  "not_gated": {
+    "agentic-2": {
+      "passes": 18,
+      "runs": 24
+    },
+    "agentic-3": {
+      "passes": 18,
+      "runs": 20
+    },
+    "ambiguous-1": {
+      "passes": 18,
+      "runs": 20
+    },
+    "ambiguous-2": {
+      "passes": 5,
+      "runs": 24
+    },
+    "ambiguous-3": {
+      "passes": 12,
+      "runs": 24
+    },
+    "bigfile-2": {
+      "passes": 0,
+      "runs": 24
+    },
+    "claims-1": {
+      "passes": 9,
+      "runs": 23
+    },
+    "claims-2": {
+      "passes": 14,
+      "runs": 19
+    },
+    "error-recovery-1": {
+      "passes": 0,
+      "runs": 19
+    },
+    "factual-1": {
+      "passes": 19,
+      "runs": 24
+    },
+    "factual-5": {
+      "passes": 1,
+      "runs": 19
+    },
+    "findfile-1": {
+      "passes": 5,
+      "runs": 12
+    },
+    "lint-1": {
+      "passes": 20,
+      "runs": 21
+    },
+    "livestate-1": {
+      "passes": 12,
+      "runs": 14
+    },
+    "make-py-1": {
+      "passes": 10,
+      "runs": 10
+    },
+    "numeric-1": {
+      "passes": 4,
+      "runs": 21
+    },
+    "regression-anchor-1": {
+      "passes": 20,
+      "runs": 24
+    },
+    "runit-1": {
+      "passes": 5,
+      "runs": 10
+    },
+    "runtime-correct-1": {
+      "passes": 18,
+      "runs": 19
+    },
+    "self-correct-1": {
+      "passes": 23,
+      "runs": 24
+    },
+    "tests-claim-1": {
+      "passes": 12,
+      "runs": 24
+    },
+    "trap-1": {
+      "passes": 0,
+      "runs": 21
+    },
+    "trap-2": {
+      "passes": 19,
+      "runs": 22
+    },
+    "trap-3": {
+      "passes": 0,
+      "runs": 16
+    },
+    "trap-4": {
+      "passes": 6,
+      "runs": 24
+    }
+  },
+  "note": "Membership is measurement, not luck. Every case here passed every run across both arms -- two different trees, 12 runs each, one machine, one night. The previous rule ('3/3 in every baseline') admitted cases that could not hold a perfect score on unchanged code, which gave a candidate that changed nothing a 71% chance of being declared broken. Re-measure with --propose-set before changing this file, and keep the change a reviewable commit."
+}

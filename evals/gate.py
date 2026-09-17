@@ -80,10 +80,14 @@ def gate_sets(*baselines: dict[str, Any],
     With a pinned set: gate = its cases, ceiling = everything else valid in
     the first baseline. Without one: the historical rule, gate = valid in all
     baselines and 3/3 in all of them.
+
+    `pinned` is passed in rather than read here on purpose. A function that
+    silently consults a file on disk ignores what its caller asked for, which
+    is how adopting evals/gate_set.json broke four tests that were passing
+    their own fixtures; main() reads the file once and hands it down.
     """
     first = baselines[0]
     valid = [i for i, r in first.items() if r.get("runs")]
-    pinned = pinned if pinned is not None else load_pinned_set()
     if pinned:
         gate = sorted(pinned["cases"])
     else:
@@ -135,10 +139,11 @@ def case_status(r: dict[str, Any]) -> str:
     return "recheck"
 
 
-def evaluate(baselines: list[dict[str, Any]], candidate: dict[str, Any]) -> dict[str, Any]:
+def evaluate(baselines: list[dict[str, Any]], candidate: dict[str, Any],
+             pinned: dict[str, Any] | None = None) -> dict[str, Any]:
     bcs = [b.get("cases", {}) for b in baselines]
     cc = candidate.get("cases", {})
-    gate, ceiling = gate_sets(*bcs)
+    gate, ceiling = gate_sets(*bcs, pinned=pinned)
     status = {i: case_status(cc.get(i, {})) for i in gate}
     broken = [i for i in gate if status[i] == "broken"]
     recheck = [i for i in gate if status[i] == "recheck"]
@@ -158,11 +163,10 @@ def evaluate(baselines: list[dict[str, Any]], candidate: dict[str, Any]) -> dict
         verdict = "INCOMPLETE"
     else:
         verdict = "PASS"
-    _pinned = load_pinned_set()
     return {
         "gate_size": len(gate), "broken": broken, "recheck": recheck, "missing": missing,
-        "gate_origin": (f"pinned, {_pinned.get('criterion', 'see evals/gate_set.json')}"
-                        if _pinned else "3/3 in every baseline"),
+        "gate_origin": (f"pinned, {pinned.get('criterion', 'see evals/gate_set.json')}"
+                        if pinned else "3/3 in every baseline"),
         "verdict": verdict,
         "ceiling_panel": panel,
         "ceiling_gained": [p["case"] for p in panel if p["delta"] > 0],
@@ -209,7 +213,8 @@ def scoreboard(path: Path, extra_baselines: list[Path] = ()) -> str:
     cases = d.get("cases", {})
     meta = d.get("metadata") or {}
     server = meta.get("server") or {}
-    gate, ceiling = gate_sets(cases, *[_load(p).get("cases", {}) for p in extra_baselines])
+    gate, ceiling = gate_sets(cases, *[_load(p).get("cases", {}) for p in extra_baselines],
+                              pinned=load_pinned_set())
     valid = [r for r in cases.values() if r.get("runs")]
     perfect = sum(1 for r in valid if r.get("pass_all_k"))
     passes = sum(r["passes"] for r in valid)
@@ -293,7 +298,7 @@ def case_reliability(rate: float, arm_runs: int = 5,
 
 
 def calibrate(baselines: list[dict[str, Any]], arms: list[dict[str, Any]],
-              arm_runs: int = 5) -> dict[str, Any]:
+              arm_runs: int = 5, pinned: dict[str, Any] | None = None) -> dict[str, Any]:
     """Estimate each gate case's true pass rate from `arms` — which must NOT
     be the baselines that selected the set, or the estimate inherits the same
     luck — and report what the rule does to a candidate that changed nothing.
@@ -301,7 +306,7 @@ def calibrate(baselines: list[dict[str, Any]], arms: list[dict[str, Any]],
     The rate uses a Jeffreys posterior mean, (k + 0.5) / (n + 1), so a case
     seen 10 times and passing 10 does not read as a certain 100%.
     """
-    gate, _ = gate_sets(*[b.get("cases", {}) for b in baselines])
+    gate, _ = gate_sets(*[b.get("cases", {}) for b in baselines], pinned=pinned)
     pooled: dict[str, list[int]] = {cid: [0, 0] for cid in gate}
     for arm in arms:
         for cid in gate:
@@ -392,7 +397,8 @@ def main() -> int:
         if not args.baseline:
             ap.error("--calibrate needs --baseline to know the gate set")
         print_calibration(calibrate([_load(p) for p in args.baseline],
-                                    [_load(p) for p in args.calibrate]))
+                                    [_load(p) for p in args.calibrate],
+                                    pinned=load_pinned_set()))
         return 0
     if args.scoreboard:
         SCOREBOARD.write_text(scoreboard(args.scoreboard, args.baseline), encoding="utf-8")
@@ -400,7 +406,8 @@ def main() -> int:
         return 0
     if not (args.baseline and args.candidate):
         ap.error("give --baseline A.json [--baseline B.json] CANDIDATE.json, or --scoreboard RESULTS")
-    rep = evaluate([_load(p) for p in args.baseline], _load(args.candidate))
+    rep = evaluate([_load(p) for p in args.baseline], _load(args.candidate),
+                   pinned=load_pinned_set())
     print_verdict(rep, args.baseline, args.candidate)
     return 1 if rep["verdict"] == "FAIL" else 0
 
