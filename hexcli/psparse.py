@@ -197,7 +197,14 @@ def facts(cmd: str) -> Facts:
 
 
 def shutdown() -> None:
-    """Stop the helper (tests, and the REPL on exit)."""
+    """Stop the helper. Tests call this; production does not need to.
+
+    The helper blocks on OUR stdin pipe, so when this process dies -- exit,
+    crash or taskkill alike -- the OS closes the write end, the helper reads
+    EOF and leaves. Verified 2026-09-17: a session that starts the helper and
+    exits without calling this leaves no PowerShell behind. Do not "fix" that
+    with an atexit hook; there is nothing to clean up, and an exit hook that
+    waits on a pipe is a way to hang a shutdown, not to speed one."""
     global _proc
     with _lock:
         proc, _proc = _proc, None
