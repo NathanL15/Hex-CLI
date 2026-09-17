@@ -4,6 +4,27 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.13.0 — 2026-09-17
+
+- Commands are classified by the name the shell will really run, not by the
+  text as typed. PowerShell resolves aliases before executing, so the
+  pattern tiers were reading a different command from the one that ran:
+  `ri C:\data`, `rmdir C:\data`, `& ('Remove'+'-Item') C:\data` and
+  `sl C:\ ; ri *` all classified as *caution* and executed with **no
+  confirmation at all**. `hexcli/psparse.py` runs PowerShell's own parser
+  (`[Parser]::ParseInput`) in one long-lived `-NoProfile` process, resolves
+  each command name through `Get-Alias`, and hands the real names to the
+  existing tiers; resolving a name applies the existing policy rather than
+  inventing one, so `ri` is destructive because `Remove-Item` always was.
+  346 ms to start, 0.12 ms a parse after that, cached, and the helper exits
+  on EOF when the session does.
+
+  Measured before merging, over every command Hex CLI has actually been
+  asked to run — 353 commands, 119 distinct, from the owner's sessions and
+  every recorded eval run: **0 change tier**. The change cannot alter
+  behaviour on observed traffic; its whole effect is the four bypasses
+  above. Offline suites green, smoke 10/10 on a fresh server.
+
 ## 2.12.0 — 2026-09-17
 
 Ten changes on one theme: the harness now checks that a turn did the kind of
