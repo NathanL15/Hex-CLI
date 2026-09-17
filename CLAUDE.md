@@ -186,6 +186,15 @@ server with the system prompt.
 
 ## 5. Development workflow
 
+**The rhythm, which the git history states and nothing else wrote down:**
+median **3 commits per release**, median **1 day between releases** — nine
+releases in the three days to 2026-09-14. One change, verified, out the same
+day. This is not tidiness, it is what makes a regression attributable: when
+the rhythm broke on 09-15 (21 commits over 3 days, nothing shipped) a real
+regression sat inside the batch for five hours and was found by accident.
+Two changes in one arm cannot be told apart by any measurement afterwards.
+`/ship` sequences one change end to end.
+
 1. Work on `main` in the canonical clone. Small focused commits; commit message = one factual title, body explains the measured reason. No taglines.
 2. Before claiming anything works:
    ```powershell
@@ -193,7 +202,7 @@ server with the system prompt.
    python -m compileall hexcli/ evals/ -q
    python evals/test_core.py            # plus every suite covering what you touched
    ```
-   Full offline set = the step list in `.github/workflows/ci.yml` (29 files, 798 tests). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
+   Full offline set = the step list in `.github/workflows/ci.yml` (27 files today; count them rather than trusting a number written here). No aggregate script exists; loop over `evals/test_*.py`. Each file is a standalone script with its own `TESTS` list and prints `N/N passed`; no pytest.
 3. Anything touching the model path (prompts, compaction, tools the model sees, launcher env, runtime keys) also needs a live check: at minimum `python evals/cases_smoke.py` on a fresh server (10/10), and for behaviour changes the A/B protocol in §7.
 4. Never weaken a test to make it pass. If the test is wrong, fix it and say why in the commit. Never add a dependency without a strong reason.
 5. Update `CHANGELOG.md` `## Unreleased` with the measured effect. Numbers are pass^k over repeated live runs, never single anecdotes.
@@ -303,6 +312,19 @@ Model-facing = `hexcli/prompts.py`, the condensed-history ack, tool schemas
 and result formats, compaction shape, the launcher environment, runtime
 config keys. The model is specialised to the exact wording; format
 specialisation is the strongest measured effect in the project.
+
+**Measure the change's EXPOSURE before building it.** Text the model reads
+can only move behaviour on the turns where it appears, and that number sets
+how much evidence the change owes: under 1 % of turns is a footnote, over
+5 % is a live wire. `~/.claude/skills/ship/scripts/corpus.py` replays a
+predicate over every real session in `~/.shellai/chatlog` and every recorded
+run in `evals/results`. Skipping this is how the 2026-09-16 verification-nudge
+rewrite shipped: it fired on 6.8 % of recorded runs, all of them
+file-mutating cases, and regressed `agentic-3` from ~91 % to 71 %.
+
+Note that model-facing is broader than `prompts.py`: the verification,
+claims, tests and intent **nudge texts live in `agent.py`** and are read by
+the model on every turn that triggers them.
 
 Protocol: snapshot the baseline JSON → change ONE variable → fresh server →
 `cases_extended.py --runs 3` (5 for prompt text) → `gate.py` against both
