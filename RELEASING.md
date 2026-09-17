@@ -46,7 +46,20 @@ npurun lives in its own repository, [NathanL15/npurun](https://github.com/Nathan
 Always, before the tag:
 
 1. `ruff check hexcli/ evals/` clean, every offline suite green (CI).
-2. `python evals/cases_smoke.py` on a fresh server: 10/10.
+2. `python evals/cases_smoke.py` on a fresh server: 10/10 — but read the
+   next paragraph before treating a miss as a blocker.
+
+**The 10/10 bar is itself miscalibrated, measured 2026-09-17.** The suite
+contains `factual-1` and `agentic-2`, which sit at 79 % and 75 % over 24
+runs on two different trees. At one run a case, that makes **P(10/10 on
+perfect code) = 59 %** — the smoke gate fails about two times in five for
+no reason at all. When it misses, do not re-roll for a green: re-run the
+failing case alone at ten runs and compare with its recorded rate
+(`evals/gate_set.json` lists which cases are reliable and which are not).
+2.12.0 shipped after exactly that check — smoke 8/10, both failures
+re-measured at 8/10 and 8/10 against recorded 79 % and 75 %, p = 0.57 and
+p = 1.00. The durable fix is to hold the smoke suite to the same standard
+as the gate set: only cases that never miss belong in a pass/fail bar.
 
 When the release changes the binary, `REQUIRED_NPURUN`, the launcher's
 environment, the runtime config keys, compaction, or the prompt — also:
