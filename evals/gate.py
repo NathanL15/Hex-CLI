@@ -47,15 +47,80 @@ def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def gate_sets(*baselines: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """(gate, ceiling): gate = valid in all baselines and 3/3 in all of them;
-    ceiling = valid in the first baseline and not in the gate."""
+GATE_SET_PATH = Path(__file__).resolve().parent / "gate_set.json"
+
+
+def load_pinned_set(path: Path | None = None) -> dict[str, Any] | None:
+    """The pinned gate set, or None when there is no such file.
+
+    Deriving membership from "3/3 in every baseline" has two defects that a
+    pinned file fixes together. It is a filter on LUCK — a case at a true
+    86 % is 3/3 in a three-run arm about 64 % of the time, so it enters the
+    set on one good morning and is then held to 5/5 for ever — and the set
+    it produces depends on WHICH baselines happen to be passed: measured
+    2026-09-16, the pairs in use gave 27, 29, 31 and 32 cases, disagreeing
+    about four of them. A verdict should not depend on the operator's
+    command line.
+
+    A pinned file states the membership and the evidence for it, so changing
+    the set is a reviewable commit rather than a side effect.
+    """
+    path = path or GATE_SET_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data.get("cases"), dict) else None
+
+
+def gate_sets(*baselines: dict[str, Any],
+              pinned: dict[str, Any] | None = None) -> tuple[list[str], list[str]]:
+    """(gate, ceiling).
+
+    With a pinned set: gate = its cases, ceiling = everything else valid in
+    the first baseline. Without one: the historical rule, gate = valid in all
+    baselines and 3/3 in all of them.
+    """
     first = baselines[0]
     valid = [i for i, r in first.items() if r.get("runs")]
-    gate = sorted(i for i in valid
-                  if all(i in b and b[i].get("runs") and b[i].get("pass_all_k") for b in baselines))
+    pinned = pinned if pinned is not None else load_pinned_set()
+    if pinned:
+        gate = sorted(pinned["cases"])
+    else:
+        gate = sorted(i for i in valid
+                      if all(i in b and b[i].get("runs") and b[i].get("pass_all_k")
+                             for b in baselines))
     ceiling = sorted(i for i in valid if i not in gate)
     return gate, ceiling
+
+
+def propose_gate_set(arms: list[dict[str, Any]], min_runs: int = 12) -> dict[str, Any]:
+    """A gate set built from measurement instead of luck.
+
+    A case qualifies when it never missed across the supplied arms and was
+    run at least `min_runs` times in total. "Never missed" is the bar because
+    the rule the gate applies is a perfect score: a case that cannot hold
+    15/15 on unchanged code cannot carry a binary verdict, and eight of the
+    thirty members failed that test when it was first measured.
+    """
+    pooled: dict[str, list[int]] = {}
+    for arm in arms:
+        for cid, case in (arm.get("cases") or {}).items():
+            if case.get("runs"):
+                tally = pooled.setdefault(cid, [0, 0])
+                tally[0] += case["passes"]
+                tally[1] += case["runs"]
+    cases = {cid: {"passes": k, "runs": n}
+             for cid, (k, n) in sorted(pooled.items()) if k == n and n >= min_runs}
+    rejected = {cid: {"passes": k, "runs": n}
+                for cid, (k, n) in sorted(pooled.items()) if cid not in cases}
+    return {
+        "criterion": f"no missed run across the arms below, and at least {min_runs} runs",
+        "measured": time.strftime("%Y-%m-%d"),
+        "arms": [a.get("suite", "?") for a in arms],
+        "cases": cases,
+        "not_gated": rejected,
+    }
 
 
 def case_status(r: dict[str, Any]) -> str:
@@ -93,8 +158,11 @@ def evaluate(baselines: list[dict[str, Any]], candidate: dict[str, Any]) -> dict
         verdict = "INCOMPLETE"
     else:
         verdict = "PASS"
+    _pinned = load_pinned_set()
     return {
         "gate_size": len(gate), "broken": broken, "recheck": recheck, "missing": missing,
+        "gate_origin": (f"pinned, {_pinned.get('criterion', 'see evals/gate_set.json')}"
+                        if _pinned else "3/3 in every baseline"),
         "verdict": verdict,
         "ceiling_panel": panel,
         "ceiling_gained": [p["case"] for p in panel if p["delta"] > 0],
@@ -114,7 +182,8 @@ def _drift(d: dict[str, Any]) -> str | None:
 
 def print_verdict(rep: dict[str, Any], baselines: list[Path], candidate: Path) -> None:
     print(f"\nGATE  baseline={' + '.join(p.name for p in baselines)}  candidate={candidate.name}")
-    print(f"  gate set: {rep['gate_size']} cases at 3/3 in every baseline")
+    origin = rep.get("gate_origin") or "3/3 in every baseline"
+    print(f"  gate set: {rep['gate_size']} cases ({origin})")
     if rep["broken"]:
         print(f"  BROKEN ({len(rep['broken'])}): {', '.join(rep['broken'])}")
     if rep["recheck"]:
@@ -301,7 +370,24 @@ def main() -> int:
                     help="Arm results to estimate each gate case's true rate from "
                          "(repeatable). Reports what the rule does to a candidate "
                          "that changed nothing. Never pass the baselines here.")
+    ap.add_argument("--propose-set", type=Path, action="append", default=[],
+                    help="Arm results to build a measured gate set from (repeatable). "
+                         "Prints a candidate evals/gate_set.json; adopting it is a commit.")
+    ap.add_argument("--min-runs", type=int, default=12,
+                    help="Runs a case needs before --propose-set will gate on it.")
     args = ap.parse_args()
+    if args.propose_set:
+        proposal = propose_gate_set([_load(p) for p in args.propose_set],
+                                    min_runs=args.min_runs)
+        print(json.dumps(proposal, indent=2))
+        print(f"\n{len(proposal['cases'])} cases qualify; "
+              f"{len(proposal['not_gated'])} do not:", file=sys.stderr)
+        for cid, r in proposal["not_gated"].items():
+            print(f"  {cid:26}{r['passes']}/{r['runs']}", file=sys.stderr)
+        print(f"\nReview it, then write it to {GATE_SET_PATH} to adopt it. "
+              f"Changing the gate set is a reviewable commit, not a side effect.",
+              file=sys.stderr)
+        return 0
     if args.calibrate:
         if not args.baseline:
             ap.error("--calibrate needs --baseline to know the gate set")

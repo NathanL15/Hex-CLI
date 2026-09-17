@@ -273,6 +273,68 @@ def _arm(cases: dict[str, tuple[int, int]]) -> dict[str, Any]:
                       for cid, (k, n) in cases.items()}}
 
 
+def test_a_pinned_gate_set_replaces_the_luck_filter() -> None:
+    """Membership by "3/3 in every baseline" is a filter on luck and it also
+    depends on which baselines the operator passed — measured 2026-09-16, the
+    pairs in use gave 27, 29, 31 and 32 cases. A pinned file states the
+    membership and the evidence, so changing it is a reviewable commit."""
+    from evals.gate import gate_sets
+
+    baselines = [_arm({"lucky-1": (3, 3), "solid-1": (3, 3), "panel-1": (2, 3)}),
+                 _arm({"lucky-1": (5, 5), "solid-1": (5, 5), "panel-1": (3, 5)})]
+
+    # Without a pinned set, the historical rule stands: both 3/3 cases gate.
+    gate, ceiling = gate_sets(*[b["cases"] for b in baselines], pinned=None)
+    assert gate == ["lucky-1", "solid-1"], gate
+    assert ceiling == ["panel-1"], ceiling
+
+    # With one, membership is exactly what the file says, and everything else
+    # valid in the first baseline is reported as ceiling rather than gated.
+    pinned = {"cases": {"solid-1": {"passes": 15, "runs": 15}}}
+    gate, ceiling = gate_sets(*[b["cases"] for b in baselines], pinned=pinned)
+    assert gate == ["solid-1"], gate
+    assert ceiling == ["lucky-1", "panel-1"], ceiling
+
+
+def test_load_pinned_set_is_absent_until_someone_adopts_one() -> None:
+    """No file, or a malformed one, must leave the gate exactly as it was —
+    adopting a measured set is a decision, not something that happens because
+    a file appeared."""
+    from evals.gate import load_pinned_set
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "gate_set.json"
+        assert load_pinned_set(missing) is None
+
+        missing.write_text("{not json", encoding="utf-8")
+        assert load_pinned_set(missing) is None
+
+        missing.write_text('{"note": "no cases key"}', encoding="utf-8")
+        assert load_pinned_set(missing) is None
+
+        missing.write_text('{"cases": {"a": {"passes": 15, "runs": 15}}}', encoding="utf-8")
+        assert load_pinned_set(missing)["cases"] == {"a": {"passes": 15, "runs": 15}}
+
+
+def test_propose_gate_set_admits_only_what_never_missed() -> None:
+    """The bar is a perfect record because the rule the gate applies is a
+    perfect score: a case that cannot hold 15/15 on unchanged code cannot
+    carry a binary verdict."""
+    from evals.gate import propose_gate_set
+
+    arms = [_arm({"solid-1": (8, 8), "flaky-1": (7, 8), "thin-1": (4, 4)}),
+            _arm({"solid-1": (7, 7), "flaky-1": (8, 8), "thin-1": (3, 3)})]
+    proposal = propose_gate_set(arms, min_runs=12)
+
+    # solid-1 pooled 15/15 -> gated. flaky-1 missed once, so no.
+    assert set(proposal["cases"]) == {"solid-1"}, proposal["cases"]
+    assert proposal["cases"]["solid-1"] == {"passes": 15, "runs": 15}
+    # thin-1 never missed but has only 7 runs: not enough evidence to gate on.
+    assert "thin-1" in proposal["not_gated"] and "flaky-1" in proposal["not_gated"]
+    # Rejections carry their numbers, so the file explains its own membership.
+    assert proposal["not_gated"]["flaky-1"] == {"passes": 15, "runs": 16}
+
+
 def test_a_chunk_file_carries_the_same_identity_as_a_whole_suite_run() -> None:
     """A recheck is merged INTO an arm and then gated against it, so the two
     files have to be comparable. `temperature` was missing from chunk files
@@ -751,6 +813,9 @@ TESTS = [
     test_sandbox_prompt_parity_includes_conditional_schema,
     test_backend_failures_are_invalid_not_model_failures,
     test_graders_for_the_find_a_file_case,
+    test_a_pinned_gate_set_replaces_the_luck_filter,
+    test_load_pinned_set_is_absent_until_someone_adopts_one,
+    test_propose_gate_set_admits_only_what_never_missed,
     test_a_chunk_file_carries_the_same_identity_as_a_whole_suite_run,
     test_case_reliability_matches_the_binomial,
     test_calibrate_reports_what_the_rule_does_to_a_no_op_candidate,
