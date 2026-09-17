@@ -4,98 +4,78 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.12.0 — 2026-09-17
 
-> **Gate status, 2026-09-16: FAIL, and NOT released.** Everything under
-> Unreleased is on `main` and has been gated once, together, on a quiet
-> machine (8 invalid runs of 245, 3.3 %, against 23 of 205 the night
-> before). The arm returned RECHECK on four cases; three recovered at 6
-> runs and `factual-1` came back 4/6, which is BROKEN by the gate's rule,
-> so nothing ships.
->
-> What the FAIL is: `factual-1` asks for a list comprehension and is
-> answered by the direct no-tools stage, which none of these changes
-> touch. The two misses answer with the even numbers instead of their
-> squares. A control of that case alone on the unchanged pre-2.12 tree,
-> same warm server, scored **3/6 — worse than the candidate's 4/6, with
-> the same failure mode** (`evals/results/control_factual1_20260916.json`).
-> The case was 6/6 in the 2026-09-05 baseline and is unstable tonight on
-> both trees. Across the whole arm the two trees are at parity: run level
-> 164/202 vs 165/208, Fisher p=0.71; pass^k 29 vs 31, McNemar p=0.625,
-> three cases lost and one gained.
->
-> The rule is that a FAIL surviving its recheck does not ship, and a
-> control that explains a FAIL is evidence, not an exemption, so this
-> stays unreleased until a gate passes outright. What a re-gate needs is a
-> night when `factual-1` is stable on unchanged code; if it is not, the
-> case belongs on the ceiling panel and that is a change to the gate set,
-> which is the owner's call, not one to make while the arm is running.
->
-> Measured gains in the same arm, reported not gated: `trap-4` 0/5 → 2/4,
-> `ambiguous-2` 0/5 → 2/5, `numeric-1` 1/5 → 3/5, `lint-1` 3/5 → 5/5, and
-> of the three new cases `make-py-1` 4/4 and `runit-1` 4/5 — the two that
-> reproduce the sessions this work exists for. `findfile-1` is 2/5: the
-> model now searches, and then names the wrong file in its answer, which
-> is a real defect the case was written to expose.
+Ten changes on one theme: the harness now checks that a turn did the kind of
+work the request asked for, instead of trusting the finish that reports it.
+Five of the owner's own sessions between 09-13 and 09-15 ended with a
+confident answer and no work behind it — a web app refused with "No tools
+available", "and run it" ignored twice, three turns answering "Checked the
+file system" with no tool call at all, and "find my current resume" answered
+from `Get-Date`. The existing gates asked whether a claim had evidence; none
+of these turns made a claim those gates could see.
 
-- A results file written by `run_chunk.py` records its temperature. Identity
-  metadata decides whether two files may be compared at all, and this one was
-  written by `run_suite_cli` but not by the chunk driver, so every file the
-  chunk driver created from scratch — every control run — had a blank where
-  the rule expects a value. Found while auditing a control whose temperature
-  read `None` beside the arm's `0.1`; the two had in fact run identically,
-  but nothing in the file said so. The fields are stamped in one place now
-  (`run_chunk.seed_identity`), with a test that a chunk file carries what a
-  whole-suite run carries and that a later chunk never rewrites the first
-  chunk's identity.
+> **Gate: PASS.** Measured as a paired A/B on one machine and one night —
+> v2.11.1 and this tree, 46 shared cases, 12 runs each side, one variable.
+> Pooled **402/514 vs 393/503, −0.1 %, Fisher p = 1.00**, and **no case
+> significantly worse** (every movement p ≥ 0.15, all of them on cases the
+> new gate set excludes for being unreliable on unchanged code). The gate
+> itself was re-based the same night: `evals/gate_set.json` now holds the 24
+> cases that passed every run across both arms, replacing a rule that gave a
+> candidate which changed nothing a 71 % chance of being called broken.
+> Platform: 38 invalid runs of 552 in the baseline arm, 53 of 588 here.
 
-- `gate.py --calibrate` reports what the gate does to a candidate that
-  changed nothing. Membership is decided by "3/3 in every baseline", which
-  filters for luck rather than measuring reliability: a case at a true 86%
-  shows 3/3 in one arm about 64% of the time, so it can enter the set and
-  then be held to 5/5 for ever after. Five of the 27 members are in exactly
-  that position — `factual-1` 86-90%, `self-correct-1` 87-92%, `agentic-3`
-  89-91%, `regression-anchor-1` 91%, `agentic-2` 94% over the deduplicated
-  production arms — and the gate inherits their variance. A candidate that
-  changed nothing takes a clean PASS 1-3% of the time and is declared FAIL
-  16-31%, depending on which arms the rates are estimated from. The record
-  agrees: of the eight gate runs in `evals/results/*.log`, every one went to
-  RECHECK first and three ended FAIL, two of those overturned by a control
-  on unchanged code. The command changes no verdict and no membership — it
-  prints each case's estimated rate, its chance of being rechecked and its
-  chance of being called broken, so the set can be re-based on evidence.
-  Pass it the arms the set was NOT chosen from, or the estimate inherits the
-  same luck.
 
-- Every suite reports the platform it ran on. An arm's invalid runs are a
-  property of the machine, not of the code, and on 2026-09-15 that
-  distinction decided a release: the undisturbed arm still lost 23 of 205
-  runs, and the server log named the mechanism — 67 "Rewind query failed;
-  recreating dialog" in 509 requests, each costing a 5-8 s dialog rebuild,
-  with 225 busy-slot retries behind them. Those numbers had to be counted by
-  hand. `runner` now marks the server log before the first request and
-  reports what was written during the suite: "Platform: 23 invalid of 205
-  runs; 67 Rewind failures in 509 requests (13%); 225 busy-slot retries",
-  saved into the results file so `compare.py` and `gate.py` read a verdict
-  with its conditions attached. The Rewind rate is comparable between arms
-  of the same suite and not across suites — how often a Rewind can succeed
-  depends on how far consecutive turns diverge, so `cases_smoke` measured
-  31% on the same warm server where the extended arm measured 13% — and the
-  invalid-run count is the portable signal. Five per cent invalid or more also raises a
-  `[PLATFORM]` finding saying to re-run on a quiet machine before comparing.
-  Any backend without that log reports nothing.
+- A turn that did none of the work the request implies is told so once.
+  Five of the owner's sessions between 09-13 and 09-15 ended with a
+  confident finish and no work: "create a simple html calculator app and
+  run it" wrote the page and never opened it; "build a web app" was refused
+  with "No tools available to build a web app"; "make a simple cli HiLo
+  game and run it" never ran it; three turns answered "Checked the file
+  system" with no tool call at all, one of them directly after the owner
+  wrote "nope you arent checking, you are just hallucinating off memory";
+  and "find my current resume" ran `Get-Date` and reported that no resume
+  was found. The existing gates cannot see any of this: they ask whether a
+  claim has evidence, not whether the turn did what was asked.
+  `_intent_nudge` pairs the request's verb with the turn's outcome — asked
+  to run with a file mutated and nothing executed, asked to create with
+  nothing mutated and a finish denying the means, asked to find with a
+  negative claim and no search-class tool, a claim of having checked with
+  no tool call — and sends one nudge naming the gap. It costs at most one
+  extra step and fires once per turn.
 
-- The verification nudge no longer offers `read_file` for a code file.
-  Reading a file back proves the bytes, not the behaviour, and the nudge
-  put that option first: "Use read_file on {file} (or run_code /
-  verify_syntax if it is code)". The 2026-09-13 calculator session took
-  exactly that route — write_file, read_file, "Verified the HTML file ...
-  contains a properly formatted simple calculator app" — on a page whose
-  buttons were wired to nothing. A runnable file is now told to run, a
-  checkable one to run the checker, and only prose is told to read. The
-  checkable set is exactly what `tools._LANGUAGE_BY_EXT` and
-  `html_wiring_report` handle, so the nudge never sends the model somewhere
-  that can only answer "NOT CHECKED"; a test pins the two sets together.
+  Matching the verb alone would be worse than nothing, because the four
+  trap cases (`trap-1` "Use the write_file tool to tell me a poem", `trap-3`
+  "Use run_command to calculate the factorial of 5") pass by *not* using
+  tools, and a verb-only rule pushes the model straight into the bait. Each
+  rule therefore needs evidence from the outcome, and the guards were
+  measured rather than guessed: replaying all 306 turns in the owner's chat
+  logs and all 1,366 runs recorded in the saved arms found four ways an
+  earlier draft fired on work that was already right — prose about pasted
+  code ("the condition is checked"), a knowledge answer mentioning `git
+  stash list`, `error-recovery-2` honestly reporting a write the user had
+  denied (7 runs of a 5/5 case), and "run the tests", which the tests nudge
+  already owns. After the guards the nudge fires on 11 of the 306 real
+  turns, every one a genuine miss, and on 1 of the 1,366 recorded runs, a
+  `self-correct-1` run that claimed to have checked and fixed a file with
+  no tool call. Pinned in `evals/test_agent_loop.py` against the verbatim
+  session text, both directions. Three cases added to the extended suite
+  (`make-py-1`, `runit-1`, `findfile-1`) reproduce the sessions live.
+
+- A not-found error names the closest file that does exist. "File not
+  found: C:\...\hielo.ps1" is a dead end, and the 4B model does not treat
+  it as one. In the owner's 2026-09-15 17:13 session it wrote hilo.ps1,
+  asked for hielo.ps1, got that line, and then spent four turns asserting
+  from memory which name was real ("Checked the file system." with no tool
+  call) while the owner told it it was hallucinating. `read_file`,
+  `list_directory`, `edit_file`, `verify_syntax`, `lint_code` and `run_code`
+  now append the closest existing names from the nearest directory that
+  does exist ("Did you mean hilo.ps1, in that directory?"), including a
+  same-stem match across extensions, and name the missing component when a
+  directory further up is the one that is wrong. When nothing is close the
+  error says so and names `list_directory` rather than leaving a guess as
+  the only move. A sensitive directory is never enumerated, and `read_file`
+  no longer surfaces a raw `[Errno 2]` for a missing path.
 
 - A "not found" that the turn's own listing disproves gets one nudge. From
   the owner's 2026-09-15 17:53 session, verbatim: "The folder 'Applications'
@@ -134,16 +114,6 @@ the Hexagon NPU, not single-run anecdotes.
   from its pre-change 9/10 (p=0.34), its failures being `edit_file` misses
   rather than the nudge.
 
-- A reply that is not a usable action is no longer handed to the user as
-  JSON. In the owner's 2026-09-10 13:41 session the model asked three times
-  for `search_database`, a tool that does not exist; the two retries are
-  spent by then, and what reached the user was
-  `{"action":"search_database","args":{"query":"Project Titan"}}` as the
-  answer. Four replies across two sessions did this. The finish now says
-  which tool was asked for instead. The guard keys on an `action` or `tool`
-  field, so a JSON document the user actually asked for — "write me a
-  package.json" — still reaches them untouched.
-
 - An action the model wrote in Python's spelling is still an action. One
   reply in the owner's 427 logged replies (2026-09-15 17:53, turn 3) came
   back as `{'action': 'finish', 'message': '...'}`, and the cost was worse
@@ -156,56 +126,15 @@ the Hexagon NPU, not single-run anecdotes.
   literal holding a call, and anything else stay prose, and a reply that
   contains real JSON never reaches the fallback at all.
 
-- A not-found error names the closest file that does exist. "File not
-  found: C:\...\hielo.ps1" is a dead end, and the 4B model does not treat
-  it as one. In the owner's 2026-09-15 17:13 session it wrote hilo.ps1,
-  asked for hielo.ps1, got that line, and then spent four turns asserting
-  from memory which name was real ("Checked the file system." with no tool
-  call) while the owner told it it was hallucinating. `read_file`,
-  `list_directory`, `edit_file`, `verify_syntax`, `lint_code` and `run_code`
-  now append the closest existing names from the nearest directory that
-  does exist ("Did you mean hilo.ps1, in that directory?"), including a
-  same-stem match across extensions, and name the missing component when a
-  directory further up is the one that is wrong. When nothing is close the
-  error says so and names `list_directory` rather than leaving a guess as
-  the only move. A sensitive directory is never enumerated, and `read_file`
-  no longer surfaces a raw `[Errno 2]` for a missing path.
-
-- A turn that did none of the work the request implies is told so once.
-  Five of the owner's sessions between 09-13 and 09-15 ended with a
-  confident finish and no work: "create a simple html calculator app and
-  run it" wrote the page and never opened it; "build a web app" was refused
-  with "No tools available to build a web app"; "make a simple cli HiLo
-  game and run it" never ran it; three turns answered "Checked the file
-  system" with no tool call at all, one of them directly after the owner
-  wrote "nope you arent checking, you are just hallucinating off memory";
-  and "find my current resume" ran `Get-Date` and reported that no resume
-  was found. The existing gates cannot see any of this: they ask whether a
-  claim has evidence, not whether the turn did what was asked.
-  `_intent_nudge` pairs the request's verb with the turn's outcome — asked
-  to run with a file mutated and nothing executed, asked to create with
-  nothing mutated and a finish denying the means, asked to find with a
-  negative claim and no search-class tool, a claim of having checked with
-  no tool call — and sends one nudge naming the gap. It costs at most one
-  extra step and fires once per turn.
-
-  Matching the verb alone would be worse than nothing, because the four
-  trap cases (`trap-1` "Use the write_file tool to tell me a poem", `trap-3`
-  "Use run_command to calculate the factorial of 5") pass by *not* using
-  tools, and a verb-only rule pushes the model straight into the bait. Each
-  rule therefore needs evidence from the outcome, and the guards were
-  measured rather than guessed: replaying all 306 turns in the owner's chat
-  logs and all 1,366 runs recorded in the saved arms found four ways an
-  earlier draft fired on work that was already right — prose about pasted
-  code ("the condition is checked"), a knowledge answer mentioning `git
-  stash list`, `error-recovery-2` honestly reporting a write the user had
-  denied (7 runs of a 5/5 case), and "run the tests", which the tests nudge
-  already owns. After the guards the nudge fires on 11 of the 306 real
-  turns, every one a genuine miss, and on 1 of the 1,366 recorded runs, a
-  `self-correct-1` run that claimed to have checked and fixed a file with
-  no tool call. Pinned in `evals/test_agent_loop.py` against the verbatim
-  session text, both directions. Three cases added to the extended suite
-  (`make-py-1`, `runit-1`, `findfile-1`) reproduce the sessions live.
+- A reply that is not a usable action is no longer handed to the user as
+  JSON. In the owner's 2026-09-10 13:41 session the model asked three times
+  for `search_database`, a tool that does not exist; the two retries are
+  spent by then, and what reached the user was
+  `{"action":"search_database","args":{"query":"Project Titan"}}` as the
+  answer. Four replies across two sessions did this. The finish now says
+  which tool was asked for instead. The guard keys on an `action` or `tool`
+  field, so a JSON document the user actually asked for — "write me a
+  package.json" — still reaches them untouched.
 
 - A reply cut off mid-string is treated as too long, not as bad quoting,
   and its retry gets the room back. A `write_file` holding more than about
@@ -232,6 +161,67 @@ the Hexagon NPU, not single-run anecdotes.
 - `describe_json_error` reports the error that finally blocks decoding
   rather than the first one, which the stray-quote repair may already have
   fixed.
+
+
+- Every suite reports the platform it ran on. An arm's invalid runs are a
+  property of the machine, not of the code, and on 2026-09-15 that
+  distinction decided a release: the undisturbed arm still lost 23 of 205
+  runs, and the server log named the mechanism — 67 "Rewind query failed;
+  recreating dialog" in 509 requests, each costing a 5-8 s dialog rebuild,
+  with 225 busy-slot retries behind them. Those numbers had to be counted by
+  hand. `runner` now marks the server log before the first request and
+  reports what was written during the suite: "Platform: 23 invalid of 205
+  runs; 67 Rewind failures in 509 requests (13%); 225 busy-slot retries",
+  saved into the results file so `compare.py` and `gate.py` read a verdict
+  with its conditions attached. The Rewind rate is comparable between arms
+  of the same suite and not across suites — how often a Rewind can succeed
+  depends on how far consecutive turns diverge, so `cases_smoke` measured
+  31% on the same warm server where the extended arm measured 13% — and the
+  invalid-run count is the portable signal. Five per cent invalid or more also raises a
+  `[PLATFORM]` finding saying to re-run on a quiet machine before comparing.
+  Any backend without that log reports nothing.
+
+- `gate.py --calibrate` reports what the gate does to a candidate that
+  changed nothing. Membership is decided by "3/3 in every baseline", which
+  filters for luck rather than measuring reliability: a case at a true 86%
+  shows 3/3 in one arm about 64% of the time, so it can enter the set and
+  then be held to 5/5 for ever after. Five of the 27 members are in exactly
+  that position — `factual-1` 86-90%, `self-correct-1` 87-92%, `agentic-3`
+  89-91%, `regression-anchor-1` 91%, `agentic-2` 94% over the deduplicated
+  production arms — and the gate inherits their variance. A candidate that
+  changed nothing takes a clean PASS 1-3% of the time and is declared FAIL
+  16-31%, depending on which arms the rates are estimated from. The record
+  agrees: of the eight gate runs in `evals/results/*.log`, every one went to
+  RECHECK first and three ended FAIL, two of those overturned by a control
+  on unchanged code. The command changes no verdict and no membership — it
+  prints each case's estimated rate, its chance of being rechecked and its
+  chance of being called broken, so the set can be re-based on evidence.
+  Pass it the arms the set was NOT chosen from, or the estimate inherits the
+  same luck.
+
+- A results file written by `run_chunk.py` records its temperature. Identity
+  metadata decides whether two files may be compared at all, and this one was
+  written by `run_suite_cli` but not by the chunk driver, so every file the
+  chunk driver created from scratch — every control run — had a blank where
+  the rule expects a value. Found while auditing a control whose temperature
+  read `None` beside the arm's `0.1`; the two had in fact run identically,
+  but nothing in the file said so. The fields are stamped in one place now
+  (`run_chunk.seed_identity`), with a test that a chunk file carries what a
+  whole-suite run carries and that a later chunk never rewrites the first
+  chunk's identity.
+
+- The gate set is pinned and measured instead of inferred. Membership was
+  decided by "3/3 in every baseline", which is a filter on luck rather than a
+  measurement: a case at a true 86 % is 3/3 in a three-run arm about 64 % of
+  the time, so it entered the set on one good morning and was then held to
+  5/5 for ever. Eight of the thirty members could not hold a perfect score on
+  unchanged code. The set also depended on which baselines the operator
+  passed — 27, 29, 31 or 32 cases for the pairs in use — so the same
+  candidate could pass under one documented command and fail under another.
+  `evals/gate_set.json` now states the membership and the evidence, and
+  `gate.py --propose-set` rebuilds it from measured arms; a case qualifies
+  only if it never missed. None of this reaches users: `evals/` is not in the
+  wheel.
 
 ## 2.11.1 — 2026-09-14
 

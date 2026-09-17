@@ -3,4 +3,4 @@
 # The one place the version is written. pyproject.toml reads it (hatch
 # dynamic version), agent.VERSION re-exports it, and CI refuses a release
 # tag that does not match it.
-__version__ = "2.11.1"
+__version__ = "2.12.0"
