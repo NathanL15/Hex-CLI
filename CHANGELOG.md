@@ -4,7 +4,19 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.17.0 — 2026-09-18
+
+A minor release: the parser accepts a reply it used to send back for a
+retry, so what the model sees after such a reply changes.
+
+> **Gate: PASS** on the pinned 24-case set, all 24 held at 5 runs with no
+> recheck. Own arm, fresh server, seed 20260918, 6 invalid of 245 runs.
+> Against the v2.11.1 12-run baseline: run-level 402/514 vs 174/224, −0.5 %,
+> Fisher p = 0.92; pass^k 26 → 31 of 46 shared cases, McNemar p = 0.13. The
+> close fired on five replies in the arm (`claims-1`, `claims-2`, two in
+> `tests-claim-1`, one in `trap-3`); `claims-1` 3/5 against 3/11, `trap-3`
+> 0/5 as before. Smoke 9/10 on a fresh server; the miss was `factual-1`,
+> re-measured 7/10 against its recorded 79 % (p = 0.67).
 
 - A reply that stops before its last closing brace is closed and decoded.
   In the owner's 2026-09-18 session two `write_file` replies, 2,239 and 782
