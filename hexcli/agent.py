@@ -826,7 +826,12 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
             raise RuntimeError("search_files requires 'pattern'.")
         return search_files_tool(pattern, path, glob_pat, limit)
     if tool == "find_files":
-        glob_pat = str(args.get("glob") or "").strip()
+        # 21 of the 170 find_files calls on record (2026-09-17) sent the
+        # name under "pattern", the key search_files uses, and got "requires
+        # 'glob'" -- three of findfile-1's twelve runs burned steps on it,
+        # one to the step limit. The value is what the model meant to look
+        # for either way; a bare name is a valid glob for that exact name.
+        glob_pat = str(args.get("glob") or args.get("pattern") or "").strip()
         path = str(args.get("path") or ".").strip() or "."
         if not glob_pat:
             raise RuntimeError("find_files requires 'glob'.")

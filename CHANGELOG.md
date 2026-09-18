@@ -4,6 +4,18 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- `find_files` takes `pattern` as its glob when no `glob` is sent. The
+  model names the file under the key `search_files` uses in 21 of the 170
+  `find_files` calls on record, across eight cases and one of the owner's
+  sessions, and each one came back "find_files requires 'glob'". In the
+  2.12.0 arm three of `findfile-1`'s twelve runs spent two to three steps
+  on it and one reached the step limit that way. The value is what the
+  model meant to look for either way, and a bare name is a valid glob for
+  that exact name; `glob` still wins when both are sent, and a call with
+  neither is still an error.
+
 ## 2.15.0 — 2026-09-18
 
 A minor release: one tool error the model reads is new (`edit_file` on

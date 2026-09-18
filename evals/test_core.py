@@ -1030,6 +1030,28 @@ def test_search_files_invalid_glob_raises_runtime_error() -> None:
                     f"expected 'glob' or 'pattern' in error: {exc}"
 
 
+def test_find_files_takes_pattern_as_the_glob() -> None:
+    """findfile-1, 2026-09-17: {"pattern":"notes.txt","path":"work/"} was an
+    error three runs in twelve. The key search_files uses names the same
+    thing here; "glob" still wins when both are sent, and neither is an
+    error."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "work" / "archive").mkdir(parents=True)
+        (Path(tmp) / "work" / "archive" / "project-notes.md").write_text("x", encoding="utf-8")
+        (Path(tmp) / "work" / "readme.txt").write_text("y", encoding="utf-8")
+        cfg = {"tool_output_limit": 4000}
+        out = sa.execute_tool_call(cfg, {"action": "find_files", "args": {"pattern": "**/project-notes.md", "path": tmp}}, None)
+        assert "project-notes.md" in out and "requires" not in out, out
+        out = sa.execute_tool_call(cfg, {"action": "find_files", "args": {"glob": "**/readme.txt", "pattern": "**/*.md", "path": tmp}}, None)
+        assert "readme.txt" in out and "project-notes" not in out, out
+        raised = ""
+        try:
+            sa.execute_tool_call(cfg, {"action": "find_files", "args": {"path": tmp}}, None)
+        except RuntimeError as exc:
+            raised = str(exc)
+        assert "requires 'glob'" in raised, raised
+
+
 def test_find_files_invalid_glob_raises_runtime_error() -> None:
     """find_files_tool must raise RuntimeError (not raw ValueError) for invalid glob patterns."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1662,6 +1684,7 @@ TESTS = [
     test_append_rules_leaves_no_tmp_file,
     test_prune_memory_rules_leaves_no_tmp_file,
     test_search_files_invalid_glob_raises_runtime_error,
+    test_find_files_takes_pattern_as_the_glob,
     test_find_files_invalid_glob_raises_runtime_error,
     test_search_memory_tool_disabled_returns_message,
     test_run_code_tool_unsupported_extension_raises,
