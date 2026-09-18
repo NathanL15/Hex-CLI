@@ -375,6 +375,7 @@ def test_double_escaped_python_body_keeps_its_string_escapes() -> None:
     the text on the next; keeping the two next to a quote gives the program
     the model meant."""
     import ast as _ast
+
     from hexcli import editing as _p2
     body = (Path(__file__).resolve().parent / "fixtures"
             / "write_2026-09-18_calculator_mixed_escapes.txt").read_text(encoding="utf-8")
