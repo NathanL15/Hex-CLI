@@ -12,8 +12,8 @@ audit (2026-07) through the merge tier (2026-09-13).
 """
 from __future__ import annotations
 
-import difflib
 import ast
+import difflib
 import re
 
 # Tier that landed the most recent successful block: "exact", "whitespace",
