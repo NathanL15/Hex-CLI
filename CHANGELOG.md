@@ -4,6 +4,23 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- A double-escaped Python body is decoded the way that parses. The model
+  writes its line breaks as literal `\n` when it escapes a reply twice, and
+  the `\n` it means as a string escape inside the code looks exactly the
+  same: `print(\"\nWelcome\")` and the line break after it are the same two
+  characters. The 2.9.0 rule decoded all of them, so on 2026-09-18 the owner
+  got a file that read `print("` on one line and `Welcome to the Calculator
+  App!")` on the next, and the model spent the rest of the session not
+  fixing it. For a `.py` path the body is now decoded in full and parsed; if
+  that fails, every `\n` except one sitting right after an opening quote or
+  right before a closing one is decoded and the result parsed again, and
+  whichever parses is written (the full decode when neither does, as
+  before). Other file types are unchanged. Of the 511 `write_file` bodies on
+  record five are double-escaped, two have a quote-adjacent `\n`, and one of
+  those, the session above, parses only this way.
+
 ## 2.17.0 — 2026-09-18
 
 A minor release: the parser accepts a reply it used to send back for a
