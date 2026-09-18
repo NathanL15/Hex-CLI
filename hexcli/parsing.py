@@ -126,6 +126,49 @@ def _repair_stray_quote(text: str, err: json.JSONDecodeError) -> str | None:
     return text[:q] + "\\" + text[q:]
 
 
+def _close_unfinished_object(text: str, start: int, err: json.JSONDecodeError) -> str | None:
+    """The reply ended before its last closing brace(s): `{"action":"write_file",
+    "args":{...,"content":"..."}` and then nothing. The decoder reports
+    "Expecting ',' delimiter" AT THE END of the text; every string is closed
+    and the brace depth is still positive. Appending the missing braces is
+    the whole repair. 30 of the 185 undecodable replies on record are this
+    shape, all one brace short, four of them in the owner's sessions
+    (2026-09-13 and 2026-09-18), and the stray-quote repair below used to
+    make them worse: it escaped the content's own closing quote, the decoder
+    then said "Unterminated string", and the retry feedback told the model
+    to fix its quoting -- which it did by escaping everything twice, and the
+    file it then wrote had backslashes in it. None when the error is not at
+    the end, a string is still open, or the braces already balance."""
+    if err.pos < len(text.rstrip()):
+        return None
+    depth, in_string, escaped = 0, False, False
+    for ch in text[start:]:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    if in_string or depth <= 0:
+        return None
+    return text.rstrip() + "}" * depth
+
+
+# Only the reply AS SENT is closed this way. Once a stray-quote repair has
+# changed the text, a positive depth at the end can be the repair's own
+# doing (a write whose content string was cut off, followed by a second
+# object: the repairs walk the quotes back until the text "balances" and
+# the close would then glue the two objects into one), and that reply must
+# stay a retry -- evals/test_backports.py pins it.
+
+
 def _loads_object(text: str) -> dict[str, Any] | None:
     """The first JSON object in `text`, decoded from its first brace and
     ignoring whatever follows it (a second batched action, prose). Stray
@@ -133,12 +176,13 @@ def _loads_object(text: str) -> dict[str, Any] | None:
     start = text.find("{")
     if start < 0:
         return None
-    for _ in range(_MAX_QUOTE_REPAIRS + 1):
+    for attempt in range(_MAX_QUOTE_REPAIRS + 1):
         try:
             parsed, _end = _DECODER.raw_decode(text, start)
             return parsed if isinstance(parsed, dict) else None
         except json.JSONDecodeError as err:
-            fixed = _repair_stray_quote(text, err)
+            fixed = (_close_unfinished_object(text, start, err) if attempt == 0 else None) \
+                or _repair_stray_quote(text, err)
             if fixed is None:
                 return None
             text = fixed
@@ -155,13 +199,14 @@ def _decode_failure(text: str) -> tuple[json.JSONDecodeError | None, str]:
     if start < 0:
         return None, text
     last: json.JSONDecodeError | None = None
-    for _ in range(_MAX_QUOTE_REPAIRS + 1):
+    for attempt in range(_MAX_QUOTE_REPAIRS + 1):
         try:
             _DECODER.raw_decode(text, start)
             return None, text
         except json.JSONDecodeError as err:
             last = err
-            fixed = _repair_stray_quote(text, err)
+            fixed = (_close_unfinished_object(text, start, err) if attempt == 0 else None) \
+                or _repair_stray_quote(text, err)
             if fixed is None:
                 return err, text
             text = fixed

@@ -4,6 +4,29 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- A reply that stops before its last closing brace is closed and decoded.
+  In the owner's 2026-09-18 session two `write_file` replies, 2,239 and 782
+  characters, ended at `"}` with the outer object never closed. The parser's
+  stray-quote repair took the decoder's "Expecting ',' delimiter" at the end
+  of the text as a quote that had ended a string early, escaped the
+  content's own closing quote, and the decoder then reported an unterminated
+  string; the retry feedback told the model to fix its quoting, the model
+  escaped everything twice, and the file it wrote had `\n` and `\"` in it as
+  text. Every step after that in the session was the model failing to repair
+  that file. When the decoder's error sits at the very end of the reply,
+  every string is closed and the brace depth is still positive, the missing
+  braces are appended and the object decodes. Measured over the 10,772
+  replies on record: 185 fail to decode, and 27 of them now decode (all one
+  brace short; 23 in `claims-1`, `claims-2` and `tests-claim-1`, four in the
+  owner's sessions). The close is only tried on the reply as sent: three
+  more replies are a brace short *after* a stray quote, and a reply whose
+  content string was cut off and then followed by a second object would
+  otherwise be glued into one, so those stay retries. A reply cut off inside
+  a string is still reported as cut off, and a stray quote in the middle is
+  still repaired as before; the other 158 undecodable replies are unchanged.
+
 ## 2.16.0 — 2026-09-18
 
 A minor release: a tool result the model reads changes (`find_files` returns

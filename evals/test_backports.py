@@ -336,7 +336,40 @@ def test_write_file_decodes_double_escaped_body() -> None:
         assert f.read_text(encoding="utf-8") == 's = "say \\"hi\\""\n'
 
 
+def test_reply_missing_its_last_brace_is_closed_and_decoded() -> None:
+    """2026-09-18 session, verbatim: two write_file replies ended at `"}`,
+    one brace short. The stray-quote repair escaped the content's closing
+    quote and the model was told its quoting was wrong; it then escaped
+    everything twice and wrote a file with backslashes in it."""
+    from hexcli import parsing as _p
+    fx = Path(__file__).resolve().parent / "fixtures"
+    for name, expect_len in (("reply_2026-09-18_missing_brace_1.txt", 2239),
+                             ("reply_2026-09-18_missing_brace_2.txt", 782)):
+        raw = (fx / name).read_text(encoding="utf-8")
+        assert len(raw) == expect_len and raw.endswith('"}'), name
+        action = _p.parse_json_object(raw)
+        assert action and action["action"] == "write_file", name
+        assert action["args"]["path"] == "calculator.py", name
+        body = action["args"]["content"]
+        assert "\n" in body, name                       # real newlines, not one long line
+        import ast as _ast
+        _ast.parse(body)                                 # and it is the Python the model wrote
+        assert _p.describe_json_error(raw) == "", name
+        assert not _p.looks_truncated(raw), name
+    # Two braces short closes twice; a still-open string is NOT closed --
+    # that reply is cut off, and the two-step feedback is the right answer.
+    assert _p.parse_json_object('{"action":"finish","message":"ok"') == {"action": "finish", "message": "ok"}
+    assert _p.parse_json_object('{"action":"read_file","args":{"path":"a.py"') == {"action": "read_file", "args": {"path": "a.py"}}
+    cut = '{"action":"write_file","args":{"path":"a.py","content":"print(1)\nprint('
+    assert _p.parse_json_object(cut) is None
+    assert _p.looks_truncated(cut)
+    # An error in the middle of the text is not a missing brace, and the
+    # stray-quote repair still handles it.
+    assert _p.parse_json_object('{"action":"finish","message":"say "hi" now"}') == {"action": "finish", "message": 'say "hi" now'}
+
+
 TESTS = [
+    test_reply_missing_its_last_brace_is_closed_and_decoded,
     test_write_file_decodes_double_escaped_body,
     test_stray_quote_in_a_write_is_repaired_not_skipped,
     test_real_calculator_reply_decodes_to_the_write,
