@@ -200,6 +200,13 @@ def test_looks_double_escaped() -> None:
     assert not p2.looks_double_escaped('pattern = "a\\nb"')              # one literal, one line
     assert not p2.looks_double_escaped("a\\nb\n c\\nd")                 # mixed: has a real newline
     assert p2.unescape_json("import re\\n\\n\\n# Regex") == "import re\n\n\n# Regex"
+    # Quotes, the runit-1 shape: every quote escaped, no bare one.
+    assert p2.looks_double_escaped('print(\\"Hello, world\\")')
+    assert p2.looks_double_escaped('a = \\"x\\"\nb = \\"y\\"\n')            # several lines, still no bare quote
+    assert not p2.looks_double_escaped('print("Hello, world")')             # ordinary
+    assert not p2.looks_double_escaped('s = "say \\"hi\\""\n')             # escaped quotes inside a real string
+    assert not p2.looks_double_escaped("x = 'a'\n")                        # no double quote at all
+    assert p2.unescape_json('print(\\"Hello, world\\")') == 'print("Hello, world")'
 
 
 def test_delta_transfer_two_hunks_within_region() -> None:

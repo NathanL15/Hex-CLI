@@ -6,6 +6,21 @@ the Hexagon NPU, not single-run anecdotes.
 
 ## Unreleased
 
+- `write_file` decodes a body whose every quote is escaped. `runit-1`
+  ("Write hello.py that prints Hello, world and then run it") sat at 5/10
+  in the 2.12.0 arm, and not one of the misses was the "and run it" the
+  case was written for: every run wrote the file and ran it. The model
+  escaped its JSON twice, `{"content":"print(\\\"Hello, world\\\")"}`, so
+  the file held `print(\"Hello, world\")`, a SyntaxError; it then "fixed"
+  the line by editing it to itself, twice, until the step limit. The
+  double-escape rule from 2.9.0 only knew the newline shape (literal `\n`
+  and no real line break). It now also knows the quote shape — at least one
+  `\"` and not a single bare `"` — and decodes the body once, as before.
+  Measured over the 511 `write_file` bodies on record: 11 have the shape,
+  all of them this defect in this case, and none has both escaped and bare
+  quotes, so a body with even one bare quote is left exactly as sent.
+  `append_file` is untouched: 0 of its 17 recorded bodies have either shape.
+
 - A test suite was writing into the owner's real chat log. The shell wiring
   test in `evals/test_product_shell.py` drove `hexcli.agent` with the mock
   backend and a temp config that left `chat_log_enabled` on, so every run

@@ -326,6 +326,14 @@ def test_write_file_decodes_double_escaped_body() -> None:
         # A body with real newlines is written verbatim, backslashes and all.
         sa.write_file_tool(str(f), "x = \"a\\nb\"\ny = 1\n")
         assert f.read_text(encoding="utf-8") == "x = \"a\\nb\"\ny = 1\n"
+        # runit-1, 2026-09-17, verbatim: {"content":"print(\\\"Hello, world\\\")"}
+        # decodes to a body whose only quotes are escaped. Written as-is it is
+        # a SyntaxError; 5 of 10 valid runs ended there.
+        sa.write_file_tool(str(f), 'print(\\"Hello, world\\")')
+        assert f.read_text(encoding="utf-8") == 'print("Hello, world")'
+        # One bare quote anywhere and the body is the model's to keep.
+        sa.write_file_tool(str(f), 's = "say \\"hi\\""\n')
+        assert f.read_text(encoding="utf-8") == 's = "say \\"hi\\""\n'
 
 
 TESTS = [

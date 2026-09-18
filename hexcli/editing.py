@@ -142,6 +142,7 @@ def unescape_json(text: str) -> str:
 
 _DELTA_TOKEN_RE = re.compile(r"\w+|\s+|[^\w\s]")
 _ESCAPED_RE = re.compile(r'\\["nt\\]')
+_BARE_QUOTE_RE = re.compile(r'(?<!\\)"')
 _DELTA_MAX_HUNKS = 4
 _DELTA_MAX_REPLACED_CHARS = 40
 _DELTA_MAX_INSERTED_CHARS = 400
@@ -149,12 +150,24 @@ _DELTA_MIN_MATCHED = 0.6   # fraction of old_string's tokens found in the window
 
 
 def looks_double_escaped(text: str) -> bool:
-    """A file body with two or more literal backslash-n sequences and not a
-    single real line break is JSON escaped a second time (write_file,
-    persona_guard 2026-09-12: 'import re\\n\\n\\n# Regex …' written as one
-    line). A real one-line file that spells "\\n" on purpose is rarer than the
-    model's habit; anything with a genuine newline is left alone."""
-    return "\n" not in text and text.count("\\n") >= 2
+    """A file body JSON-escaped a second time, in either of the two shapes
+    the model actually produces.
+
+    Newlines: two or more literal backslash-n sequences and not a single
+    real line break (write_file, persona_guard 2026-09-12: 'import
+    re\\n\\n\\n# Regex …' written as one line). A real one-line file that
+    spells "\\n" on purpose is rarer than the model's habit; anything with a
+    genuine newline is left alone.
+
+    Quotes: at least one backslash-quote and not a single bare quote
+    (runit-1, 2026-09-17: `print(\\"Hello, world\\")` as the whole of
+    hello.py, a SyntaxError the model then "fixed" by editing the line to
+    itself until the step limit). Over the 511 write_file bodies on record
+    11 have this shape and every one is that defect; none has both escaped
+    and bare quotes, so a body with even one bare quote is left alone."""
+    if "\n" not in text and text.count("\\n") >= 2:
+        return True
+    return '\\"' in text and _BARE_QUOTE_RE.search(text) is None
 
 
 def _unescape_json(text: str) -> str:
