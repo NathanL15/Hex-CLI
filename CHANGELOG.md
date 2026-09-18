@@ -4,7 +4,25 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.15.0 — 2026-09-18
+
+A minor release: one tool error the model reads is new (`edit_file` on
+identical strings).
+
+> **Gate: PASS** on the pinned 24-case set after one recheck (`agentic-5`
+> 4/5, a counting answer with no edit in it, then 6/6). Own arm, fresh
+> server, seed 20260917, 9 invalid of 245 runs. Against the v2.11.1 12-run
+> baseline: run-level 402/514 vs 172/221, −0.4 %, Fisher p = 0.92; pass^k
+> 26 → 28 of 46 shared cases, McNemar p = 0.63. The error fired in the arm
+> on 3 `tests-claim-1` runs and nowhere else; that case went 4/5 against
+> 12/24 (p = 0.34, ceiling). `self-correct-1` read 2/5 in the arm on a
+> server 75 minutes into its traffic (the arm's invalid runs were climbing),
+> and the error had not fired in any of its runs; a paired control on a
+> fresh server, ten runs each on the parent tree and this one, came back
+> **10/10 vs 9/10, p = 1.0**. In the one control run where the error did
+> fire the model had sent a hallucinated `main()` as both strings, was told
+> nothing changed, read the file, and then made the real fix. Smoke miss
+> on `agentic-2` re-measured 9/10 against its recorded 75 %.
 
 - `edit_file` refuses an edit whose `old_string` and `new_string` are the
   same text, instead of answering "Edited". 37 of the 840 `edit_file` calls
