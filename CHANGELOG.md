@@ -4,7 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.16.0 — 2026-09-18
+
+A minor release: a tool result the model reads changes (`find_files` returns
+a listing where it returned an argument error).
+
+> **Gate: PASS** on the pinned 24-case set after one recheck (`agentic-4`
+> and `agentic-5`, neither of which calls `find_files`, missed once at 5
+> runs and then held at 6). Own arm, fresh server, seed 20260918, 8 invalid
+> of 245 runs. Against the v2.11.1 12-run baseline: run-level 402/514 vs
+> 174/222, +0.2 %, Fisher p = 1.00; pass^k 26 → 30 of 46 shared cases,
+> McNemar p = 0.29. **The alias did not fire in this arm**: all ten
+> `find_files` calls carried `glob` (two also sent `pattern`, and `glob`
+> won as designed), so the arm is evidence of no regression, and the case
+> for the change rests on the 21 of 170 recorded calls that would have
+> hit it. `findfile-1` 2/5, all three misses the decoy answer, which is
+> the separate finding still open. Smoke 10/10 on a fresh server.
 
 - `find_files` takes `pattern` as its glob when no `glob` is sent. The
   model names the file under the key `search_files` uses in 21 of the 170
