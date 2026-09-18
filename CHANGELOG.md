@@ -4,7 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.18.0 — 2026-09-18
+
+A minor release: what `write_file` writes for one shape of body changes,
+so the run that follows it changes.
+
+> **Gate: PASS** on the pinned 24-case set after rechecks. Own arm, fresh
+> server, seed 20260918, 2 invalid of 245 runs. `agentic-5` and
+> `error-recovery-3` (a counting answer and a denied search, no write in
+> either) missed once at 5 runs; `agentic-5` held 6/6, `error-recovery-3`
+> read 3/4 with two invalid runs on a server 70 minutes into its traffic and
+> 6/6 on a fresh one. Against the v2.11.1 12-run baseline: run-level
+> 402/514 vs 182/228, +1.6 %, Fisher p = 0.70; pass^k 26 → 29 of 46 shared
+> cases, McNemar p = 0.51. The unescape fired on three writes in the arm
+> (a `trap-1` poem and two `runit-1` bodies, all of which decode the same
+> under both rules), so the arm is evidence of no regression and the effect
+> rests on the fixture. Smoke 10/10 on a fresh server.
 
 - A double-escaped Python body is decoded the way that parses. The model
   writes its line breaks as literal `\n` when it escapes a reply twice, and
