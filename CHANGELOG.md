@@ -4,7 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.20.0 — 2026-09-18
+
+A minor release: a tool result the model reads changes (`run_code` on a
+program that waits for the keyboard).
+
+> **Gate: PASS** on the pinned 24-case set: 21 cases held 5/5 in the arm;
+> `casual-4`, `factual-4` and `memory-1` lost four, two and four runs to
+> backend timeouts and were re-run on a fresh server at six runs, 6/6 each.
+> Own arm, seed 20260918. **Platform: 13 invalid of 245 runs (5.3 %)**, the
+> server's working set again above 6 GB with 1.6 GB free, so the ceiling
+> comparison carries the `[PLATFORM]` flag: run-level 402/514 vs 166/217,
+> −1.7 %, Fisher p = 0.63; pass^k 26 → 30 of 46 shared cases, McNemar
+> p = 0.13. The change did what it is for: `run_code` timed out 0 times in
+> the arm against 10 in the 2.12.0 arm (all of them `make-py-1`'s
+> calculator waiting on `input()`), the note fired twice, and `make-py-1`
+> stayed 5/5. Smoke 10/10 on a fresh server.
 
 - `run_code` gives the program no keyboard, and says so when the program
   asked for one. The child inherited the terminal's standard input, so a
