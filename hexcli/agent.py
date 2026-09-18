@@ -1741,8 +1741,11 @@ def _retry_echo(raw: str) -> str:
 # none of the four can fire on it. evals/test_agent_loop.py pins that.
 #
 # Every guard below is here because an earlier draft fired on something
-# that was already RIGHT. They were found by replaying 306 real chat-log
-# turns and 1,366 recorded eval runs against the detectors:
+# that was already RIGHT. They were found by replaying the real chat-log
+# turns and 1,366 recorded eval runs against the detectors (the count
+# first written here, 306 turns, included 93 that a test suite had
+# written into the real log with the mock backend; the owner's own
+# sessions are 196 turns, re-counted 2026-09-17):
 #
 #   * "the condition is checked before the loop" — prose about code the
 #     user pasted, in an answer that never touches the filesystem (two real
@@ -1763,9 +1766,10 @@ def _retry_echo(raw: str) -> str:
 #     because a denied call is not in tools_used. Telling them apart needs
 #     the denial recorded, which is a separate change.
 #
-# After the guards, 11 of the 306 real turns fire and every one is a
-# genuine miss; 1 of the 1,366 eval runs fires, a self-correct-1 run that
-# claimed to have checked and fixed with no tool call at all.
+# After the guards, 9 of the 196 real turns fire and every one is a
+# genuine miss (the calculator, web-app, HiLo and resume sessions); 1 of
+# the 1,366 eval runs fires, a self-correct-1 run that claimed to have
+# checked and fixed with no tool call at all.
 
 _WANTS_RUN_RE = re.compile(
     r"\b(and|then|,)\s+(run|execute|start|launch)\s+(it|them|the\s+\w+)\b"

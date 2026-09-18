@@ -602,7 +602,7 @@ def test_piped_stdin_end_to_end_one_shot() -> None:
         cfg = Path(tmp) / "cfg.json"
         cfg.write_text(_json.dumps({
             "backend": "mock", "memory_enabled": False,
-            "telemetry_enabled": False,
+            "telemetry_enabled": False, "chat_log_enabled": False,
         }), encoding="utf-8")
         r = subprocess.run(
             [sys.executable, "-m", "hexcli.agent", "--raw", "--config", str(cfg)],

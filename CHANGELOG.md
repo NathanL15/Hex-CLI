@@ -4,6 +4,20 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- A test suite was writing into the owner's real chat log. The shell wiring
+  test in `evals/test_product_shell.py` drove `hexcli.agent` with the mock
+  backend and a temp config that left `chat_log_enabled` on, so every run
+  of the suite added a "say hello" session under `~/.shellai/chatlog/` — 93
+  of them by 2026-09-17, beside the 127 real sessions. The 2.12.0 exposure
+  counts were taken over that mix: "306 real turns" was 196 real turns and
+  93 scripted ones (the 11 firings were all on real turns, so the true
+  positives stand; the denominator did not). The test now turns the log
+  off, the corpus loader skips mock-backend sessions, the mock files were
+  moved aside, and the intent nudge's recorded rate is corrected to 9 of
+  196 real turns.
+
 ## 2.13.0 — 2026-09-17
 
 - Commands are classified by the name the shell will really run, not by the
