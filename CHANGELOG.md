@@ -4,7 +4,23 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.19.0 — 2026-09-18
+
+A minor release: nudge text the model reads is new (the claimed-fix rule)
+and two existing rules fire where they did not.
+
+> **Gate: PASS** on the pinned 24-case set: 21 cases held 5/5 in the arm;
+> `missing-file-1`, `missing-file-2` and `regression-count-1` lost one, three
+> and one runs to backend timeouts and were re-run on a fresh server at six
+> runs, 6/6 each. Own arm, seed 20260918. **Platform: 16 invalid of 245 runs
+> (6.5 %)** -- the model server's working set grew from 3 GB to 6.7 GB over
+> the hour and the machine fell to 1.2 GB free, so the ceiling comparison
+> carries the `[PLATFORM]` flag: run-level 391/502 vs 161/214, −2.6 %, Fisher p = 0.44;
+> pass^k 26 → 30 of 46 shared cases, McNemar p = 0.13; every ceiling drop
+> (`livestate-1` 1/4, `tests-claim-1` 0/2, `claims-1` 1/5) is on a case that
+> lost runs to timeouts. **The new and widened rules did not fire once in
+> the arm**, so the arm is evidence of no regression on the gated set and
+> the effect rests on the replay below. Smoke 10/10 on a fresh server.
 
 - The intent nudge counts only a mutation that landed, catches a claimed
   fix with no change behind it, and reads "cannot be created" however the
