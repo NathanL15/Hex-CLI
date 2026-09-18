@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.13.0 release on 2026-09-17 (code at
-`__version__ = "2.13.0"`). When this file and the code disagree, the code
+to date through the 2.16.0 release on 2026-09-18 (code at
+`__version__ = "2.16.0"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`
@@ -315,8 +315,11 @@ specialisation is the strongest measured effect in the project.
 can only move behaviour on the turns where it appears, and that number sets
 how much evidence the change owes: under 1 % of turns is a footnote, over
 5 % is a live wire. `~/.claude/skills/ship/scripts/corpus.py` replays a
-predicate over every real session in `~/.shellai/chatlog` and every recorded
-run in `evals/results`. Skipping this is how the 2026-09-16 verification-nudge
+predicate over every real session in `~/.shellai/chatlog` (196 turns as of
+2026-09-18; sessions whose backend is `mock` are skipped, because a test
+suite had written 93 of them into the real log and every "of 306 real
+turns" figure from 09-16 was over that mix) and every recorded run in
+`evals/results`. Skipping this is how the 2026-09-16 verification-nudge
 rewrite shipped: it fired on 6.8 % of recorded runs, all of them
 file-mutating cases, and regressed `agentic-3` from ~91 % to 71 %.
 
@@ -338,7 +341,7 @@ loss; do not argue with the instrument.
 ## 8. Releasing (`RELEASING.md` is authoritative)
 
 - One version source: `hexcli/__init__.py`. CI refuses a `v*` tag that does not match.
-- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); 2.9.0–2.11.1 followed on 09-13/14; 2.12.0 (item 1: the intent, contradiction and verification nudges, closest-path hint, Python-spelled actions, raw-JSON guard, long-write; paired A/B PASS) and 2.13.0 (AST command classifier, four alias bypasses closed, 0 of 119 recorded commands change tier) on 09-17. The next release is 2.13.1 or 2.14.0 by the rule above.
+- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); 2.9.0–2.11.1 followed on 09-13/14; 2.12.0 (item 1: the intent, contradiction and verification nudges, closest-path hint, Python-spelled actions, raw-JSON guard, long-write; paired A/B PASS) and 2.13.0 (AST command classifier, four alias bypasses closed, 0 of 119 recorded commands change tier) on 09-17; 2.14.0 (`write_file` decodes a body whose every quote is escaped; `runit-1` 5/10 → 20/20), 2.15.0 (`edit_file` refuses identical strings instead of saying "Edited") and 2.16.0 (`find_files` takes `pattern` as its glob) on 09-17/18, one arm and one pinned-gate PASS each. The next release is 2.16.1 or 2.17.0 by the rule above.
 - Fork changes ship as fork releases first (`vX.Y.Z` on NathanL15/npurun with `npurun-arm64.exe` attached, fork CHANGELOG). Hex pins `REQUIRED_NPURUN` in `launcher.py`; `install.ps1` reads that literal by regex, so keep the line shape `REQUIRED_NPURUN = (0, 2, 3)`. Never pin past a fork release that does not exist. Hex releases carry the wheel and sdist (attached by `.github/workflows/publish.yml` on release, which also publishes to PyPI as `hexcli` via trusted publishing — no token anywhere), never the npurun binary.
 - Fork build: `cargo install --path crates/npurun-cli` inside the fork's dev shell (`scripts/dev-shell.ps1`; needs MSVC ARM64, LLVM on PATH for bindgen, `QNN_SDK_ROOT`). Known traps: GNU `link.exe` from Git Bash shadowing MSVC's; `ADSP_LIBRARY_PATH` unset.
 - Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → push main → wait for the remote CI run to be green (`gh run list --commit <sha>`) → tag → push the tag → CI green on the tag → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>` → the Publish workflow attaches wheel+sdist and publishes to PyPI; check it is green. Title is the bare version.
@@ -426,7 +429,7 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 |---|---|---|
 | `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
-| `CHANGELOG.md` | what shipped and the numbers | current through 2.13.0; no `Unreleased` section (add one with the next change) |
+| `CHANGELOG.md` | what shipped and the numbers | current through 2.16.0; no `Unreleased` section (add one with the next change) |
 | `docs/local/V2X_ROADMAP.md`, `RESEARCH_NEXT_LEVERS.md`, `V2_PLAN.md` (§14 evidence), `ARCHITECTURE.md`, `backend_study/` | internal: phase status, the levers memo, the evidence archive, design rationale, the measurement study | local only since 2026-09-14 (git-ignored); frozen at their 09-07/09-12 currency |
 | `docs/local/TODO.md`, `TONIGHT.md`, `GATE_DIAGNOSIS.md`, `RELATED_WORK.md` | the owner's task list, the overnight plan, the gate audit, the survey feeding the paper | local only |
 | `docs/paper/hexcli-paper.tex` | the methodology paper, eight pages, numbers current at v2.8.0 plus the indirect-injection section (27 runs, 26 attempted, 0 executed) added 2026-09-17 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
