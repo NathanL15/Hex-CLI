@@ -918,8 +918,13 @@ def run_code_tool(
             )
     cmd = [*cmd_prefix, str(path), *[str(a) for a in run_args]]
     try:
+        # No keyboard. With the parent's stdin inherited, a program that
+        # calls input() sat on the owner's terminal until the timeout (10 s,
+        # twice, 2026-09-18: "create a python cli hilo guessing game and run
+        # it"); with stdin closed it raises EOFError at once, and the note
+        # below tells the model what that means.
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace",
         )
     except (PermissionError, FileNotFoundError, OSError) as exc:
@@ -940,10 +945,16 @@ def run_code_tool(
     out = trim_text(stdout, output_limit)
     err = trim_text(stderr, output_limit)
     ui.tool_event("run", f"{path}  (exit {proc.returncode})")
+    note = ""
+    if "EOFError" in stderr:
+        note = (f"\n\nThe program stopped where it reads from the keyboard (input()). "
+                f"run_code has no keyboard to give it, so it cannot be played or driven "
+                f"here; it has to be started in a terminal: python {path.name}. The code "
+                f"up to that point ran.")
     return (
         f"Exit code: {proc.returncode}\n\n"
         f"[stdout]\n{out or '(empty)'}\n\n"
-        f"[stderr]\n{err or '(empty)'}"
+        f"[stderr]\n{err or '(empty)'}{note}"
     )
 
 

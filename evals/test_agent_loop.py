@@ -1367,6 +1367,35 @@ def test_run_code_tool_outside_cwd_raises() -> None:
         assert "restricted" in str(exc).lower() or "working directory" in str(exc).lower()
 
 
+def test_run_code_gives_no_keyboard_and_says_so() -> None:
+    """2026-09-18 06:55: hilo_game.py called input() and run_code sat on the
+    owner's terminal for the whole 10 s timeout, twice. With no stdin the
+    program fails at once, and the result says what to do instead."""
+    import os as _os
+    import time as _time
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = Path(tmp).resolve()
+        game = cwd / "hilo_game.py"
+        game.write_text('print("Welcome")\nguess = int(input("Enter your guess: "))\nprint(guess)\n',
+                        encoding="utf-8")
+        plain = cwd / "plain.py"
+        plain.write_text('print("done")\n', encoding="utf-8")
+        old = Path.cwd()
+        _os.chdir(cwd)
+        try:
+            t0 = _time.monotonic()
+            out = sa.run_code_tool("hilo_game.py", [], 10, _SHELL, 4000)
+            took = _time.monotonic() - t0
+            assert took < 8, took
+            assert "Welcome" in out and "EOFError" in out, out
+            assert "no keyboard" in out and "python hilo_game.py" in out, out
+            assert "TIMEOUT" not in out
+            out2 = sa.run_code_tool("plain.py", [], 10, _SHELL, 4000)
+            assert "done" in out2 and "keyboard" not in out2, out2
+        finally:
+            _os.chdir(old)
+
+
 def test_write_file_tool_leaves_no_tmp_file() -> None:
     """write_file_tool must use atomic rename — no .tmp artefact left on success."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1680,6 +1709,7 @@ TESTS = [
     test_batch_delegate_not_allowed_returns_error_not_crash,
     test_batch_non_dict_action_returns_error_not_crash,
     test_delegate_recursion_guard_raises,
+    test_run_code_gives_no_keyboard_and_says_so,
     test_write_file_tool_leaves_no_tmp_file,
     test_batch_over_limit_returns_error_not_crash,
     test_compact_history_at_minimum_boundary,

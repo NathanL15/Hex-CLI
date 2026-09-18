@@ -4,6 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- `run_code` gives the program no keyboard, and says so when the program
+  asked for one. The child inherited the terminal's standard input, so a
+  program that calls `input()` sat waiting on the owner's console until the
+  tool's timeout: on 2026-09-18 "create a python cli hilo guessing game and
+  run it" wrote a working game and then waited the full ten seconds, twice,
+  to report "TIMEOUT". Standard input is now closed for the child, so
+  `input()` raises `EOFError` at once, and when it does the result adds one
+  line: the program reads from the keyboard, `run_code` has none to give
+  it, and it has to be started in a terminal, with the command. On record:
+  12 `run_code` timeouts whose output ends in a prompt (ten of them the
+  `make-py-1` calculator) and 19 runs that already hit `EOFError` under the
+  eval runner, which has no terminal; 0.6 % of recorded runs, all of them
+  this shape.
+
 ## 2.19.0 — 2026-09-18
 
 A minor release: nudge text the model reads is new (the claimed-fix rule)
