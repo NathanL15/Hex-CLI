@@ -423,6 +423,17 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
         raise RuntimeError("edit_file requires a non-empty 'old_string'. Use write_file to overwrite the whole file.")
     if not path.exists():
         raise RuntimeError(f"File not found: {path}.{missing_path_hint(path)}")
+    if old_string == new_string:
+        # 37 of the 840 edit_file calls on record (2026-09-17) sent the same
+        # text as old and new and were told "Edited"; the model then ran or
+        # read the file believing it had changed it (tests-claim-1: "The
+        # median function was correctly fixed", after an edit of mean to
+        # itself). A no-op is not an edit, and saying so is the only way the
+        # next step can be the change that was meant.
+        raise RuntimeError(
+            f"old_string and new_string are identical, so nothing changed in {path}. "
+            "Put the changed text in new_string, or read_file to see what is there now."
+        )
     content = path.read_text(encoding="utf-8")
     tier = "exact"
     if content.count(old_string) == 1:

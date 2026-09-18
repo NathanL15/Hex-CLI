@@ -4,6 +4,18 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- `edit_file` refuses an edit whose `old_string` and `new_string` are the
+  same text, instead of answering "Edited". 37 of the 840 `edit_file` calls
+  on record sent identical strings and were told the edit landed; the model
+  then ran or read the file believing it had changed it (`tests-claim-1`:
+  "The median function was correctly fixed", after an edit of `mean` to
+  itself; `runit-1` before 2.14.0: the broken line edited to itself, twice,
+  to the step limit). The tool now says nothing changed and what to send
+  instead, and leaves the file byte-identical. A missing file still reports
+  the path first.
+
 ## 2.14.0 — 2026-09-17
 
 A minor release: one tool behaves differently for the model (a `write_file`

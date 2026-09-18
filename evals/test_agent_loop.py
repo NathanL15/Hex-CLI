@@ -1421,6 +1421,31 @@ def test_list_directory_on_file_returns_error() -> None:
         Path(file_path).unlink(missing_ok=True)
 
 
+def test_edit_file_identical_strings_is_refused() -> None:
+    """runit-1 and tests-claim-1, 2026-09-17: an edit whose old_string and
+    new_string are the same text came back "Edited", and the model took that
+    as the fix having landed. Nothing changed, so the tool must say so, and
+    the file must be left byte-identical."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "hello.py"
+        target.write_text('print(\\"Hello, world\\")\n', encoding="utf-8")
+        before = target.read_bytes()
+        raised = ""
+        try:
+            sa.edit_file_tool(str(target), 'print(\\"Hello, world\\")', 'print(\\"Hello, world\\")')
+        except RuntimeError as exc:
+            raised = str(exc)
+        assert "identical" in raised and "nothing changed" in raised, raised
+        assert target.read_bytes() == before
+        # A missing file still reports the path first; a real change still lands.
+        try:
+            sa.edit_file_tool(str(Path(tmp) / "nope.py"), "x", "x")
+        except RuntimeError as exc:
+            assert "File not found" in str(exc), str(exc)
+        assert sa.edit_file_tool(str(target), 'print(\\"Hello, world\\")', 'print("Hello, world")').startswith("Edited")
+        assert target.read_text(encoding="utf-8") == 'print("Hello, world")\n'
+
+
 def test_edit_file_leaves_no_tmp_file() -> None:
     """edit_file atomic write must not leave a .tmp artefact on success."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1621,6 +1646,7 @@ TESTS = [
     test_delegate_called_from_agent_loop_succeeds,
     test_list_directory_nonexistent_path_returns_error,
     test_list_directory_on_file_returns_error,
+    test_edit_file_identical_strings_is_refused,
     test_edit_file_leaves_no_tmp_file,
     test_verify_syntax_detects_invalid_python,
     test_verify_syntax_skips_large_file,
