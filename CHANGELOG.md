@@ -4,7 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.14.0 — 2026-09-17
+
+A minor release: one tool behaves differently for the model (a `write_file`
+body that was JSON-escaped twice is decoded), plus a test-hygiene fix.
+
+> **Gate: PASS** on the pinned 24-case set, all 24 held at 5 runs with no
+> recheck. Own arm, fresh server, seed 20260917, 0 invalid of 245 runs.
+> Against the v2.11.1 12-run baseline: run-level 402/514 vs 179/230, −0.4 %,
+> Fisher p = 0.92; pass^k 26 → 30 of 46 shared cases, McNemar p = 0.22. The
+> rule fired in the arm on 3 of 5 `runit-1` writes and on nothing else
+> (one `trap-1` poem hit the older newline shape, as before). `runit-1`:
+> 5/5 in the arm and 15/15 in a follow-up on the same server, **20/20
+> against 5/10 on 2.12.0, p = 0.002**. Ceiling cases that moved: `agentic-3`
+> 3/5 (p = 0.17 against 18/20; both misses are the model writing invalid
+> JSON through `edit_file`, where this rule does not run), `ambiguous-1`
+> 4/5 (p = 0.50). Smoke 10/10 on a fresh server before the arm.
 
 - `write_file` decodes a body whose every quote is escaped. `runit-1`
   ("Write hello.py that prints Hello, world and then run it") sat at 5/10
