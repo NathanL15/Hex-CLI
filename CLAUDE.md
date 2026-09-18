@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.9.0 release on 2026-09-13 (code at
-`__version__ = "2.9.0"`). When this file and the code disagree, the code
+to date through the 2.13.0 release on 2026-09-17 (code at
+`__version__ = "2.13.0"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`
@@ -57,7 +57,7 @@ Hard numbers that shape every decision:
 | Per-user config | `~/.shellai/shellai.json`; per-project `.shellai/config.json` deep-merged over it |
 | Session state | `<cwd>/.shellai/` (audit.log, logs/, vector_store/, shellai.lock) and `~/.shellai/` (history.json, chatlog/, input_history, commands/, global_vector_store/) |
 | Server log | `~/.shellai/npurun_server.log`, truncated on every start |
-| Eval results | `evals/results/` (gitignored except the tracked few). Gate baselines: **UNPINNED, and that changes verdicts — see §6.** This line has long named `ask_rule_r5_20260905.json` + `persona_guard2_r5_20260912.json` (the 2.7.x arm, 30/44) while the command in §6 uses `ask_rule` + `baseline_20260905.json`; the two pairs give gate sets of 29 and 27 cases and disagree about four of them, including `ambiguous-1`, which broke the gate on 09-15 and is not even gated under the §6 pair; multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
+| Eval results | `evals/results/` (gitignored except the tracked few). Gate set: **pinned in `evals/gate_set.json`** (2026-09-17: 24 cases that never missed across two arms, `armA_v2111_r12.json` = v2.11.1 and `armB_main_r12.json` = 2.12.0, 12 runs each; re-measure with `gate.py --propose-set` before changing it, and change it as a commit). The `--baseline` files now supply only the comparison and the ceiling panel, not membership; multi-turn baseline `multiturn_r3_20260912.json`; scoreboard `LATEST.md`. Arms run detached with `evals\run_arm.cmd`, re-checks with `evals\run_recheck.cmd`, the release gate with `evals\run_release_gate.cmd` |
 | Study data and internal docs | `docs/local/` (git-ignored, owner rule 2026-09-14: only the paper and user-facing docs are committed): backend study, V2 plan/roadmap, levers memo, ARCHITECTURE, related-work survey, TODO |
 | Claude Code memory for this project | `~/.claude/projects/C--Users-Natha/memory/` (hexcli_*.md, project_local_shell_ai.md) — historical detail beyond this file |
 
@@ -256,47 +256,45 @@ into one file), `regrade.py` (re-apply trace-only graders to saved traces;
 refuses truncated tool output). `harness.py`, `extended.py`, `multiturn.py`
 are the superseded v1 instrument; do not use them.
 
-**The gate** (`evals/gate.py`): gate set = cases at 3/3 in EVERY baseline
-(27 of 41 today). A candidate must keep every one; one miss at 3 runs =
-RECHECK at 6 runs with one miss allowed; the rest is a ceiling panel,
-reported not gated. Canary drift > 2× flags every late case.
+**The gate** (`evals/gate.py`): membership is **pinned in
+`evals/gate_set.json`** and measured, not inferred. A candidate must keep
+every member; one miss at the arm's run count = RECHECK at 6 runs with one
+miss allowed; every other valid case is a ceiling panel, reported not gated.
+Canary drift > 2× flags every late case. `gate.py` reads the file once at
+the CLI boundary and hands it down; `gate_sets`, `evaluate` and `calibrate`
+are pure and take `pinned=` explicitly, so tests pass their own fixtures.
 
-**The gate is mis-calibrated, measured 2026-09-16 — read this before
-believing a FAIL.** Run `python evals/gate.py --baseline <b1> --baseline
-<b2> --calibrate <arm.json> ...` for the current numbers. "3/3 in every
-baseline" filters for luck, not reliability: a case at a true 86 % is 3/3
-in one arm about 64 % of the time. Five members of the set are in exactly
-that position over the deduplicated production arms — `factual-1` 86–90 %,
-`self-correct-1` 87–92 %, `agentic-3` 89–91 %, `regression-anchor-1` 91 %,
-`agentic-2` 94 % — and the rule then demands 5/5 from each. Consequences,
-all three measured and agreeing:
+**Why it is pinned (measured 2026-09-16/17, and the reason two releases were
+stuck for three days).** The old rule, "3/3 in EVERY baseline", was a filter
+on luck: a case at a true 86 % is 3/3 in a three-run arm about 64 % of the
+time, so it entered the set on one good morning and was then held to 5/5 for
+ever. Measured on the *released* tree itself, `agentic-2` was 9/12,
+`regression-anchor-1` 10/12, and `factual-1`, `self-correct-1`, `agentic-3`
+11/12. Under that rule a candidate that changed nothing was declared FAIL
+**71 %** of the time; all 8 gate runs on file went to RECHECK first, and the
+3 that ended FAIL were all on cases the measurement rejects. The set also
+depended on which baselines the operator passed (27, 29, 31 or 32 cases for
+the pairs in use). `--propose-set` builds a set from arms — a case qualifies
+only if it never missed, with a minimum run count — and `--calibrate` prints
+what any rule does to a no-op candidate. The first clean PASS in the gate's
+recorded history was 2.12.0, on the pinned set. Full analysis:
+`docs/local/GATE_DIAGNOSIS.md`.
 
-| | |
-|---|---|
-| a candidate that changed NOTHING takes a clean PASS | 1–3 % of the time |
-| …and is declared FAIL | 16–31 % of the time |
-| gate runs on file that went to RECHECK first | 8 of 8 |
-| of those, ended FAIL | 3 — `factual-1`, `agentic-3`, `ambiguous-1` |
-| those three cases' place in the calibration table | all flagged not-gate-worthy |
-
-Two of those three FAILs (09-15, 09-16) were overturned by a control on
-unchanged code, which is what a false alarm looks like. The gate set also
-depends on WHICH baselines are passed — 27, 29, 31 or 32 cases for the
-pairs in use — and nothing pins them, so the same candidate can pass under
-one documented command and fail under the other. Re-basing the set (drop
-the five, or judge each case against its own measured rate) is a change to
-the instrument and is the owner's call; until then, answer a FAIL with a
-control on unchanged code and read the whole-arm statistics.
+**The smoke suite's 10/10 bar has the same flaw** (`RELEASING.md` §The
+gate): it contains `factual-1` (79 %) and `agentic-2` (75 %), so 10/10 on
+perfect code happens 59 % of the time. On a miss, re-run the failing case at
+ten runs against its recorded rate; do not re-roll for a green.
 
 ```powershell
-python evals/gate.py --baseline evals/results/ask_rule_r5_20260905.json --baseline evals/results/baseline_20260905.json evals/results/<candidate>.json
+python evals/gate.py --baseline evals/results/armA_v2111_r12.json evals/results/<candidate>.json
 python evals/compare.py <before.json> <after.json>
+python evals/gate.py --propose-set <arm1.json> --propose-set <arm2.json> --min-runs 18   # rebuild the set
 ```
 
 **Measurement traps (each corrupted real runs)**:
 - **Do not run anything CPU-heavy while a live arm is running — not the offline suites, not in another worktree.** Measured 2026-09-15 from the server log: the arm sustained 17–24 model requests a minute while only text was being edited, **1 a minute** while a 27-suite offline loop ran beside it, and recovered to 12 within minutes of stopping. The arm does not fail, it crawls, and long turns then hit the 300 s client timeout and are recorded as INVALID. The contended arm had 32 invalid runs.
 - Contention is not the whole story, and the same night proved it: the **undisturbed** re-run still had 23 invalid runs in 205, and the server log names the mechanism — 67 `Rewind query failed; recreating dialog` in 509 requests (13 %). A failed Rewind costs a full 5–8 s dialog rebuild, the client then retries into a busy slot (225 `inference slot busy`), and a long turn runs out its timeout. This is the divergence ceiling (~3,200 cached tokens) showing up as measurement noise, and it is the concrete motivation for testing a lower input budget as a STALL lever (closed only as a quality lever). Arms before 2026-09-15 reported 0 invalid runs; treat a double-digit invalid count as a platform reading, not a code regression, and report it with the verdict.
-- A server that has served 1–2 h of eval traffic degrades into sticky `ERROR_QUERY_FAILED (-6)`, which grades exactly like a model regression. Restart before every suite. The runner marks 5xx / URLError / -6 runs INVALID and refuses to start against a dead backend; a file with invalid runs is re-run, not compared.
+- A server that has served 1–2 h of eval traffic can degrade into sticky `ERROR_QUERY_FAILED (-6)`, which grades exactly like a model regression. Restart before every suite. (Tested directly 2026-09-16: fresh blocks 45/48 vs 29/54/78-minute blocks 65/72, p = 0.74, canary and Rewind rates flat — the effect did not appear in 78 minutes, so a FAIL late in an arm is not explained by this alone.) The runner marks 5xx / URLError / -6 runs INVALID and refuses to start against a dead backend; a file with invalid runs is re-run, not compared.
 - Never compare arm A vs arm B across time on this NPU; platform state flips. Fresh server per arm, one variable changed, same seed.
 - ±1 run on a 3-run case is noise. Read the traces before believing a verdict; several "model failures" were grader or infrastructure bugs (livestate-1 was structurally unpassable for weeks; `answer_matches` vs `regex_answer_matches`).
 - Baseline protocol is v1; `extended_v2` in a filename is the instrument version, not the protocol. Read the `protocol` field.
@@ -340,7 +338,7 @@ loss; do not argue with the instrument.
 ## 8. Releasing (`RELEASING.md` is authoritative)
 
 - One version source: `hexcli/__init__.py`. CI refuses a `v*` tag that does not match.
-- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); the next release is 2.8.2 or 2.9.0 by the rule above.
+- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); 2.9.0–2.11.1 followed on 09-13/14; 2.12.0 (item 1: the intent, contradiction and verification nudges, closest-path hint, Python-spelled actions, raw-JSON guard, long-write; paired A/B PASS) and 2.13.0 (AST command classifier, four alias bypasses closed, 0 of 119 recorded commands change tier) on 09-17. The next release is 2.13.1 or 2.14.0 by the rule above.
 - Fork changes ship as fork releases first (`vX.Y.Z` on NathanL15/npurun with `npurun-arm64.exe` attached, fork CHANGELOG). Hex pins `REQUIRED_NPURUN` in `launcher.py`; `install.ps1` reads that literal by regex, so keep the line shape `REQUIRED_NPURUN = (0, 2, 3)`. Never pin past a fork release that does not exist. Hex releases carry the wheel and sdist (attached by `.github/workflows/publish.yml` on release, which also publishes to PyPI as `hexcli` via trusted publishing — no token anywhere), never the npurun binary.
 - Fork build: `cargo install --path crates/npurun-cli` inside the fork's dev shell (`scripts/dev-shell.ps1`; needs MSVC ARM64, LLVM on PATH for bindgen, `QNN_SDK_ROOT`). Known traps: GNU `link.exe` from Git Bash shadowing MSVC's; `ADSP_LIBRARY_PATH` unset.
 - Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → push main → wait for the remote CI run to be green (`gh run list --commit <sha>`) → tag → push the tag → CI green on the tag → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>` → the Publish workflow attaches wheel+sdist and publishes to PyPI; check it is green. Title is the bare version.
@@ -428,10 +426,10 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 |---|---|---|
 | `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
-| `CHANGELOG.md` | what shipped and the numbers | current through 2.8.1; `Unreleased` empty |
+| `CHANGELOG.md` | what shipped and the numbers | current through 2.13.0; no `Unreleased` section (add one with the next change) |
 | `docs/local/V2X_ROADMAP.md`, `RESEARCH_NEXT_LEVERS.md`, `V2_PLAN.md` (§14 evidence), `ARCHITECTURE.md`, `backend_study/` | internal: phase status, the levers memo, the evidence archive, design rationale, the measurement study | local only since 2026-09-14 (git-ignored); frozen at their 09-07/09-12 currency |
-| `docs/local/TODO.md`, `TONIGHT.md`, `RELATED_WORK.md` | the owner's task list, the overnight plan, the survey feeding the paper | local only |
-| `docs/paper/hexcli-paper.tex` | the methodology paper, six pages, numbers current at v2.8.0 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
+| `docs/local/TODO.md`, `TONIGHT.md`, `GATE_DIAGNOSIS.md`, `RELATED_WORK.md` | the owner's task list, the overnight plan, the gate audit, the survey feeding the paper | local only |
+| `docs/paper/hexcli-paper.tex` | the methodology paper, eight pages, numbers current at v2.8.0 plus the indirect-injection section (27 runs, 26 attempted, 0 executed) added 2026-09-17 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
 | `evals/results/LATEST.md` | scoreboard and the gate command | regenerate with `gate.py --scoreboard` |
 
 `tools/`: `gen_example_config.py`, `chatlog_report.py` (`--last`,
