@@ -4,6 +4,33 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- The intent nudge counts only a mutation that landed, catches a claimed
+  fix with no change behind it, and reads "cannot be created" however the
+  sentence goes on. Three gaps, all from the owner's 2026-09-18 session.
+  The loop had been passing "a tool with a path was called" as *mutated*,
+  which an `edit_file` on a missing file satisfies, so when the turn ended
+  "A calculator app cannot be created without a matching file" right after
+  exactly that error, the create rule stayed silent -- and its wording only
+  knew "cannot be created in this environment" anyway. Later, "fix it" was
+  answered with "The file has been fixed by removing the malformed line"
+  after a `run_code` that showed the SyntaxError and no edit at all; nothing
+  looked at that. Now *mutated* means a write, edit or append that did not
+  error; the denial wording matches `cannot be (built|created|done|made)`
+  with any continuation; and a request to fix, correct, update or change
+  something (an instruction, not a question) answered with "has been fixed",
+  "was corrected", "is now updated" and no mutation gets one nudge to make
+  the change or say plainly that nothing was changed. Replayed over the 206
+  real turns and 5,389 recorded runs with the loop's own semantics: on real
+  turns the nudge fires 11 times, all genuine (two new: the refusal above
+  and the claimed fix); on recorded runs the new rule fires on seven, five
+  of them `ambiguous-2` answering "Update the file." with "Updated the file
+  as requested" and no tool call, two of them `tests-claim-1` claiming a
+  correction it never made. The question form is what keeps `memory-1`
+  ("which file did you fix?") out: its honest recall fired 14 times in the
+  first draft and zero now.
+
 ## 2.18.0 — 2026-09-18
 
 A minor release: what `write_file` writes for one shape of body changes,

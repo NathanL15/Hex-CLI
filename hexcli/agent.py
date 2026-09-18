@@ -1165,6 +1165,7 @@ def _run_autopilot_turn(
     # must observe something (run/read/check) before its answer is accepted.
     # One nudge per turn — it guides, never traps.
     _unverified_mutation = False
+    _mutated_ok = False            # a write/edit/append that did not error, this turn
     _verify_nudge_used = False
     # The user asked for the tests to be run: what the run tools executed
     # this turn, so a finish without a test run can be sent back once.
@@ -1343,8 +1344,8 @@ def _run_autopilot_turn(
             # claimed to have checked with no tool call at all.
             if not _intent_nudge_used and config.get("require_verification", True):
                 _intent_text = _intent_nudge(
-                    query, msg, mutated=bool(touched_paths), ran=_ran_anything,
-                    tools_used=tools_used)
+                    query, msg, mutated=_mutated_ok, ran=_ran_anything,
+                    tools_used=tools_used, touched=bool(touched_paths))
                 if _intent_text:
                     _intent_nudge_used = True
                     messages.append({"role": "assistant", "content": strip_thinking(raw)})
@@ -1476,6 +1477,7 @@ def _run_autopilot_turn(
         _is_error = tool_output.lstrip().startswith("Error:")
         if tool_name in {"edit_file", "write_file", "append_file"} and not _is_error:
             _unverified_mutation = True
+            _mutated_ok = True
         elif tool_name in {"read_file", "run_code", "verify_syntax", "lint_code",
                            "run_command"} and not _is_error:
             _unverified_mutation = False
@@ -1790,8 +1792,21 @@ _WANTS_FIND_RE = re.compile(
 # means, which for a file-writing agent is false.
 _DENIES_MEANS_RE = re.compile(
     r"\b(no tools? (are )?available|not feasible|unable to (build|create|make|generate)"
-    r"|cannot be (built|created|done) (in|within) this environment"
+    r"|cannot be (built|created|done|made)\b"
     r"|outside the (scope|capabilities)|no (tool|way|mechanism) (to|for)\b)", re.IGNORECASE)
+
+# "fix it" answered with "has been fixed" and no file changed. 2026-09-18
+# 07:03: "The file has been fixed by removing the malformed line" after a
+# run_code that showed the SyntaxError and no edit at all. The request has
+# to be an instruction, not a question: memory-1 asks "which file did you
+# fix?" and the honest recall "the syntax error was fixed in buggy_calc.py"
+# must not fire (it did, in the first draft, 14 runs of a 12/12 case).
+_WANTS_FIX_RE = re.compile(
+    r"\b(fix|correct|repair|patch|update|change|modify|edit)\b", re.IGNORECASE)
+_CLAIMS_FIXED_RE = re.compile(
+    r"\b(has been|have been|was|were|is now|are now|successfully)\s+"
+    r"(fixed|corrected|updated|modified|changed|repaired|resolved|patched)\b"
+    r"|\b(fixed|corrected|updated|modified|repaired|patched) (the|it|this)\b", re.IGNORECASE)
 
 _CLAIMS_NEGATIVE_RE = re.compile(
     r"\b(no|none|not|nothing|couldn't|could not|unable to)\b[^.]{0,40}"
@@ -1926,10 +1941,22 @@ def _contradicted_not_found(msg: str, outputs: list[str]) -> str:
 
 
 def _intent_nudge(query: str, msg: str, *, mutated: bool, ran: bool,
-                  tools_used: list[str]) -> str:
+                  tools_used: list[str], touched: bool | None = None) -> str:
     """One nudge when the turn did none of the work the request implies.
-    Empty string when there is nothing to say."""
-    if (_WANTS_RUN_RE.search(query) and mutated and not ran
+    Empty string when there is nothing to say.
+
+    `mutated` is a write/edit/append that SUCCEEDED this turn. Until
+    2026-09-18 the loop passed "any tool with a path was called", which is
+    true after a read_file or after an edit_file that errored, so the
+    create rule below was silenced by the very failure it exists for: the
+    owner's "please create a working calculator app" turn ended "A
+    calculator app cannot be created without a matching file" right after
+    an edit_file on a file that did not exist. `touched` keeps the run
+    rule's older, wider sense (a file was at least read) for callers that
+    have it."""
+    if touched is None:
+        touched = mutated
+    if (_WANTS_RUN_RE.search(query) and touched and not ran
             and not _asks_to_run_tests(query)):
         return ("You were asked to run it and nothing was run this turn. Run it now "
                 "with run_code (or run_command) and report the output you actually "
@@ -1949,6 +1976,11 @@ def _intent_nudge(query: str, msg: str, *, mutated: bool, ran: bool,
         return ("You said you checked, but this turn made no tool call at all. "
                 "Check it with a tool and report what the tool returned, or say "
                 "plainly that you did not check. Respond with JSON only.")
+    if (_WANTS_FIX_RE.search(query) and "?" not in query and not mutated
+            and _CLAIMS_FIXED_RE.search(msg)):
+        return ("You said it was fixed, but no file was changed this turn. Make "
+                "the change with edit_file (or write_file) and then verify it, or "
+                "say plainly that nothing was changed. Respond with JSON only.")
     return ""
 
 
