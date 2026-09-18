@@ -461,7 +461,7 @@ def write_file_tool(path_text: str, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     note = ""
     if p2.looks_double_escaped(content):
-        content = p2.unescape_json(content)
+        content = p2.unescape_body(content, str(path))
         note = ", unescaped"
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")

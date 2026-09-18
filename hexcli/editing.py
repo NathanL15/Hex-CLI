@@ -13,6 +13,7 @@ audit (2026-07) through the merge tier (2026-09-13).
 from __future__ import annotations
 
 import difflib
+import ast
 import re
 
 # Tier that landed the most recent successful block: "exact", "whitespace",
@@ -138,6 +139,45 @@ def _apply_one(content: str, search: str, replace: str, block_no: int) -> tuple[
 def unescape_json(text: str) -> str:
     """Decode one level of JSON escapes (\\" \\n \\t \\\\)."""
     return _unescape_json(text)
+
+
+_QUOTE_ADJACENT_NL = re.compile(r'(["\'])\\n|\\n(["\'])')
+
+
+def unescape_body(text: str, path: str) -> str:
+    """Decode a double-escaped file body, keeping a Python source parseable.
+
+    A body the model escaped twice carries its line breaks as literal \\n --
+    and so does every \\n it meant as a string escape inside the code:
+    `print(\\"\\nWelcome\\")` and the line break after it are the same two
+    characters. Decoding all of them (the 2.9.0 rule) turns the escape into a
+    real newline inside the string literal, and the file the owner got on
+    2026-09-18 read `print("` / `Welcome to the Calculator App!")` -- a
+    SyntaxError the model then spent eleven steps not fixing.
+
+    For a .py path, decode everything and parse; if that fails, decode
+    everything EXCEPT a \\n that sits right after an opening quote or right
+    before a closing one, and parse again; keep whichever parses, and the
+    full decode when neither does (the caller's checker will say so). Other
+    file types get the full decode as before. Measured over the 511
+    write_file bodies on record: five are double-escaped, two of those have
+    a quote-adjacent \\n, and one of the two (the session above) parses only
+    this way."""
+    full = _unescape_json(text)
+    if not path.lower().endswith(".py"):
+        return full
+    try:
+        ast.parse(full)
+        return full
+    except SyntaxError:
+        pass
+    kept = _QUOTE_ADJACENT_NL.sub(lambda m: (m.group(1) or "") + "\x00" + (m.group(2) or ""), text)
+    candidate = _unescape_json(kept).replace("\x00", "\\n")
+    try:
+        ast.parse(candidate)
+        return candidate
+    except SyntaxError:
+        return full
 
 
 _DELTA_TOKEN_RE = re.compile(r"\w+|\s+|[^\w\s]")

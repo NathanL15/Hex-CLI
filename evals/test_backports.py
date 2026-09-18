@@ -368,7 +368,43 @@ def test_reply_missing_its_last_brace_is_closed_and_decoded() -> None:
     assert _p.parse_json_object('{"action":"finish","message":"say "hi" now"}') == {"action": "finish", "message": 'say "hi" now'}
 
 
+def test_double_escaped_python_body_keeps_its_string_escapes() -> None:
+    """2026-09-18, verbatim: the calculator body the model sent after being
+    told to fix its quoting. Forty literal \\n, two of them inside print
+    strings. Decoding all forty gave a file with `print("` on one line and
+    the text on the next; keeping the two next to a quote gives the program
+    the model meant."""
+    import ast as _ast
+    from hexcli import editing as _p2
+    body = (Path(__file__).resolve().parent / "fixtures"
+            / "write_2026-09-18_calculator_mixed_escapes.txt").read_text(encoding="utf-8")
+    assert _p2.looks_double_escaped(body)
+    full = _p2.unescape_json(body)
+    try:
+        _ast.parse(full)
+        raise AssertionError("the full decode should not parse; the fixture would be moot")
+    except SyntaxError:
+        pass
+    out = _p2.unescape_body(body, "calculator.py")
+    _ast.parse(out)
+    assert 'print("\\nWelcome to the Calculator App!")' in out, out[:300]
+    assert out.count("\n") >= 30
+    # Through the tool, and only for Python: the same body written as .txt
+    # gets the full decode, as before.
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "calculator.py"
+        sa.write_file_tool(str(f), body)
+        _ast.parse(f.read_text(encoding="utf-8"))
+        t = Path(tmp) / "calculator.txt"
+        sa.write_file_tool(str(t), body)
+        assert t.read_text(encoding="utf-8") == full
+    # A body where the full decode already parses is left as the full decode.
+    plain = "import re\\n\\n\\nX = 1"
+    assert _p2.unescape_body(plain, "m.py") == "import re\n\n\nX = 1"
+
+
 TESTS = [
+    test_double_escaped_python_body_keeps_its_string_escapes,
     test_reply_missing_its_last_brace_is_closed_and_decoded,
     test_write_file_decodes_double_escaped_body,
     test_stray_quote_in_a_write_is_repaired_not_skipped,
