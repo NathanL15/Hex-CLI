@@ -1040,13 +1040,13 @@ def test_find_files_takes_pattern_as_the_glob() -> None:
         (Path(tmp) / "work" / "archive" / "project-notes.md").write_text("x", encoding="utf-8")
         (Path(tmp) / "work" / "readme.txt").write_text("y", encoding="utf-8")
         cfg = {"tool_output_limit": 4000}
-        out = sa.execute_tool_call(cfg, {"action": "find_files", "args": {"pattern": "**/project-notes.md", "path": tmp}}, None)
+        out = sa.execute_tool_call(cfg, {"tool": "find_files", "args": {"pattern": "**/project-notes.md", "path": tmp}}, None)
         assert "project-notes.md" in out and "requires" not in out, out
-        out = sa.execute_tool_call(cfg, {"action": "find_files", "args": {"glob": "**/readme.txt", "pattern": "**/*.md", "path": tmp}}, None)
+        out = sa.execute_tool_call(cfg, {"tool": "find_files", "args": {"glob": "**/readme.txt", "pattern": "**/*.md", "path": tmp}}, None)
         assert "readme.txt" in out and "project-notes" not in out, out
         raised = ""
         try:
-            sa.execute_tool_call(cfg, {"action": "find_files", "args": {"path": tmp}}, None)
+            sa.execute_tool_call(cfg, {"tool": "find_files", "args": {"path": tmp}}, None)
         except RuntimeError as exc:
             raised = str(exc)
         assert "requires 'glob'" in raised, raised
