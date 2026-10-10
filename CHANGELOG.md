@@ -4,6 +4,31 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.0 — 2026-10-10
+
+A minor release: a tool result the model reads changes (`edit_file` when
+`new_string` carries a literal `\n` and the file would not parse).
+
+> **Gate: PASS** on the pinned 24-case set after one recheck: `agentic-1`
+> had all five runs invalid ("backend unreachable", the server stalled when
+> free memory hit 1.4 GB), and re-run on a fresh server it was 6/6. Own arm,
+> seed 20261011, against 2.21.0's arm: run-level 184/234 vs 186/233,
+> −1.2 %, Fisher p = 0.82; pass^k 34 → 32 of 49, McNemar p = 0.73; 11
+> invalid runs of 245. The decode never fired in the arm: none of its 48
+> `edit_file` calls had a literal `\n` in `new_string`, so every edit result
+> was byte-identical to 2.21.0 and the arm-level movement is run-to-run
+> noise. The gate shows nothing broke; the benefit is not yet measured live.
+
+- When an edit to a `.py` or `.json` file would leave it unparseable and
+  `new_string` has a literal `\n` but no real line break, `edit_file` tries
+  the decoded `new_string` (the full decode, then for Python one that keeps a
+  quote-adjacent escape) and keeps it only if the file then parses. 139 of
+  1,746 recorded `edit_file` calls put a literal `\n` in `new_string`, 135
+  with no real line break, mostly in `self-correct-1`, `agentic-3` and
+  `regression-anchor-1`, and the 2.21.0 arm lost a run of each of the latter
+  two to it. An escape that parses as written is never touched, and other
+  file types are left alone.
+
 ## 2.21.0 — 2026-10-10
 
 A minor release: a tool result the model reads changes (`edit_file` when
