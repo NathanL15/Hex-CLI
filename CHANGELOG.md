@@ -4,6 +4,19 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.1 — 2026-10-10
+
+A patch release: only the eval harness changes.
+
+- `python evals/cases_smoke.py` runs ten cases from the pinned gate set
+  (`SMOKE_SET`) instead of its own ten. The old set held `factual-1` (19/24),
+  `agentic-2` (18/24), `agentic-3` (18/20) and `lint-1` (20/21), so
+  unchanged code scored 10/10 about half the time and most releases
+  re-measured one of them. Each of the new ten passed every run in the two
+  arms that pinned the gate set and in the 16 arms since (44–51 runs each).
+  The new set went 10/10 on its first live run. The extended suite is
+  unchanged.
+
 ## 2.22.0 — 2026-10-10
 
 A minor release: a tool result the model reads changes (`edit_file` when

@@ -766,6 +766,12 @@ def test_suite_definitions_valid() -> None:
     assert len(ids) == len(set(ids)), "duplicate case ids"
     assert all(callable(c.verify) for c in EXTENDED_CASES)
     assert len(SMOKE_CASES) >= 9, "smoke suite lost cases"
+    import json
+
+    from evals.cases_smoke import SMOKE_SET, smoke_suite
+    pinned = json.loads((Path(__file__).parent / "gate_set.json").read_text(encoding="utf-8"))["cases"]
+    assert [c.id for c in smoke_suite()] == list(SMOKE_SET) and len(SMOKE_SET) == 10
+    assert set(SMOKE_SET) <= set(pinned), sorted(set(SMOKE_SET) - set(pinned))
     # v1 extended matrix was 35 cases (9 smoke + 26 extension); lint-1 is
     # conditional on ruff, so the floor without it is 34.
     assert len(EXTENDED_CASES) >= 34, f"extended suite lost coverage: {len(EXTENDED_CASES)} cases"

@@ -100,8 +100,26 @@ SMOKE_CASES: list[Case] = [
 ]
 
 
+# What `python evals/cases_smoke.py` runs: ten gate-set cases (evals/gate_set.json),
+# none of which missed a run in the two arms that pinned that set or the 16 arms
+# since (44-53 runs each, 2026-10-10). SMOKE_CASES above stays the first block of
+# the extended suite. Run as a gate it held factual-1 (79 %), agentic-2 (75 %),
+# agentic-3 and lint-1, so unchanged code scored 10/10 about half the time.
+SMOKE_SET = (
+    "casual-1", "casual-2", "casual-3", "factual-2", "factual-3",
+    "agentic-1", "regression-count-1", "missing-file-1", "bigfile-1",
+    "error-recovery-2",
+)
+
+
+def smoke_suite() -> list[Case]:
+    from evals.cases_extended import EXTENDED_CASES
+    by_id = {c.id: c for c in EXTENDED_CASES}
+    return [by_id[i] for i in SMOKE_SET]
+
+
 def main() -> int:
-    return run_suite_cli("smoke_v2", cases=SMOKE_CASES, default_runs=1)
+    return run_suite_cli("smoke_v2", cases=smoke_suite(), default_runs=1)
 
 
 if __name__ == "__main__":

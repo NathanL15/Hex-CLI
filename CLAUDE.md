@@ -4,8 +4,8 @@ Read this first in every session. It is the project's working knowledge for
 Claude Code: what the system is, where things live, how work is developed,
 tested, measured and released, and which questions are already settled.
 Everything here was verified against the tree on 2026-09-10 and brought up
-to date through the 2.22.0 release on 2026-10-10 (code at
-`__version__ = "2.22.0"`). When this file and the code disagree, the code
+to date through the 2.22.1 release on 2026-10-10 (code at
+`__version__ = "2.22.1"`). When this file and the code disagree, the code
 wins; fix this file in the same commit.
 
 `AGENTS.md` in this repo is NOT for you. Hex CLI itself reads `AGENTS.md`
@@ -234,7 +234,7 @@ Live suites (`evals/`), all through `runner.run_suite_cli`:
 
 | Suite | Cases | Purpose | Typical command |
 |---|---|---|---|
-| `cases_smoke.py` | 10 | merge gate | `python evals/cases_smoke.py` → 10/10 |
+| `cases_smoke.py` | 10 (`SMOKE_SET`, from the gate set) | merge gate | `python evals/cases_smoke.py` → 10/10 |
 | `cases_extended.py` | 44 | headline adversarial + regression (tests-claim-1, missing-file-1/2 added 2026-09-12) | `evals\run_arm.cmd <name> <seed> <baseline> [baseline2]` detached (5 runs/case, ~40 min, then gate + compare into `evals/results/<name>.log`); or `python evals/cases_extended.py --runs 5 --seed <n>` by hand |
 | `cases_multiturn.py` | 3 scenarios, 16 turns | long-context, injection (uc3), REPL-parity history | `python evals/cases_multiturn.py --runs 3 --think-time 15` |
 | `cases_everyday.py` | 30 | machine-truth questions (RAM, CPU, dates, arithmetic) | `--runs 3` default |
@@ -280,10 +280,11 @@ what any rule does to a no-op candidate. The first clean PASS in the gate's
 recorded history was 2.12.0, on the pinned set. Full analysis:
 `docs/local/GATE_DIAGNOSIS.md`.
 
-**The smoke suite's 10/10 bar has the same flaw** (`RELEASING.md` §The
-gate): it contains `factual-1` (79 %) and `agentic-2` (75 %), so 10/10 on
-perfect code happens 59 % of the time. On a miss, re-run the failing case at
-ten runs against its recorded rate; do not re-roll for a green.
+**The smoke suite had the same flaw until 2.22.1**: it held `factual-1`
+(79 %) and `agentic-2` (75 %), so unchanged code scored 10/10 about half the
+time. `SMOKE_SET` in `evals/cases_smoke.py` now names ten gate-set cases with
+no missed run on record. On a miss, re-run the failing case at ten runs;
+do not re-roll for a green.
 
 ```powershell
 python evals/gate.py --baseline evals/results/armA_v2111_r12.json evals/results/<candidate>.json
@@ -341,7 +342,7 @@ loss; do not argue with the instrument.
 ## 8. Releasing (`RELEASING.md` is authoritative)
 
 - One version source: `hexcli/__init__.py`. CI refuses a `v*` tag that does not match.
-- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); 2.9.0–2.11.1 followed on 09-13/14; 2.12.0 (item 1: the intent, contradiction and verification nudges, closest-path hint, Python-spelled actions, raw-JSON guard, long-write; paired A/B PASS) and 2.13.0 (AST command classifier, four alias bypasses closed, 0 of 119 recorded commands change tier) on 09-17; 2.14.0 (`write_file` decodes a body whose every quote is escaped; `runit-1` 5/10 → 20/20), 2.15.0 (`edit_file` refuses identical strings instead of saying "Edited") and 2.16.0 (`find_files` takes `pattern` as its glob) on 09-17/18, one arm and one pinned-gate PASS each; then, from the owner's 2026-09-18 HiLo/calculator session, 2.17.0 (the parser closes a reply that stops one brace short -- the root cause of that session's failure), 2.18.0 (a double-escaped `.py` body keeps a quote-adjacent `\n` when only that parses; cut from a branch off its release commit because CI failed on two unsorted imports -- read ruff's verdict line, not its last line), 2.19.0 (the intent nudge counts only a mutation that landed, reads "cannot be created" with any continuation, and catches a claimed fix with no edit) and 2.20.0 (`run_code` closes stdin and names the terminal command on `EOFError`), each with its own arm. 2.20.1 (2026-10-10, patch: a stopped turn's notice names the tool, the file and whether anything changed; a pipe gets that sentence; the history entry is unchanged) and 2.21.0 (same day: a missed `edit_file` on a file of up to 1,500 characters returns the whole file; gate PASS after one recheck, `claims-2` 2/5 → 5/5), then 2.22.0 (same day: `edit_file` decodes a literal-`\n` `new_string` on a `.py`/`.json` file only when that is what makes the file parse; gate PASS after one recheck, but the decode never fired in its arm, so the benefit is unmeasured live). The next release is 2.22.1 or 2.23.0 by the rule above.
+- Patch = no model-facing change and nothing the launcher hands the server. Minor = features, any `prompts.py` change, launcher env or runtime keys, a `REQUIRED_NPURUN` bump. Major = model, runtime generation or history representation. 2.7.0 shipped 2026-09-12 (Terminal layout, persona fixes, installer, the two loop nudges and the named-file guard), 2.7.1 the same day (runner path fix), 2.8.0 that evening (installable package, `~/.shellai` data dir, Format-List classifier fix, README clips; on PyPI as `hexcli`); 2.8.1 the same night (installer icon repair, publish workflow, README rewrite, six-page paper); 2.9.0–2.11.1 followed on 09-13/14; 2.12.0 (item 1: the intent, contradiction and verification nudges, closest-path hint, Python-spelled actions, raw-JSON guard, long-write; paired A/B PASS) and 2.13.0 (AST command classifier, four alias bypasses closed, 0 of 119 recorded commands change tier) on 09-17; 2.14.0 (`write_file` decodes a body whose every quote is escaped; `runit-1` 5/10 → 20/20), 2.15.0 (`edit_file` refuses identical strings instead of saying "Edited") and 2.16.0 (`find_files` takes `pattern` as its glob) on 09-17/18, one arm and one pinned-gate PASS each; then, from the owner's 2026-09-18 HiLo/calculator session, 2.17.0 (the parser closes a reply that stops one brace short -- the root cause of that session's failure), 2.18.0 (a double-escaped `.py` body keeps a quote-adjacent `\n` when only that parses; cut from a branch off its release commit because CI failed on two unsorted imports -- read ruff's verdict line, not its last line), 2.19.0 (the intent nudge counts only a mutation that landed, reads "cannot be created" with any continuation, and catches a claimed fix with no edit) and 2.20.0 (`run_code` closes stdin and names the terminal command on `EOFError`), each with its own arm. 2.20.1 (2026-10-10, patch: a stopped turn's notice names the tool, the file and whether anything changed; a pipe gets that sentence; the history entry is unchanged) and 2.21.0 (same day: a missed `edit_file` on a file of up to 1,500 characters returns the whole file; gate PASS after one recheck, `claims-2` 2/5 → 5/5), then 2.22.0 (same day: `edit_file` decodes a literal-`\n` `new_string` on a `.py`/`.json` file only when that is what makes the file parse; gate PASS after one recheck, but the decode never fired in its arm, so the benefit is unmeasured live) and 2.22.1 (patch: the smoke suite runs ten gate-set cases). The next release is 2.22.2 or 2.23.0 by the rule above.
 - Fork changes ship as fork releases first (`vX.Y.Z` on NathanL15/npurun with `npurun-arm64.exe` attached, fork CHANGELOG). Hex pins `REQUIRED_NPURUN` in `launcher.py`; `install.ps1` reads that literal by regex, so keep the line shape `REQUIRED_NPURUN = (0, 2, 3)`. Never pin past a fork release that does not exist. Hex releases carry the wheel and sdist (attached by `.github/workflows/publish.yml` on release, which also publishes to PyPI as `hexcli` via trusted publishing — no token anywhere), never the npurun binary.
 - Fork build: `cargo install --path crates/npurun-cli` inside the fork's dev shell (`scripts/dev-shell.ps1`; needs MSVC ARM64, LLVM on PATH for bindgen, `QNN_SDK_ROOT`). Known traps: GNU `link.exe` from Git Bash shadowing MSVC's; `ADSP_LIBRARY_PATH` unset.
 - Steps: move CHANGELOG Unreleased under `## X.Y.Z — YYYY-MM-DD` → set `__version__` → commit `Release X.Y.Z` → push main → wait for the remote CI run to be green (`gh run list --commit <sha>`) → tag → push the tag → CI green on the tag → `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section>` → the Publish workflow attaches wheel+sdist and publishes to PyPI; check it is green. Title is the bare version.
@@ -429,7 +430,7 @@ cases are the model's known ~1-in-3 bait compliance ceiling.
 |---|---|---|
 | `README.md` | user-facing install/usage/commands/config | current (2026-09-12: PyPI route, clips grid) |
 | `RELEASING.md` | numbering, fork pin, the gate | current |
-| `CHANGELOG.md` | what shipped and the numbers | current through 2.22.0; no `Unreleased` section (add one with the next change) |
+| `CHANGELOG.md` | what shipped and the numbers | current through 2.22.1; no `Unreleased` section (add one with the next change) |
 | `docs/local/V2X_ROADMAP.md`, `RESEARCH_NEXT_LEVERS.md`, `V2_PLAN.md` (§14 evidence), `ARCHITECTURE.md`, `backend_study/` | internal: phase status, the levers memo, the evidence archive, design rationale, the measurement study | local only since 2026-09-14 (git-ignored); frozen at their 09-07/09-12 currency |
 | `docs/local/TODO.md`, `TONIGHT.md`, `GATE_DIAGNOSIS.md`, `RELATED_WORK.md` | the owner's task list, the overnight plan, the gate audit, the survey feeding the paper | local only |
 | `docs/paper/hexcli-paper.tex` | the methodology paper, eight pages, numbers current at v2.8.0 plus the indirect-injection section (27 runs, 26 attempted, 0 executed) added 2026-09-17 (window figure = 3,696 budget, 32/44, 35/48, backend study; the 10-page pre-restructure source is in git history at c47a0ce) | build with `latexmk -pdf` in docs/paper; check `Overfull box` in the log (the timeline is a longtable) |
