@@ -4,6 +4,24 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.20.1 — 2026-10-10
+
+A patch release: nothing the model reads changes. The turn's return value
+and the history entry for a stopped turn are byte-identical to 2.20.0.
+
+- A turn the loop stops now says which tool failed, on which file, and
+  whether any file changed: "Stopped after edit_file failed three times on
+  calculator.py; no file was changed." instead of "Stopped: edit_file failed
+  three times in a row." 33 recorded turns ended on a loop or step-limit stop
+  with only the raw `old_string was not found` error behind them, and none of
+  them said whether the file had been touched. The file clause comes from the
+  writes that landed this turn, not from the attempts, so a turn that wrote
+  `notes.txt` and then got stuck on `calculator.py` names `notes.txt`; a turn
+  that never tried to change a file gets no clause.
+- Off a terminal (`hex "..." | clip`, scripts) a stopped turn printed
+  nothing at all. It prints the stop sentence. The raw tool output still goes
+  to the session history, where the next turn reads it.
+
 ## 2.20.0 — 2026-09-18
 
 A minor release: a tool result the model reads changes (`run_code` on a
