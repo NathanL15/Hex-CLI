@@ -4,6 +4,35 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.21.0 — 2026-10-10
+
+A minor release: a tool result the model reads changes (`edit_file` when
+`old_string` is not in the file).
+
+> **Gate: PASS** on the pinned 24-case set after one recheck:
+> `error-recovery-3` missed one of five runs, and that run never called
+> `edit_file` (it reported a "permission error" after `find_files`); re-run on
+> a fresh server it was 6/6. Own arm, seed 20261010, against 2.20.0's arm:
+> run-level 189/237 vs 192/245, +1.4 %, Fisher p = 0.74; pass^k 32 → 34 of
+> 49, McNemar p = 0.73; 8 invalid runs of 245 (backend timeouts, 2.2 GB
+> free). `claims-2`, one of the three cases behind most of the recorded
+> misses, went 2/5 → 5/5. `self-correct-1` lost one run to the known
+> double-escaped `new_string` (a literal `\n` landed on the first edit,
+> before any miss), and `regression-anchor-1` lost one to the same defect
+> with no miss at all. Smoke 9/9 valid on a fresh server.
+
+- A missed `edit_file` on a file of up to 1,500 characters returns the
+  file's whole current text instead of the closest region. Of 1,279 recorded
+  `edit_file` calls, 786 were made without reading the file that turn and
+  failed 45 % of the time against 9 % after a read, and 115 of the 291
+  misses came straight after another miss on the same file: the retry was
+  rebuilt from memory again. Every fixture behind those misses is under 200
+  characters. In the arm the message fired 16 times, in `tests-claim-1`,
+  `self-correct-1`, `claims-2` and `agentic-3`, and the next edit landed
+  after 7 of them (44 %), against 14 of 39 (36 %) in the three arms before
+  it; at that count the recovery rate is not yet a measured effect. A larger
+  file keeps the closest-region report.
+
 ## 2.20.1 — 2026-10-10
 
 A patch release: nothing the model reads changes. The turn's return value
