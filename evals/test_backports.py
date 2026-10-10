@@ -140,6 +140,64 @@ def test_edit_file_no_match_on_an_empty_file_says_it_is_empty() -> None:
     assert "(the file is empty)" in msg, msg
 
 
+def _edit(name: str, before: str, old: str, new: str) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / name
+        f.write_text(before, encoding="utf-8")
+        sa.edit_file_tool(str(f), old, new)
+        return f.read_text(encoding="utf-8")
+
+
+def test_edit_file_decodes_a_double_escaped_python_new_string() -> None:
+    """self-correct-1, 53 recorded calls: the fix arrives with its line break
+    as a literal backslash-n and the file kept a SyntaxError."""
+    after = _edit("buggy.py", "def add(a, b) return a + b\n",
+                  "def add(a, b) return a + b", "def add(a, b):\\n    return a + b")
+    assert after == "def add(a, b):\n    return a + b\n", repr(after)
+
+
+def test_edit_file_decodes_a_double_escaped_json_new_string() -> None:
+    """regression-anchor-1: '"env": "prod",\\n  "debug": false' left
+    settings.json invalid."""
+    import json as _json
+    after = _edit("settings.json", '{\n  "env": "prod"\n}\n',
+                  '"env": "prod"', '"env": "prod",\\n  "debug": false')
+    assert _json.loads(after) == {"env": "prod", "debug": False}, repr(after)
+
+
+def test_edit_file_keeps_a_real_escape_that_parses_as_written() -> None:
+    after = _edit("greet.py", "x = 1\n", "x = 1", 'print("a\\nb")')
+    assert after == 'print("a\\nb")\n', repr(after)
+
+
+def test_edit_file_never_decodes_an_edit_that_parses_as_written() -> None:
+    """Decoded, this comment would split into a second line that also
+    parses (a bare name), so only the as-written check keeps it intact."""
+    after = _edit("calc.py", "x = 1\n", "x = 1", "x = 2  # was a\\nb")
+    assert after == "x = 2  # was a\\nb\n", repr(after)
+
+
+def test_edit_file_keeps_a_quote_adjacent_escape_when_only_that_parses() -> None:
+    """Decoding every backslash-n would put a real line break inside the
+    string literal; the second candidate keeps that one as an escape."""
+    after = _edit("app.py", "def f():\n    pass\n",
+                  "    pass", '    print("\\nWelcome")\\n    return 1')
+    assert after == 'def f():\n    print("\\nWelcome")\n    return 1\n', repr(after)
+
+
+def test_edit_file_leaves_the_edit_alone_when_decoding_does_not_help() -> None:
+    """A file broken elsewhere fails to parse either way: write what the
+    model sent, as before."""
+    before = "def broken(:\n    pass\nx = 1\n"
+    after = _edit("bad.py", before, "x = 1", "x = 2\\ny = 3")
+    assert after == "def broken(:\n    pass\nx = 2\\ny = 3\n", repr(after)
+
+
+def test_edit_file_never_decodes_a_file_type_it_cannot_parse() -> None:
+    after = _edit("page.html", "<p>hi</p>\n", "<p>hi</p>", "<p>a</p>\\n<p>b</p>")
+    assert after == "<p>a</p>\\n<p>b</p>\n", repr(after)
+
+
 # ---------------------------------------------------------------------------
 # read_file — paging and directory handling
 # ---------------------------------------------------------------------------
@@ -464,6 +522,13 @@ TESTS = [
     test_edit_file_no_match_on_a_small_file_returns_the_whole_file,
     test_edit_file_no_match_on_a_large_file_keeps_the_closest_region,
     test_edit_file_no_match_on_an_empty_file_says_it_is_empty,
+    test_edit_file_decodes_a_double_escaped_python_new_string,
+    test_edit_file_decodes_a_double_escaped_json_new_string,
+    test_edit_file_keeps_a_real_escape_that_parses_as_written,
+    test_edit_file_never_decodes_an_edit_that_parses_as_written,
+    test_edit_file_keeps_a_quote_adjacent_escape_when_only_that_parses,
+    test_edit_file_leaves_the_edit_alone_when_decoding_does_not_help,
+    test_edit_file_never_decodes_a_file_type_it_cannot_parse,
     test_read_file_paging,
     test_read_file_without_paging_unchanged,
     test_read_file_directory_is_clear_error,

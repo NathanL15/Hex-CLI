@@ -435,22 +435,39 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
             "Put the changed text in new_string, or read_file to see what is there now."
         )
     content = path.read_text(encoding="utf-8")
-    tier = "exact"
-    if content.count(old_string) == 1:
-        new_content = content.replace(old_string, new_string, 1)
-    else:
-        new_content, err = apply_search_replace(content, [(old_string, new_string)])
+
+    def _apply(replacement: str) -> tuple[str, str]:
+        if content.count(old_string) == 1:
+            return content.replace(old_string, replacement, 1), "exact"
+        out, err = apply_search_replace(content, [(old_string, replacement)])
         if err:
             if err.startswith("SEARCH block 1 was not found") and len(content) <= _WHOLE_FILE_ON_MISS:
                 raise RuntimeError(_not_found_with_content(path, content))
             raise RuntimeError(err.replace("SEARCH block 1", "old_string"))
-        tier = p2.LAST_APPLY_TIER
+        return out, p2.LAST_APPLY_TIER
+
+    new_content, tier = _apply(new_string)
+    # A new_string the model escaped twice puts a literal \n into the file
+    # (self-correct-1, regression-anchor-1: "unexpected character after line
+    # continuation"). Decode it only when the file as written does not parse
+    # and the decoded edit does; a genuine escape always parses as written.
+    if p2.file_parses(new_content, str(path)) is False:
+        for candidate in p2.escaped_new_string_candidates(new_string, str(path)):
+            try:
+                decoded_content, decoded_tier = _apply(candidate)
+            except RuntimeError:
+                continue
+            if p2.file_parses(decoded_content, str(path)):
+                new_content, new_string = decoded_content, candidate
+                tier = "unescaped" if decoded_tier == "exact" else f"{decoded_tier} match, unescaped"
+                break
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(new_content, encoding="utf-8")
     tmp.replace(path)
     delta = new_string.count("\n") - old_string.count("\n")
     # The tier is UI-only (arm logs read it); the model sees "Edited <path>".
-    suffix = "" if tier == "exact" else f", {tier} match"
+    suffix = ("" if tier == "exact" else f", {tier}" if "unescaped" in tier
+              else f", {tier} match")
     ui.tool_event("edit", f"{path}  ({delta:+d} lines{suffix})")
     return f"Edited {path}"
 

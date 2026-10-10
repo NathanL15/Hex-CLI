@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import json
 import re
 
 # Tier that landed the most recent successful block: "exact", "whitespace",
@@ -178,6 +179,45 @@ def unescape_body(text: str, path: str) -> str:
         return candidate
     except SyntaxError:
         return full
+
+
+def escaped_new_string_candidates(new_string: str, path: str) -> list[str]:
+    """Decoded forms of an edit's new_string, when it carries its line breaks
+    as literal \\n and has no real one -- the shape of a JSON argument the
+    model escaped twice. Same order as unescape_body: the full decode, then,
+    for a .py path, the one that keeps a quote-adjacent \\n as an escape.
+    The caller keeps a candidate only when the whole file then parses and the
+    edit as written did not, so `print("a\\nb")` is never touched.
+
+    139 of 1,746 recorded edit_file calls (2026-10-10) carry this shape, 135
+    of them with no real line break; on .py, 73 of 82 parse only decoded
+    (self-correct-1's `def add(a, b):\\n    return a + b`)."""
+    if "\n" in new_string or "\\n" not in new_string:
+        return []
+    full = _unescape_json(new_string)
+    out = [full]
+    if path.lower().endswith(".py"):
+        kept = _QUOTE_ADJACENT_NL.sub(
+            lambda m: (m.group(1) or "") + "\x00" + (m.group(2) or ""), new_string)
+        candidate = _unescape_json(kept).replace("\x00", "\\n")
+        if candidate != full:
+            out.append(candidate)
+    return out
+
+
+def file_parses(text: str, path: str) -> bool | None:
+    """Whether a .py or .json file's text parses; None for other types."""
+    suffix = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+    try:
+        if suffix == "py":
+            ast.parse(text)
+        elif suffix == "json":
+            json.loads(text)
+        else:
+            return None
+    except (SyntaxError, ValueError):
+        return False
+    return True
 
 
 _DELTA_TOKEN_RE = re.compile(r"\w+|\s+|[^\w\s]")
