@@ -441,6 +441,8 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     else:
         new_content, err = apply_search_replace(content, [(old_string, new_string)])
         if err:
+            if err.startswith("SEARCH block 1 was not found") and len(content) <= _WHOLE_FILE_ON_MISS:
+                raise RuntimeError(_not_found_with_content(path, content))
             raise RuntimeError(err.replace("SEARCH block 1", "old_string"))
         tier = p2.LAST_APPLY_TIER
     tmp = path.parent / (path.name + ".tmp")
@@ -451,6 +453,26 @@ def edit_file_tool(path_text: str, old_string: str, new_string: str) -> str:
     suffix = "" if tier == "exact" else f", {tier} match"
     ui.tool_event("edit", f"{path}  ({delta:+d} lines{suffix})")
     return f"Edited {path}"
+
+
+# A missed edit_file on a small file gets the file's whole text back instead of
+# the closest region. Of 1,279 recorded edit_file calls (2026-09-18), 786 were
+# made without reading or writing the file that turn and failed 45 % of the
+# time against 9 % after a read, and 115 of the 291 misses came straight after
+# another miss on the same file: the retry was rebuilt from memory again. With
+# the text in the error the retry can be copied from the file, at no extra
+# step. Every fixture behind those misses is under 200 characters; a file
+# above the cap keeps the closest-region report.
+_WHOLE_FILE_ON_MISS = 1500
+
+
+def _not_found_with_content(path: Path, content: str) -> str:
+    body = content if content.strip() else "(the file is empty)"
+    return (
+        f"old_string was not found in {path}. This is the file's whole current "
+        "content; copy the lines to change from it exactly into old_string:\n"
+        f"---\n{body.rstrip(chr(10))}\n---"
+    )
 
 
 def write_file_tool(path_text: str, content: str) -> str:

@@ -97,18 +97,47 @@ def test_edit_file_ambiguous_is_error_not_guess() -> None:
         assert f.read_text(encoding="utf-8") == original, "file must be untouched"
 
 
-def test_edit_file_no_match_reports_closest_region() -> None:
+def _edit_error(path: Path, old: str, new: str) -> str:
+    try:
+        sa.edit_file_tool(str(path), old, new)
+    except RuntimeError as exc:
+        return str(exc)
+    raise AssertionError("no-match edit must raise with guidance")
+
+
+def test_edit_file_no_match_on_a_small_file_returns_the_whole_file() -> None:
+    """115 of 291 recorded misses came straight after another miss on the
+    same file, rebuilt from memory again. A small file's whole text in the
+    error lets the retry be copied from it."""
+    text = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "c.py"
-        f.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
-        raised = False
-        try:
-            sa.edit_file_tool(str(f), "    return a * b", "    return a / b")
-        except RuntimeError as exc:
-            raised = True
-            msg = str(exc)
-            assert "closest region" in msg and "old_string" in msg, msg
-        assert raised, "no-match edit must raise with guidance"
+        f.write_text(text, encoding="utf-8")
+        msg = _edit_error(f, "    return a * b", "    return a / b")
+        assert f.read_text(encoding="utf-8") == text, "file must be untouched"
+    assert "old_string was not found" in msg, msg
+    assert text.rstrip("\n") in msg, "every line of the file must be in the error, verbatim"
+    assert "closest region" not in msg, msg
+
+
+def test_edit_file_no_match_on_a_large_file_keeps_the_closest_region() -> None:
+    from hexcli import tools
+    body = "".join(f"value_{i} = {i}\n" for i in range(200))
+    assert len(body) > tools._WHOLE_FILE_ON_MISS
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "big.py"
+        f.write_text(body, encoding="utf-8")
+        msg = _edit_error(f, "value_7 = 700", "value_7 = 8")
+    assert "closest region" in msg and "old_string" in msg, msg
+    assert "value_150 = 150" not in msg, "a large file must not be pasted whole"
+
+
+def test_edit_file_no_match_on_an_empty_file_says_it_is_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "empty.py"
+        f.write_text("", encoding="utf-8")
+        msg = _edit_error(f, "x = 1", "x = 2")
+    assert "(the file is empty)" in msg, msg
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +461,9 @@ TESTS = [
     test_edit_file_fuzzy_trailing_whitespace_fallback,
     test_edit_file_fuzzy_indent_shift_fallback,
     test_edit_file_ambiguous_is_error_not_guess,
-    test_edit_file_no_match_reports_closest_region,
+    test_edit_file_no_match_on_a_small_file_returns_the_whole_file,
+    test_edit_file_no_match_on_a_large_file_keeps_the_closest_region,
+    test_edit_file_no_match_on_an_empty_file_says_it_is_empty,
     test_read_file_paging,
     test_read_file_without_paging_unchanged,
     test_read_file_directory_is_clear_error,
