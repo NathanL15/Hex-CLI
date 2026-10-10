@@ -1622,6 +1622,119 @@ def test_no_override_means_no_warning_and_tuned_prompt() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stop notices: what the user is told when the loop stops a turn
+# ---------------------------------------------------------------------------
+
+_BLIND_EDIT = ('{"action":"edit_file","args":{"path":"%s",'
+               '"old_string":"zz_not_in_the_file","new_string":"y = 2"}}')
+
+
+def test_a_failed_edit_loop_names_the_file_and_says_nothing_changed() -> None:
+    """33 recorded turns ended on "Error: old_string was not found..." with
+    no word on whether the file changed. The notice says both; the return
+    value stays the raw tool output because the history keeps it."""
+    import contextlib
+    import io
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "calculator.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        edit = _BLIND_EDIT % target.as_posix()
+        sa.clear_turn_stop()
+        sa.set_mock_responses([edit, edit, edit, '{"action":"finish","message":"Never."}'])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.chdir(tmp):
+            result = sa.run_autopilot(_CFG, [], "fix calculator.py", _SHELL)
+        assert target.read_text(encoding="utf-8") == "x = 1\n", "fixture must be untouched"
+    want = "Stopped after edit_file failed three times on calculator.py; no file was changed."
+    assert sa.last_turn_stopped() == "loop"
+    assert sa.last_stop_notice() == want, sa.last_stop_notice()
+    assert want in out.getvalue(), out.getvalue()
+    assert result.lstrip().startswith("Error:"), f"history value changed: {result[:80]!r}"
+
+
+def test_a_loop_after_a_landed_write_names_what_changed() -> None:
+    """If the turn did change a file before getting stuck, saying "no file
+    was changed" would be false; the notice names the file instead."""
+    import contextlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "calculator.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        notes = Path(tmp) / "notes.txt"
+        write = json.dumps({"action": "write_file",
+                            "args": {"path": notes.as_posix(), "content": "todo\n"}})
+        edit = _BLIND_EDIT % target.as_posix()
+        sa.clear_turn_stop()
+        sa.set_mock_responses([write, edit, edit, edit, '{"action":"finish","message":"Never."}'])
+        with contextlib.chdir(tmp):   # an agent turn's cwd is the workspace
+            sa.run_autopilot(_CFG, [], "note it and fix calculator.py", _SHELL)
+        assert notes.exists()
+    assert sa.last_stop_notice() == (
+        "Stopped after edit_file failed three times on calculator.py; notes.txt was changed."), \
+        sa.last_stop_notice()
+
+
+def test_an_identical_loop_on_a_command_has_no_file_clause() -> None:
+    """No mutating tool was tried, so the file clause would only be noise."""
+    stuck = '{"action":"run_command","args":{"command":"echo stuck"}}'
+    sa.clear_turn_stop()
+    sa.set_mock_responses([stuck, stuck, stuck, '{"action":"finish","message":"Never."}'])
+    with unittest.mock.patch("hexcli.agent.run_command_tool", return_value="stuck"):
+        sa.run_autopilot(_CFG, [], "do something stuck", _SHELL)
+    assert sa.last_stop_notice() == "Stopped after run_command returned the same result three times.", \
+        sa.last_stop_notice()
+
+
+def test_the_step_limit_notice_reports_what_changed() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        files = [Path(tmp) / f"f{i}.txt" for i in range(3)]
+        for f in files:
+            f.write_text(f"{f.name}\n", encoding="utf-8")
+        reads = [json.dumps({"action": "read_file", "args": {"path": f.as_posix()}}) for f in files]
+        sa.clear_turn_stop()
+        sa.set_mock_responses(reads + ['{"action":"finish","message":"Never."}'])
+        sa.run_autopilot({**_CFG, "max_agent_steps": 3}, [], "read everything", _SHELL)
+    assert sa.last_turn_stopped() == "step_limit"
+    assert sa.last_stop_notice() == "Stopped at the step limit.", sa.last_stop_notice()
+
+
+def test_clear_turn_stop_forgets_the_notice() -> None:
+    sa._mark_turn_stopped("loop", "Stopped after x failed three times.")
+    sa.clear_turn_stop()
+    assert sa.last_turn_stopped() is None and sa.last_stop_notice() == ""
+
+
+def test_a_piped_stopped_turn_prints_the_sentence_and_keeps_raw_history() -> None:
+    """Off a terminal a stopped turn used to print nothing at all. It prints
+    the stop sentence; the session history still gets the raw tool output."""
+    import contextlib
+    import io
+
+    from hexcli import sessions as sessions_mod
+
+    sentence = "Stopped after edit_file failed three times on a.py; no file was changed."
+    raw = "Error: old_string was not found in the file."
+
+    def fake_autopilot(*_a: Any, **_k: Any) -> str:
+        sa._mark_turn_stopped("loop", sentence)
+        return raw
+
+    cfg = {**_CFG, "telemetry_enabled": False, "chat_log_enabled": False}
+    out = io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp:
+        hist = Path(tmp) / "history.json"
+        with unittest.mock.patch.object(sessions_mod, "HISTORY_PATH", hist), \
+             unittest.mock.patch.object(sa, "run_autopilot", fake_autopilot), \
+             contextlib.redirect_stdout(out):
+            rc = sa.one_shot_autopilot(cfg, "fix a.py", _SHELL)
+        stored = hist.read_text(encoding="utf-8") if hist.exists() else ""
+    assert rc == 0
+    assert out.getvalue().strip() == sentence, out.getvalue()
+    assert "old_string" in stored, "the history must keep the raw tool output"
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1728,6 +1841,12 @@ TESTS = [
     test_run_command_tool_large_output_does_not_oom,
     test_prompt_override_applies_and_warns_once,
     test_no_override_means_no_warning_and_tuned_prompt,
+    test_a_failed_edit_loop_names_the_file_and_says_nothing_changed,
+    test_a_loop_after_a_landed_write_names_what_changed,
+    test_an_identical_loop_on_a_command_has_no_file_clause,
+    test_the_step_limit_notice_reports_what_changed,
+    test_clear_turn_stop_forgets_the_notice,
+    test_a_piped_stopped_turn_prints_the_sentence_and_keeps_raw_history,
 ]
 
 

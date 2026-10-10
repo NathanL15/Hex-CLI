@@ -65,17 +65,48 @@ last_streamed_matches = llm.last_streamed_matches
 _LAST_TURN_STOP: str | None = None
 
 
-def _mark_turn_stopped(how: str) -> None:
-    global _LAST_TURN_STOP
+# The one sentence the user gets for a stopped turn. The turn's return value
+# stays the raw tool output because the history keeps it for the next turn;
+# this is what the console notice and a pipe show instead.
+_LAST_STOP_NOTICE: str = ""
+
+
+def _mark_turn_stopped(how: str, notice: str = "") -> None:
+    global _LAST_TURN_STOP, _LAST_STOP_NOTICE
     _LAST_TURN_STOP = how
+    _LAST_STOP_NOTICE = notice
+
+
+def last_stop_notice() -> str:
+    return _LAST_STOP_NOTICE
+
+
+def _stop_notice(how: str, tool: str = "", path: str = "", *,
+                 identical: bool = False, changed: list[str] | None = None,
+                 tried_to_change: bool = False) -> str:
+    """Say why a turn stopped and whether any file changed, in one sentence."""
+    if how == "loop":
+        what = "returned the same result" if identical else "failed"
+        where = f" on {Path(path).name}" if path else ""
+        head = f"Stopped after {tool} {what} three times{where}"
+    else:
+        head = "Stopped at the step limit"
+    names = list(dict.fromkeys(Path(p).name for p in (changed or [])))
+    if names:
+        verb = "was" if len(names) == 1 else "were"
+        return f"{head}; {', '.join(names)} {verb} changed."
+    if tried_to_change:
+        return f"{head}; no file was changed."
+    return f"{head}."
 
 
 def clear_turn_stop() -> None:
     """Called by the REPL before each turn. Also forgets what the previous
     turn streamed: a turn that never calls the model (help, small talk)
     must not match the box-skip against stale text."""
-    global _LAST_TURN_STOP
+    global _LAST_TURN_STOP, _LAST_STOP_NOTICE
     _LAST_TURN_STOP = None
+    _LAST_STOP_NOTICE = ""
     llm._LAST_STREAMED_TEXT = ""
 
 
@@ -1166,6 +1197,7 @@ def _run_autopilot_turn(
     # One nudge per turn — it guides, never traps.
     _unverified_mutation = False
     _mutated_ok = False            # a write/edit/append that did not error, this turn
+    _changed_paths: list[str] = []  # the paths those landed on, for a stop notice
     _verify_nudge_used = False
     # The user asked for the tests to be run: what the run tools executed
     # this turn, so a finish without a test run can be sent back once.
@@ -1478,6 +1510,8 @@ def _run_autopilot_turn(
         if tool_name in {"edit_file", "write_file", "append_file"} and not _is_error:
             _unverified_mutation = True
             _mutated_ok = True
+            if tool_path:
+                _changed_paths.append(str(tool_path))
         elif tool_name in {"read_file", "run_code", "verify_syntax", "lint_code",
                            "run_command"} and not _is_error:
             _unverified_mutation = False
@@ -1497,10 +1531,14 @@ def _run_autopilot_turn(
                          and all(err for _t, _tgt, err, _out in _loop_tracker)
                          and len({(t, tgt) for t, tgt, _e, _out in _loop_tracker}) == 1)
         if _identical_trip or _failure_trip:
-            what = f"{tool_name} returned the same result" if _identical_trip else f"{tool_name} failed"
             if not _in_delegate:   # a sub-agent's stop is its own result, not the turn's
-                cprint(f"\n  ⚠ Stopped: {what} three times in a row.", C.BYELLOW)
-                _mark_turn_stopped("loop")
+                notice = _stop_notice(
+                    "loop", tool_name, str(tool_path or ""),
+                    identical=_identical_trip and not _failure_trip,
+                    changed=_changed_paths,
+                    tried_to_change=any(t in _MUTATING_TOOLS for t in tools_used))
+                cprint(f"\n  ⚠ {notice}", C.BYELLOW)
+                _mark_turn_stopped("loop", notice)
             memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="error_loop")
             if session:
                 _record_undo_snapshots(session, _turn_snapshots)
@@ -1511,8 +1549,11 @@ def _run_autopilot_turn(
 
     memory.maybe_index_turn(config, query, tools_used, touched_paths, outcome="step_limit")
     if not _in_delegate:   # a sub-agent's cap is routine; its text comes back as a tool result
-        cprint("\n  ⚠ Stopped at the step limit.", C.BYELLOW)
-        _mark_turn_stopped("step_limit")
+        notice = _stop_notice(
+            "step_limit", changed=_changed_paths,
+            tried_to_change=any(t in _MUTATING_TOOLS for t in tools_used))
+        cprint(f"\n  ⚠ {notice}", C.BYELLOW)
+        _mark_turn_stopped("step_limit", notice)
     if session:
         _record_undo_snapshots(session, _turn_snapshots)
     _probe(probe, "on_end", "step_limit", last_tool_output or "Done.")
@@ -2057,7 +2098,14 @@ def one_shot_autopilot(config: dict[str, Any], query: str, shell_exe: str) -> in
     tel.record_turn(turn)
     append_session_message(session, "assistant", message)
     sync_session_store(sessions, session)
-    if last_streamed_matches(message) or last_turn_stopped():
+    if last_turn_stopped():
+        if sys.stdout.isatty():
+            print()
+        else:
+            # A pipe used to get nothing for a stopped turn. It gets the stop
+            # sentence; the raw tool output stays in the history only.
+            print(last_stop_notice())
+    elif last_streamed_matches(message):
         if sys.stdout.isatty():
             print()
     elif not sys.stdout.isatty():
