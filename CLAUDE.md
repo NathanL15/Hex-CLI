@@ -417,6 +417,7 @@ From `docs/V2X_ROADMAP.md` and `docs/RESEARCH_NEXT_LEVERS.md` §7:
 - Capabilities, each flag-gated and A/B'd: plan ledger, memory v2 (files + ripgrep), git-snapshot undo, background commands / steering, AST command classifier + policy files.
 - Optional dedent of the prompt (+13 % history room, no speed) via the 5-run gate.
 - Watch: a successor NPU bundle appearing (run the instrument that afternoon); GenieX #1266 resolving; Nexa SDK bake-off; speculative decoding spike (hard time-box).
+- Runtime quirk (measured 2026-10-11, driver 30.0.224.10000): the first Rewind on a freshly started server fails once ("batch dispatch failed", then a ~5 s rebuild) whatever is cached; every later Rewind behaves. It costs the first turn after a server start ~9 s. A throwaway query in the prime absorbs it (first turn 1.8 s) but makes the prime ~15 s, and the owner types a median 5 s after start, so it was not shipped. Fork-side fix would be a burn query before `/healthz` reports ready.
 - Known platform issue, not ours: long-context (≥ ~2.9K) HTP `Error 1011` hangs; fork 0.2.3's watchdog caps the cost at ~97 s. Report to Qualcomm with that signature if it matters.
 
 Current ceiling-panel failures (LATEST.md, 5 runs): `ambiguous-2`,
