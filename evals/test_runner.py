@@ -637,6 +637,31 @@ def test_live_state_patterns_are_word_bounded() -> None:
     assert g(Path("."), t)[0]
 
 
+# p-values from SciPy 1.16 (fisher_exact two-sided, binomtest), 2026-10-10.
+# The two functions matched SciPy to 1e-15 on every table up to 12 runs per
+# arm and every discordant pair up to 40 each; these are the arm-sized points.
+_SCIPY_FISHER = [
+    (3, 3, 0, 3, 0.10000000000000002), (5, 5, 2, 5, 0.16666666666666666),
+    (12, 12, 9, 12, 0.21739130434782608), (24, 24, 18, 24, 0.02193633514761669),
+    (0, 5, 5, 5, 0.007936507936507938), (1, 3, 2, 3, 1.0),
+    (186, 233, 184, 234, 0.8196813150012373), (189, 237, 192, 245, 0.7378834249364257),
+    (45, 48, 29, 54, 4.440545980522936e-06), (65, 72, 45, 48, 0.7380766453374528),
+    (7, 10, 10, 10, 0.21052631578947367), (0, 1, 1, 1, 1.0),
+]
+_SCIPY_MCNEMAR = [
+    (0, 1, 1.0), (1, 0, 1.0), (3, 5, 0.7265625), (5, 3, 0.7265625), (0, 6, 0.03125),
+    (2, 9, 0.0654296875), (10, 10, 1.0), (0, 20, 1.9073486328125e-06), (7, 19, 0.028959274291992188),
+]
+
+
+def test_stats_match_scipy() -> None:
+    from evals.stats import fisher_exact_two_sided, mcnemar_exact
+    for k1, n1, k2, n2, p in _SCIPY_FISHER:
+        assert abs(fisher_exact_two_sided(k1, n1, k2, n2) - p) < 1e-12, (k1, n1, k2, n2)
+    for b, c, p in _SCIPY_MCNEMAR:
+        assert abs(mcnemar_exact(b, c) - p) < 1e-12, (b, c)
+
+
 def test_stats_exact_tests_known_values() -> None:
     from evals.stats import compare_arms, fisher_exact_two_sided, mcnemar_exact
     assert abs(fisher_exact_two_sided(3, 4, 1, 4) - 0.4857) < 1e-3, "2x2 [[3,1],[1,3]]"
@@ -804,6 +829,7 @@ TESTS = [
     test_clarification_grader_rejects_empty_completions_and_bare_question_marks,
     test_grounded_answer_grader,
     test_live_state_patterns_are_word_bounded,
+    test_stats_match_scipy,
     test_stats_exact_tests_known_values,
     test_gate_is_binary_on_reliable_cases_and_tracks_the_rest,
     test_scenario_think_time_pauses_between_turns_only,
