@@ -4,6 +4,21 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.5 — 2026-10-11
+
+A patch release: nothing the model reads changes.
+
+- The start-up prime no longer forces a rebuild of a cache the first turn
+  can extend. A server that already served a session holds this prompt from
+  that session's end-of-turn prewarm, and the forced prime rebuilt it anyway.
+  It now asks without forcing first, and forces only an empty cache or one
+  longer than the prompt plus the 600-token Rewind discard limit. A new
+  session's first turn on an already-used server, question typed 5 s after
+  start: 13.7–14.7 s on 2.22.3, 6.0–6.3 s on 2.22.4, **1.9–2.3 s** now (4
+  runs each). On a freshly started server the first two turns are unchanged
+  at 11.7–12.3 s in total. After a Hex upgrade that changes the prompt, the
+  first turn of the first session pays one rebuild.
+
 ## 2.22.4 — 2026-10-11
 
 A patch release: nothing the model reads changes.
