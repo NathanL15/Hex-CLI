@@ -4,7 +4,9 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.24.0 — 2026-10-11
+
+A minor release: a tool result the model reads changes in the REPL.
 
 - `run_command` gives the program no keyboard, as `run_code` has since
   2.20.0. In a console, `python hilo.py` through `run_command` waited on
