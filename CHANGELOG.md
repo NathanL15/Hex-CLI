@@ -4,7 +4,9 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
-## Unreleased
+## 2.23.0 — 2026-10-11
+
+A minor release: a tool result the model reads changes when the user says yes.
 
 - Asked to run or open what it wrote, Hex can now hand it to you. When the
   request says run, open, play, launch or start (not "how do I run it", not
