@@ -19,9 +19,12 @@ tag pushes and fails when the tag does not equal `v<__version__>`.
 - **Minor**: features; any change to `hexcli/prompts.py`; any change to the
   launcher's environment or to the runtime config keys it writes
   (`prompt_stable_prefix`, `prompt_split`, `NPURUN_*`); a bump of
-  `REQUIRED_NPURUN`.
-- **Major**: a model, runtime-generation or history-representation change.
-  Nothing else.
+  `REQUIRED_NPURUN`; a change to how history is represented (behind a
+  config flag first, with the multi-turn arm, then the default flipped in
+  its own minor release).
+- **Major**: a model or runtime-generation change. Nothing else. 3.0.0 is
+  kept for something on that scale, such as a fine-tuned model (owner,
+  2026-10-11).
 
 2.5.1 shipped a prompt change and a rewritten eval gate as a patch while
 2.6.1 shipped 24 lines as a patch; under this rule 2.5.1 would have been
