@@ -43,6 +43,7 @@ sys.path.insert(0, str(APP_DIR))
 
 import hexcli.agent as sa  # noqa: E402
 from hexcli import cancel as cancel_mod  # noqa: E402
+from hexcli import llm as llm_mod  # noqa: E402
 from hexcli import memory, paths  # noqa: E402
 
 # Mirror production main(): point the embedder at the local ONNX model so
@@ -137,6 +138,7 @@ class LlmCall:
     attempt: int
     raw: str
     latency_s: float
+    finish_reason: str = ""
 
 
 @dataclass
@@ -160,6 +162,8 @@ class Trace(sa.AutopilotProbe):
         self.end_kind: str = ""      # finish | fallthrough | loop_stop | step_limit | "" (short-circuit)
         self.final_message: str = ""
         self.wall_s: float = 0.0
+        # Server-log counts for this run alone (platform_reading over its slice).
+        self.server: dict[str, Any] = {}
 
     # -- probe callbacks ----------------------------------------------------
     def on_start(self, system_prompt: str, messages: list[dict[str, str]]) -> None:
@@ -167,7 +171,7 @@ class Trace(sa.AutopilotProbe):
         self.initial_messages = messages
 
     def on_llm(self, step: int, attempt: int, raw: str, latency_s: float) -> None:
-        self.llm_calls.append(LlmCall(step, attempt, raw, latency_s))
+        self.llm_calls.append(LlmCall(step, attempt, raw, latency_s, llm_mod.LAST_FINISH_REASON))
 
     def on_tool(self, step: int, tool: str, args: dict[str, Any], output: str,
                 latency_s: float, status: str) -> None:
@@ -235,9 +239,10 @@ class Trace(sa.AutopilotProbe):
             "total_llm_latency_s": round(self.total_llm_latency_s, 3),
             "llm_calls": [
                 {"step": c.step, "attempt": c.attempt, "latency_s": round(c.latency_s, 3),
-                 "raw": c.raw[:_TRACE_TEXT_CAP]}
+                 "finish_reason": c.finish_reason, "raw": c.raw[:_TRACE_TEXT_CAP]}
                 for c in self.llm_calls
             ],
+            "server": self.server,
             "tool_calls": [
                 {"step": t.step, "tool": t.tool, "args": t.args, "status": t.status,
                  "latency_s": round(t.latency_s, 3), "output": t.output[:_TRACE_TEXT_CAP]}
@@ -419,6 +424,7 @@ def run_case_once(config: dict[str, Any], case: Case) -> RunOutcome:
             # either way, so latency semantics are unchanged.
             run_config["use_streaming"] = False
             trace = Trace()
+            log_at = _server_log_size()
             t0 = time.perf_counter()
             try:
                 trace.final_message = sa.run_autopilot(
@@ -427,12 +433,14 @@ def run_case_once(config: dict[str, Any], case: Case) -> RunOutcome:
                     session=None, turn=None, probe=trace,
                 )
             except Exception as exc:  # noqa: BLE001 — an unhandled loop crash is a FAIL, not a crash of the suite
+                trace.server = platform_reading(log_at)
                 trace.wall_s = time.perf_counter() - t0
                 backend = is_backend_failure(exc)
                 if backend:
                     return RunOutcome(False, backend, trace, invalid=True)
                 return RunOutcome(False, f"run_autopilot raised: {exc!r}", trace)
             trace.wall_s = time.perf_counter() - t0
+            trace.server = platform_reading(log_at)
             try:
                 ok, detail = case.verify(sandbox, trace)
             except Exception as exc:  # noqa: BLE001 — verifier bugs must be loud, not silent passes
@@ -506,6 +514,7 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario,
             run_config["use_streaming"] = False
             for spec in sc.turns:
                 trace = Trace()
+                log_at = _server_log_size()
                 t0 = time.perf_counter()
                 try:
                     trace.final_message = sa.run_autopilot(
@@ -515,6 +524,7 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario,
                     )
                 except Exception as exc:  # noqa: BLE001
                     trace.wall_s = time.perf_counter() - t0
+                    trace.server = platform_reading(log_at)
                     backend = is_backend_failure(exc)
                     if record:
                         recs.append({"turn": spec.id, "ok": False,
@@ -526,6 +536,7 @@ def run_scenario_once(config: dict[str, Any], scenario: Scenario,
                     traces.append(trace)
                     continue
                 trace.wall_s = time.perf_counter() - t0
+                trace.server = platform_reading(log_at)
                 if record:
                     try:
                         ok, detail = spec.verify(sandbox, trace, traces)

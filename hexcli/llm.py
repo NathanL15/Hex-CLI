@@ -292,6 +292,8 @@ def openai_chat(
         # retries one of those, which is what it does when the streamed
         # path produces nothing, instead of ending the turn with an error.
         return ""
+    global LAST_FINISH_REASON
+    LAST_FINISH_REASON = str(choices[0].get("finish_reason") or "")
     return str((choices[0].get("message") or {}).get("content", "")).strip()
 
 
@@ -488,6 +490,10 @@ def _end_live_render(renderer: Any) -> None:
 # already on screen word for word.
 _LAST_STREAMED_TEXT = ""
 
+# finish_reason of the most recent non-streamed reply ("" otherwise). The eval
+# runner records it per call: a "length" reply leaves Rewind's cache stale.
+LAST_FINISH_REASON = ""
+
 
 def last_streamed_matches(message: str) -> bool:
     """True when `message` is what the final model call already streamed,
@@ -548,8 +554,9 @@ def call_llm(
     Acquires memory._NPU_INFERENCE_LOCK so the dreaming daemon defers while any
     inference is in progress.
     """
-    global _LAST_STREAMED_TEXT
+    global _LAST_STREAMED_TEXT, LAST_FINISH_REASON
     _LAST_STREAMED_TEXT = ""
+    LAST_FINISH_REASON = ""
     with memory._NPU_INFERENCE_LOCK:
         if config.get("backend") == "mock":
             # Mock fixtures carry no real token counts — never feed the

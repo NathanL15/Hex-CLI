@@ -435,6 +435,28 @@ def test_platform_reading_counts_only_this_suites_traffic() -> None:
     assert reading["rewind_failure_rate"] == 0.5, reading
 
 
+def test_each_run_records_its_own_server_slice_and_finish_reasons() -> None:
+    from evals import runner
+
+    def fake_autopilot(config, history, query, shell, *, session, turn, probe):
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(_SERVER_LOG_SAMPLE)
+        runner.llm_mod.LAST_FINISH_REASON = "length"
+        probe.on_llm(0, 0, '{"action":"finish","message":"ok"}', 0.1)
+        return "ok"
+
+    case = runner.Case("x-1", "casual", "hi", verify=lambda sb, t: (True, ""))
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp).resolve() / "npurun_server.log"
+        log.write_text("an earlier run's traffic\n" + _SERVER_LOG_SAMPLE, encoding="utf-8")
+        with unittest.mock.patch.object(runner.paths, "npurun_log_path", return_value=log), \
+                unittest.mock.patch.object(runner.sa, "run_autopilot", fake_autopilot):
+            out = runner.run_case_once({"backend": "mock"}, case)
+    t = out.trace.to_json()
+    assert t["server"]["requests"] == 2 and t["server"]["rewind_failures"] == 1, t["server"]
+    assert t["llm_calls"][0]["finish_reason"] == "length", t["llm_calls"]
+
+
 def test_platform_reading_survives_a_truncated_or_missing_log() -> None:
     from evals import runner
 
@@ -853,6 +875,7 @@ TESTS = [
     test_calibrate_reports_what_the_rule_does_to_a_no_op_candidate,
     test_calibrate_will_not_score_a_case_it_has_barely_seen,
     test_platform_reading_counts_only_this_suites_traffic,
+    test_each_run_records_its_own_server_slice_and_finish_reasons,
     test_platform_reading_survives_a_truncated_or_missing_log,
     test_describe_platform_reads_as_one_line,
     test_wilson_interval_known_values,
