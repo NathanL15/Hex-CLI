@@ -342,6 +342,17 @@ EXTENSION_CASES: list[Case] = [
              ck.python_file_valid("calculator.py"),
              ck.no_unbacked_run_claim(),
          )),
+    # Three real turns asked how to run a script Hex had just written; two of
+    # the answers had no command in them. A base rate, not yet a target.
+    Case("run-howto-1", "agentic", "how do I run it?",
+         setup={"guess.py": "import random\nprint(random.randint(1, 10))\n"},
+         history=[
+             {"role": "user", "content": "make a python script guess.py that prints a random number from 1 to 10"},
+             {"role": "assistant", "content": "Created guess.py. It prints a random number from 1 to 10."},
+         ],
+         verify=ck.message_contains_any("python guess.py", "python3 guess.py", "py guess.py",
+                                        "python .\\guess.py", "python ./guess.py", "py .\\guess.py"),
+         max_steps=4, tag="run_howto"),
     # The owner's 2026-09-15 17:13 session: "and run it" was ignored outright.
     Case("runit-1", "agentic",
          "Write hello.py that prints Hello, world and then run it.",
