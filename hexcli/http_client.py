@@ -47,6 +47,13 @@ def _get_connection(url: str, timeout_s: float) -> tuple[http.client.HTTPConnect
             _HTTP_CONNECTIONS[(scheme, host, port)] = conn
         else:
             conn.timeout = timeout_s
+            # conn.timeout only applies when the socket is opened. An open
+            # socket kept the timeout of the request that opened it, so a
+            # model call after the 5 s prewarm or the 3 s ping was cut off
+            # at 5 or 3 s: 206 of the 237 "timed out" invalid eval runs on
+            # record (2026-10-11).
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout_s)
     return conn, path
 
 

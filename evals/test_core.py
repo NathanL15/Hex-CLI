@@ -1189,6 +1189,45 @@ def test_http_request_reconnects_on_cannot_send_request() -> None:
     assert resp is mock_response
 
 
+def test_reused_connection_takes_the_new_requests_timeout() -> None:
+    """A model call made on the connection the 5 s prewarm opened was cut off
+    at 5 s: 206 of 237 "timed out" invalid eval runs on record."""
+    import http.server
+    import threading
+    import time as _time
+
+    from hexcli import http_client
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"        # keep-alive, like the model server
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            if self.path == "/slow":
+                _time.sleep(0.6)
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a: Any) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        http_client.http_json_request(base + "/fast", {}, {}, 0.3)
+        assert http_client.http_json_request(base + "/slow", {}, {}, 5) == {}
+    finally:
+        srv.shutdown()
+        conn = http_client._HTTP_CONNECTIONS.pop(http_client._connection_key(base), None)
+        if conn is not None:
+            conn.close()
+
+
 # ============================================================================
 # distribution — module-level smoke tests
 # ============================================================================
@@ -1566,6 +1605,7 @@ def test_behaviour_claim_detector() -> None:
 
 
 TESTS = [
+    test_reused_connection_takes_the_new_requests_timeout,
     test_verify_ladder_reports_wiring_and_unchecked_files,
     test_behaviour_claim_detector,
     test_user_row_pads_a_band_to_the_width_and_is_plain_without_colour,
