@@ -1067,10 +1067,10 @@ def prime_backend(config: dict[str, Any]) -> None:
 
     The first request after a server start otherwise pays the full 2.3K-token
     prefill (~4 s), or a dialog rebuild on top (~9 s) when the cache holds an
-    older conversation. npurun 0.2.2's `/v1/npurun/prewarm` with `force`
-    prefills the prefix now, while the banner is on screen; the first turn
-    then extends a warm cache (measured 2026-09-05: 0.7–0.8 s to first token
-    instead of 4.2 s). The prompt built here differs from the first turn's
+    older conversation. npurun 0.2.2's `/v1/npurun/prewarm` prefills the
+    prefix now, while the banner is on screen, and `force` makes it do so
+    for a short cache; the first turn then extends a warm cache. The prompt
+    built here differs from the first turn's
     only in the query-dependent tail, which is well inside the runtime's
     ~600-token Rewind discard limit. Fire-and-forget; older servers 404.
     """
@@ -1094,11 +1094,23 @@ def prime_backend(config: dict[str, Any]) -> None:
     finally:
         set_active_config(previous)
 
+    # Force only a cache the first turn cannot extend: empty, or longer than
+    # this prompt by more than the 600-token Rewind discard limit. A server
+    # that already served a session holds this prompt from that session's
+    # end-of-turn prewarm, and forcing rebuilt it anyway: first call 6.1-7.4 s
+    # forced vs 1.8-2.4 s left alone (4 paired runs, 2026-10-11). On a fresh
+    # server forcing is still ahead, 12.4-14.2 s vs 14.6-15.9 s over the
+    # first two turns. The server counts chars/4, so this does too.
+    extendable = len(system_prompt) // 4 + 600
+
     def _post() -> None:
+        url = f"{base}/npurun/prewarm"
+        messages = [{"role": "system", "content": system_prompt}]
         try:
-            http_json_request(f"{base}/npurun/prewarm",
-                              {"messages": [{"role": "system", "content": system_prompt}], "force": True},
-                              {}, 5)
+            reply = http_json_request(url, {"messages": messages}, {}, 5)
+            cached = int(reply.get("cached_tokens") or 0)
+            if reply.get("reason") == "cache short" and (cached == 0 or cached > extendable):
+                http_json_request(url, {"messages": messages, "force": True}, {}, 5)
         except Exception:
             pass
 

@@ -770,7 +770,7 @@ def test_the_session_prime_warms_the_prompt_the_first_turn_sends() -> None:
             self._target()
 
     sa.set_active_config(None)
-    with unittest.mock.patch.object(sa, "http_json_request", lambda url, payload, h, t: posted.append(payload)), \
+    with unittest.mock.patch.object(sa, "http_json_request", lambda url, payload, h, t: posted.append(payload) or {}), \
             unittest.mock.patch.object(sa.threading, "Thread", _Inline):
         sa.prime_backend(session)
     assert sa._ACTIVE_CONFIG is None, "the prime must not leave its config active"
@@ -780,6 +780,42 @@ def test_the_session_prime_warms_the_prompt_the_first_turn_sends() -> None:
     finally:
         sa.set_active_config(None)   # the turn set it; keep it out of the tests after this one
     assert posted and posted[0]["messages"][0]["content"] == sa._LAST_SYSTEM_PROMPT
+
+
+def test_the_prime_forces_only_an_empty_cache() -> None:
+    """A used server already holds the prompt from the last session's
+    end-of-turn prewarm, and forcing rebuilt it: 6.1-7.4 s first call vs
+    1.8-2.4 s left alone. A fresh server is still better forced."""
+    session = {**_CFG, "backend": "openai", "prompt_stable_prefix": True,
+               "openai_compatible": {"base_url": "http://127.0.0.1:9/v1", "api_key": "x"}}
+
+    class _Inline:
+        def __init__(self, target: Any, **_kw: Any) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            self._target()
+
+    def forced_after(first_reply: dict[str, Any]) -> list[bool]:
+        sent: list[bool] = []
+
+        def fake(url: str, payload: dict[str, Any], h: Any, t: Any) -> dict[str, Any]:
+            sent.append(bool(payload.get("force")))
+            return first_reply if len(sent) == 1 else {"prewarmed": True}
+
+        with unittest.mock.patch.object(sa, "http_json_request", fake), \
+                unittest.mock.patch.object(sa.threading, "Thread", _Inline):
+            sa.prime_backend(session)
+        return sent
+
+    assert forced_after({"prewarmed": False, "reason": "cache short", "cached_tokens": 0}) == [False, True]
+    assert forced_after({"prewarmed": False, "reason": "cache short"}) == [False, True]
+    # The prompt alone (~2.4K) plus a short reply: the first turn extends it.
+    assert forced_after({"prewarmed": False, "reason": "cache short", "cached_tokens": 2413}) == [False]
+    # A last turn left in the cache, past what a Rewind can discard: rebuild now.
+    assert forced_after({"prewarmed": False, "reason": "cache short", "cached_tokens": 3100}) == [False, True]
+    assert forced_after({"prewarmed": True}) == [False]       # a long cache: the server rebuilt it
+    assert forced_after({"prewarmed": False, "reason": "busy"}) == [False]
 
 
 def _spy_on_messages() -> tuple[list, Any]:
@@ -1780,6 +1816,7 @@ def _run(fn: Any) -> bool:
 
 
 TESTS = [
+    test_the_prime_forces_only_an_empty_cache,
     test_the_session_prime_warms_the_prompt_the_first_turn_sends,
     test_fuzzy_loop_trips_on_varying_errors_same_target,
     test_varying_errors_on_different_targets_do_not_trip,
