@@ -4,6 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.4 — 2026-10-11
+
+A patch release: nothing the model reads changes.
+
+- The start-up prime warms the prompt the first turn actually sends. It ran
+  before any turn had set the session config, so it built the default
+  prompt (date and working directory in its second line), which shared 88
+  characters with the first turn's stable prompt. The prime was discarded
+  and the first turn rebuilt the dialog. Measured on a server that had
+  already served a session, with the question typed 5 s after the prime
+  (the owner's median over 85 REPL sessions): first model call 13.7–14.7 s
+  with one Rewind failure every time, now 6.0–6.3 s with none (4 paired
+  runs). On a freshly started server the first Rewind fails once whatever
+  is cached (a runtime quirk, measured the same night), so the first turn
+  after a server start still pays one rebuild.
+
 ## 2.22.3 — 2026-10-11
 
 A patch release: nothing the model reads changes.
@@ -51,8 +67,9 @@ A minor release: a tool result the model reads changes (`edit_file` when
 `new_string` carries a literal `\n` and the file would not parse).
 
 > **Gate: PASS** on the pinned 24-case set after one recheck: `agentic-1`
-> had all five runs invalid ("backend unreachable", the server stalled when
-> free memory hit 1.4 GB), and re-run on a fresh server it was 6/6. Own arm,
+> had all five runs invalid ("backend unreachable", each cut off at 5 s by
+> the socket-timeout bug fixed in 2.22.3, not by low memory as first
+> written), and re-run on a fresh server it was 6/6. Own arm,
 > seed 20261011, against 2.21.0's arm: run-level 184/234 vs 186/233,
 > −1.2 %, Fisher p = 0.82; pass^k 34 → 32 of 49, McNemar p = 0.73; 11
 > invalid runs of 245. The decode never fired in the arm: none of its 48
