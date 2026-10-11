@@ -927,13 +927,69 @@ _RUN_CODE_INTERPRETERS: dict[str, list[str]] = {
 }
 
 
+_PAGE_EXTS = {".html", ".htm"}
+
+# `Start-Process calc.html` and nothing else: the shape the model reached for
+# in 4 of 9 probe runs asked to open a page it wrote (2026-10-11).
+_START_PAGE_RE = re.compile(
+    r"^\s*(?:start-process|start|saps)\s+(?:-filepath\s+)?"
+    r"(?:\"([^\"]+)\"|'([^']+)'|([^\s\"';|&]+))(?:\s+-wait)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def open_page(path: Path) -> None:
+    try:
+        os.startfile(str(path))  # type: ignore[attr-defined]  # Windows only, like the rest
+    except OSError as exc:
+        raise RuntimeError(f"Could not open {path.name}: {exc}") from exc
+
+
+# Runs argv[1:] and holds the window until Enter, so the program's last output
+# stays readable. No shell in between: through cmd, an & or % in an argument
+# or a folder name was parsed as a second command (review, 2026-10-11).
+_HOLD_WINDOW = ("import subprocess, sys\n"
+                "code = subprocess.call(sys.argv[1:])\n"
+                "print()\n"
+                "input(f'Exited with code {code}. Press Enter to close this window.')\n")
+
+
+def start_in_window(cmd: list[str], cwd: Path) -> bool:
+    try:
+        subprocess.Popen([sys.executable, "-c", _HOLD_WINDOW, *cmd], cwd=str(cwd),
+                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+    except OSError as exc:
+        ui.tool_error(f"Could not start a new window: {exc}")
+        return False
+    return True
+
+
+def page_open_target(command: str) -> Path | None:
+    """The page a bare `Start-Process page.html` opens, when that page is a
+    file under the working directory; None for any other command."""
+    m = _START_PAGE_RE.match(command)
+    if not m:
+        return None
+    path = resolve_path(next(g for g in m.groups() if g))
+    if path.suffix.lower() not in _PAGE_EXTS or not path.is_file():
+        return None
+    if not path.is_relative_to(Path.cwd().resolve()):
+        return None
+    return path
+
+
 def run_code_tool(
     path_text: str,
     run_args: list[str],
     timeout: int,
     shell_exe: str,
     output_limit: int,
+    *,
+    offer_window: bool = False,
 ) -> str:
+    """`offer_window`: the user asked for the program to be run or opened, so
+    a page, or a program that waits on the keyboard or outlives the timeout,
+    is offered to them with a y/N. A deny leaves every result as before."""
     cwd = Path.cwd().resolve()
     path = resolve_path(path_text)
     if not path.exists():
@@ -944,6 +1000,10 @@ def run_code_tool(
             f"Resolved path was: {path}"
         )
     ext = path.suffix.lower()
+    if ext in _PAGE_EXTS and offer_window and ui.confirm_open_page(str(path)):
+        open_page(path)
+        ui.tool_event("open", str(path))
+        return f"Opened {path.name} in the user's default browser."
     if ext in {".js", ".mjs", ".cjs"} and not shutil.which("node"):
         raise RuntimeError("node not found on PATH — cannot run .js/.mjs/.cjs files")
     if ext == ".ps1":
@@ -956,6 +1016,14 @@ def run_code_tool(
                 "Allowed: .py .ps1 .js .mjs .cjs"
             )
     cmd = [*cmd_prefix, str(path), *[str(a) for a in run_args]]
+    shown = " ".join([Path(cmd_prefix[0]).stem, path.name, *[str(a) for a in run_args]])
+
+    def _offered() -> bool:
+        if offer_window and ui.confirm_new_window(shown) and start_in_window(cmd, cwd):
+            ui.tool_event("run", f"{path}  (new window)")
+            return True
+        return False
+
     try:
         # No keyboard. With the parent's stdin inherited, a program that
         # calls input() sat on the owner's terminal until the timeout (10 s,
@@ -976,6 +1044,11 @@ def run_code_tool(
         out = trim_text(stdout, output_limit)
         err = trim_text(stderr, output_limit)
         ui.tool_event("run", f"{path}  (TIMEOUT after {timeout}s)")
+        if _offered():
+            return (f"Started {shown} in a new window, where the user can use it. "
+                    f"A run here was still going after {timeout}s and printed:\n\n"
+                    f"[stdout]\n{out or '(empty)'}\n\n"
+                    f"[stderr]\n{err or '(empty)'}")
         return (
             f"Exit code: TIMEOUT ({timeout}s exceeded)\n\n"
             f"[stdout]\n{out or '(empty)'}\n\n"
@@ -986,6 +1059,15 @@ def run_code_tool(
     ui.tool_event("run", f"{path}  (exit {proc.returncode})")
     note = ""
     if "EOFError" in stderr:
+        # Only input() at the keyboard, not an EOFError of the program's own
+        # (pickle on an empty file): that one is a bug to report, not a game.
+        last = stderr.strip().splitlines()[-1] if stderr.strip() else ""
+        if last.startswith("EOFError: EOF when reading a line") and _offered():
+            # Lead with the window and leave out the EOFError traceback: with
+            # it, 2 of 3 probe runs reported the game as broken (2026-10-11).
+            return (f"Started {shown} in a new window, where the user can use it. "
+                    f"Before it waited for the keyboard it printed:\n\n"
+                    f"[stdout]\n{out or '(empty)'}")
         note = (f"\n\nThe program stopped where it reads from the keyboard (input()). "
                 f"run_code has no keyboard to give it, so it cannot be played or driven "
                 f"here; it has to be started in a terminal: python {path.name}. The code "

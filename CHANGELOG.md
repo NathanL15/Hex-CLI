@@ -4,6 +4,28 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- Asked to run or open what it wrote, Hex can now hand it to you. When the
+  request says run, open, play, launch or start (not "how do I run it", not
+  "run the tests", and never from a delegate's task), `run_code` on an
+  `.html` page asks to open it in the default browser, and a Python program
+  stopped at `input()` or still running at the timeout asks to start in a
+  new console window, which stays open until Enter once the program ends.
+  The window runs the program directly, with no shell in between. On such a
+  request, a bare `Start-Process page.html` on a page in the working
+  directory is asked for as opening a page instead of as reading sensitive
+  data. A deny, and every non-interactive run, returns exactly the text it
+  returned before: replayed over the 9,550 recorded eval runs, 0 would have
+  reached a new prompt. From the owner's sessions: 16 turns in all 5 coding
+  sessions (2026-09-13 to 09-18) asked for this and none got it. Live probe
+  on six requests from those sessions, 3 runs each, consent answered yes:
+  the program or page was opened in 0 of 18 runs before and 5 of 18 after;
+  "can you run it for me" on a keyboard game 0/3 to 3/3, and 3/4 on a rerun
+  in which 3 of the 4 answers said it was running in a new window. Asked to
+  "open it", the model still mostly reads the file, and in 3 of 8 game runs
+  it used `run_command python hilo.py`, which this does not cover.
+
 ## 2.22.5 — 2026-10-11
 
 A patch release: nothing the model reads changes.

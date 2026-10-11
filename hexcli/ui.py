@@ -1115,6 +1115,27 @@ def confirm_destructive_command(cmd: str) -> bool:
         return confirm_or_deny("  Allow? [y/N] ")
 
 
+def confirm_open_page(path: str) -> bool:
+    """The user asked to see a page the agent wrote; opening it hands a file
+    to the browser, so it is asked for like any launch. Denied when
+    non-interactive or unanswered."""
+    with paused_status():
+        print()
+        cprint("⚠ The agent wants to open a page in your browser:", C.BYELLOW, bold=True)
+        cprint(f"  {path}", C.CYAN)
+        return confirm_or_deny("  Allow? [y/N] ")
+
+
+def confirm_new_window(cmd: str) -> bool:
+    """The user asked to run a program that needs a keyboard or keeps running;
+    it gets its own console window. Denied when non-interactive or unanswered."""
+    with paused_status():
+        print()
+        cprint("⚠ The agent wants to start a program in a new window:", C.BYELLOW, bold=True)
+        cprint(f"  {cmd}", C.CYAN)
+        return confirm_or_deny("  Allow? [y/N] ")
+
+
 def render_result(title: str, body: str) -> None:
     """An answer that did not stream (or streamed differently). Printed the
     way a streamed answer lands: a blank line, the text, a blank line. The

@@ -1460,6 +1460,230 @@ def test_run_code_gives_no_keyboard_and_says_so() -> None:
             _os.chdir(old)
 
 
+def test_launch_request_reads_the_owners_real_wording() -> None:
+    """Every run/open turn on record (2026-09-13 to 09-18), and the ones
+    that must not offer a window: asking how, and asking for the tests."""
+    asks = ["create an html website of a calculator and run it", "now open it",
+            "create a simple html calculator app and run it", "can you open it and run it for me",
+            "make a simple cli HiLo game and run it", "open it",
+            "create a working python cli hilo guessing game and run it", "can you run it for me",
+            "run it via python calculator.py in terminal", "no run and test it"]
+    not_asks = ["how do i run it", "how do I run it?", "test it out yourelf",
+                "please create a working calculator app, and test it and make sure it works",
+                "Fix the median and run the tests.", "what is 2+2", "rerun the unit tests"]
+    for q in asks:
+        assert sa._asks_to_launch(q), q
+    for q in not_asks:
+        assert not sa._asks_to_launch(q), q
+
+
+def _in_dir(tmp: str) -> Any:
+    import contextlib
+    import os as _os
+
+    @contextlib.contextmanager
+    def cm() -> Any:
+        old = Path.cwd()
+        _os.chdir(tmp)
+        try:
+            yield Path(tmp).resolve()
+        finally:
+            _os.chdir(old)
+    return cm()
+
+
+def test_run_code_offers_a_page_to_the_browser_only_when_asked() -> None:
+    """run_code on calc.html was "Unsupported extension" in 2 of 9 probe runs
+    asked to open or run a page (2026-10-11). Asked and allowed, the page
+    opens; denied or not asked, the result is the old error word for word."""
+    from hexcli import tools, ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "calc.html").write_text("<html></html>", encoding="utf-8")
+        opened: list[Path] = []
+        with unittest.mock.patch.object(tools, "open_page", side_effect=opened.append), \
+             unittest.mock.patch.object(ui, "confirm_open_page", return_value=True) as ask:
+            out = sa.run_code_tool("calc.html", [], 10, _SHELL, 4000, offer_window=True)
+            assert out == "Opened calc.html in the user's default browser.", out
+            assert opened == [cwd / "calc.html"] and ask.call_count == 1
+            try:
+                sa.run_code_tool("calc.html", [], 10, _SHELL, 4000)
+                raise AssertionError("not asked: must still refuse")
+            except RuntimeError as exc:
+                assert "Unsupported extension '.html'" in str(exc), exc
+            assert ask.call_count == 1 and len(opened) == 1   # never asked, never opened
+        with unittest.mock.patch.object(tools, "open_page", side_effect=opened.append), \
+             unittest.mock.patch.object(ui, "confirm_open_page", return_value=False):
+            try:
+                sa.run_code_tool("calc.html", [], 10, _SHELL, 4000, offer_window=True)
+                raise AssertionError("denied: must still refuse")
+            except RuntimeError as exc:
+                assert str(exc) == ("Unsupported extension '.html' for run_code. "
+                                    "Allowed: .py .ps1 .js .mjs .cjs"), exc
+            assert len(opened) == 1
+
+
+def test_run_code_offers_a_keyboard_program_its_own_window() -> None:
+    """"can you run it for me" on a hilo game twice ended with "the user must
+    manually enter a guess" (2026-09-18). Asked and allowed, it is started in
+    a new window and the result says so; denied, the result is unchanged."""
+    from hexcli import tools, ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "hilo.py").write_text('print("Welcome")\nguess = input("Guess: ")\n', encoding="utf-8")
+        before = sa.run_code_tool("hilo.py", [], 10, _SHELL, 4000)
+        started: list[list[str]] = []
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=True) as ask:
+            out = sa.run_code_tool("hilo.py", [], 10, _SHELL, 4000, offer_window=True)
+            assert ask.call_args.args[0] == "python hilo.py", ask.call_args
+            assert started and started[0][-1] == str(cwd / "hilo.py"), started
+            assert out.startswith("Started python hilo.py in a new window, where the user can use it."), out
+            assert "Welcome" in out and "EOFError" not in out and "no keyboard" not in out, out
+            plain = sa.run_code_tool("hilo.py", [], 10, _SHELL, 4000)
+            assert ask.call_count == 1 and len(started) == 1   # not asked: no window
+            assert plain == before
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=False):
+            denied = sa.run_code_tool("hilo.py", [], 10, _SHELL, 4000, offer_window=True)
+            assert denied == before and len(started) == 1, denied
+        (cwd / "done.py").write_text('print("done")\n', encoding="utf-8")
+        with unittest.mock.patch.object(ui, "confirm_new_window", return_value=True) as ask:
+            sa.run_code_tool("done.py", [], 10, _SHELL, 4000, offer_window=True)
+            assert ask.call_count == 0   # a program that just ran is not offered
+
+
+def test_run_code_offers_a_window_to_a_program_that_outlives_the_timeout() -> None:
+    """A tkinter calculator (2026-09-18) or a loop shows nothing in 10 s and
+    is killed; asked for, it is offered its own window."""
+    from hexcli import tools, ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "slow.py").write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        started: list[list[str]] = []
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=True):
+            out = sa.run_code_tool("slow.py", [], 1, _SHELL, 4000, offer_window=True)
+        assert out.startswith("Started python slow.py in a new window, where the user can use it. "
+                              "A run here was still going after 1s"), out
+        assert len(started) == 1
+        before = "Exit code: TIMEOUT (1s exceeded)\n\n[stdout]\n(empty)\n\n[stderr]\n(empty)"
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=False):
+            assert sa.run_code_tool("slow.py", [], 1, _SHELL, 4000, offer_window=True) == before
+            assert sa.run_code_tool("slow.py", [], 1, _SHELL, 4000) == before
+        assert len(started) == 1
+
+
+def test_an_eoferror_that_is_not_the_keyboard_is_not_offered() -> None:
+    """Review 2026-10-11: pickle.load on an empty file raises EOFError too.
+    That is a bug to report; offering it a window, and hiding the traceback
+    on yes, would have had the model call it working."""
+    from hexcli import tools, ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "empty.pkl").write_bytes(b"")
+        (cwd / "load.py").write_text("import pickle\npickle.load(open('empty.pkl', 'rb'))\n",
+                                     encoding="utf-8")
+        with unittest.mock.patch.object(tools, "start_in_window", return_value=True) as start, \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=True) as ask:
+            out = sa.run_code_tool("load.py", [], 10, _SHELL, 4000, offer_window=True)
+        assert ask.call_count == 0 and start.call_count == 0, out
+        assert "Ran out of input" in out and "Exit code: 1" in out, out
+
+
+def test_start_in_window_hands_the_program_no_shell() -> None:
+    """Through cmd /k, an argument `1&whoami` ran whoami and a folder named
+    R&D split the path (review 2026-10-11). The window runs the argv itself."""
+    from hexcli import tools
+    calls: list[Any] = []
+
+    class _P:
+        def __init__(self, argv: Any, **kw: Any) -> None:
+            calls.append((argv, kw))
+    with unittest.mock.patch.object(tools.subprocess, "Popen", _P):
+        cmd = [sys.executable, r"C:\R&D\hilo game.py", "1&whoami", "%USERNAME%"]
+        assert tools.start_in_window(cmd, Path(r"C:\R&D")) is True
+    argv, kw = calls[0]
+    assert isinstance(argv, list) and argv[0] == sys.executable and argv[1] == "-c", argv
+    assert argv[3:] == cmd, argv
+    assert "cmd" not in Path(str(argv[0])).name.lower() and kw.get("shell") is not True
+    assert kw["creationflags"] == tools.subprocess.CREATE_NEW_CONSOLE and kw["cwd"] == r"C:\R&D"
+    compile(argv[2], "<hold>", "exec")
+
+    def _fail(*a: Any, **k: Any) -> None:
+        raise OSError("no console")
+    with unittest.mock.patch.object(tools.subprocess, "Popen", _fail):
+        assert tools.start_in_window(cmd, Path(".")) is False
+
+
+def test_start_process_on_a_page_here_asks_to_open_it() -> None:
+    """`Start-Process calc.html` was the model's move in 4 of 9 probe runs,
+    and it was put to the user as reading sensitive data. A page under the
+    working directory is now asked for by name; a deny returns the old
+    blocked text, and every other launch keeps the sensitive prompt."""
+    from hexcli import tools, ui
+    blocked = ("Blocked: this command accesses sensitive data (credentials, keys, "
+               "or security files) and was not confirmed. Explain to the user what "
+               "you wanted and why, instead of retrying.")
+    cfg = {**_CFG, "autopilot_confirm_sensitive": True}
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "calc.html").write_text("<html></html>", encoding="utf-8")
+        opened: list[Path] = []
+        for cmd in ("Start-Process calc.html", 'start "calc.html"', "Start-Process calc.html -Wait"):
+            with unittest.mock.patch.object(tools, "open_page", side_effect=opened.append), \
+                 unittest.mock.patch.object(ui, "confirm_open_page", return_value=True), \
+                 unittest.mock.patch.object(ui, "confirm_sensitive_command") as sens:
+                out = sa.execute_tool_call(cfg, {"tool": "run_command", "args": {"command": cmd}}, _SHELL,
+                                           launch_requested=True)
+                assert out == "Opened calc.html in the user's default browser.", (cmd, out)
+                assert sens.call_count == 0
+        assert opened == [cwd / "calc.html"] * 3
+        with unittest.mock.patch.object(tools, "open_page", side_effect=opened.append), \
+             unittest.mock.patch.object(ui, "confirm_open_page", return_value=False), \
+             unittest.mock.patch.object(ui, "confirm_sensitive_command") as sens:
+            out = sa.execute_tool_call(cfg, {"tool": "run_command", "args": {"command": "Start-Process calc.html"}}, _SHELL,
+                                       launch_requested=True)
+            assert out == blocked and sens.call_count == 0 and len(opened) == 3, out
+        outside = Path(tempfile.gettempdir()).resolve() / "hex_outside_page.html"
+        outside.write_text("<html></html>", encoding="utf-8")
+        try:
+            for cmd in ("Start-Process notepad.exe", "Start-Process missing.html",
+                        f'Start-Process "{outside}"', "Start-Process calc.html -ArgumentList x"):
+                assert tools.page_open_target(cmd) is None, cmd
+                with unittest.mock.patch.object(ui, "confirm_open_page", return_value=False) as ask, \
+                     unittest.mock.patch.object(ui, "confirm_sensitive_command", return_value=False) as sens:
+                    out = sa.execute_tool_call(cfg, {"tool": "run_command", "args": {"command": cmd}}, _SHELL,
+                                               launch_requested=True)
+                    assert out == blocked and ask.call_count == 0 and sens.call_count == 1, (cmd, out)
+        finally:
+            outside.unlink()
+        with unittest.mock.patch.object(tools, "open_page", side_effect=opened.append), \
+             unittest.mock.patch.object(ui, "confirm_open_page", return_value=True) as ask, \
+             unittest.mock.patch.object(ui, "confirm_sensitive_command", return_value=False) as sens:
+            out = sa.execute_tool_call(cfg, {"tool": "run_command", "args": {"command": "Start-Process calc.html"}}, _SHELL)
+            assert out == blocked and ask.call_count == 0 and sens.call_count == 1, out   # not asked: as before
+
+
+def test_the_loop_offers_a_window_only_when_the_request_asks() -> None:
+    """The flag reaches run_code from the user's wording, through the loop."""
+    from hexcli import ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "calc.html").write_text("<html></html>", encoding="utf-8")
+        for query, expected in (("now open it", 1), ("how do I open it?", 0)):
+            sa.set_mock_responses(['{"action":"run_code","args":{"path":"calc.html"}}',
+                                   '{"action":"finish","message":"Done."}'])
+            with unittest.mock.patch.object(ui, "confirm_open_page", return_value=False) as ask:
+                sa.run_autopilot(_CFG, [], query, _SHELL)
+            assert ask.call_count == expected, (query, ask.call_count)
+        sa.set_mock_responses(['{"action":"run_code","args":{"path":"calc.html"}}',
+                               '{"action":"finish","message":"Done."}'])
+        with unittest.mock.patch.object(ui, "confirm_open_page", return_value=False) as ask, \
+             unittest.mock.patch.object(sa, "_in_delegate", True):
+            sa.run_autopilot(_CFG, [], "now open it", _SHELL)
+        assert ask.call_count == 0   # a delegate's task is the model's wording, not the user's
+
+
 def test_write_file_tool_leaves_no_tmp_file() -> None:
     """write_file_tool must use atomic rename — no .tmp artefact left on success."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1889,6 +2113,14 @@ TESTS = [
     test_batch_non_dict_action_returns_error_not_crash,
     test_delegate_recursion_guard_raises,
     test_run_code_gives_no_keyboard_and_says_so,
+    test_launch_request_reads_the_owners_real_wording,
+    test_run_code_offers_a_page_to_the_browser_only_when_asked,
+    test_run_code_offers_a_keyboard_program_its_own_window,
+    test_run_code_offers_a_window_to_a_program_that_outlives_the_timeout,
+    test_an_eoferror_that_is_not_the_keyboard_is_not_offered,
+    test_start_in_window_hands_the_program_no_shell,
+    test_start_process_on_a_page_here_asks_to_open_it,
+    test_the_loop_offers_a_window_only_when_the_request_asks,
     test_write_file_tool_leaves_no_tmp_file,
     test_batch_over_limit_returns_error_not_crash,
     test_compact_history_at_minimum_boundary,

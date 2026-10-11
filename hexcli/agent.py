@@ -781,7 +781,8 @@ _coerce_config_value = hexconfig._coerce_config_value
 
 
 
-def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str) -> str:
+def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe: str,
+                      *, launch_requested: bool = False) -> str:
     tool = str(action.get("tool", "")).strip()
     args = action.get("args")
     if not isinstance(args, dict):
@@ -802,7 +803,15 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         # destructive flag): injection defense must hold even in configs that
         # disable destructive confirmation. Non-interactive = denied.
         if classification == "sensitive" and config.get("autopilot_confirm_sensitive", True):
-            if not ui.confirm_sensitive_command(cmd):
+            # Asked to open what it wrote, the model's bare `Start-Process
+            # page.html` on a page here is asked for by name, not as sensitive
+            # data. A deny reads exactly as before.
+            page = tools.page_open_target(cmd) if launch_requested else None
+            if page is not None and ui.confirm_open_page(str(page)):
+                tools.open_page(page)
+                safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "opened")
+                return f"Opened {page.name} in the user's default browser."
+            if page is not None or not ui.confirm_sensitive_command(cmd):
                 safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, "blocked")
                 return ("Blocked: this command accesses sensitive data (credentials, keys, "
                         "or security files) and was not confirmed. Explain to the user what "
@@ -887,7 +896,8 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         if not isinstance(run_args, list):
             run_args = [str(run_args)]
         timeout = max(1, min(int(args.get("timeout") or 10), 60))
-        return run_code_tool(path, run_args, timeout, shell_exe, limit)
+        return run_code_tool(path, run_args, timeout, shell_exe, limit,
+                             offer_window=launch_requested)
 
     if tool == "lint_code":
         path = str(args.get("path") or "").strip()
@@ -1223,6 +1233,8 @@ def _run_autopilot_turn(
     # The user asked for the tests to be run: what the run tools executed
     # this turn, so a finish without a test run can be sent back once.
     _tests_requested = _asks_to_run_tests(query)
+    # A delegate's query is text the model wrote, not the user's request.
+    _launch_requested = not _in_delegate and _asks_to_launch(query)
     _tests_nudge_used = False
     _run_targets: list[str] = []
     _ran_anything = False          # any run_code / run_command this turn: the evidence a behaviour claim needs
@@ -1487,7 +1499,8 @@ def _run_autopilot_turn(
             if guard:
                 raise RuntimeError(guard)
             tool_output = execute_tool_call(
-                {**config, "tool_output_limit": step_limit}, action, shell_exe)
+                {**config, "tool_output_limit": step_limit}, action, shell_exe,
+                launch_requested=_launch_requested)
             if turn:
                 turn.record_tool(tool_name, action.get("args", {}), time.monotonic() - tool_start, "ok")
         except (UserCancelled, KeyboardInterrupt):
@@ -2049,6 +2062,18 @@ def _intent_nudge(query: str, msg: str, *, mutated: bool, ran: bool,
 def _asks_to_run_tests(query: str) -> bool:
     """True when the request itself asks for the tests to be run."""
     return bool(_RUN_TESTS_RE.search(query or ""))
+
+
+_LAUNCH_RE = re.compile(r"\b(run|open|play|launch|start)\b", re.IGNORECASE)
+_HOW_TO_RE = re.compile(r"\bhow\s+(do|can|would|should|to)\b", re.IGNORECASE)
+
+
+def _asks_to_launch(query: str) -> bool:
+    """The user wants the program run or opened for them ("and run it",
+    "open it", "can you run it for me": 16 real turns, 2026-09-13 to 09-18),
+    not told how to run it and not the tests run."""
+    q = query or ""
+    return bool(_LAUNCH_RE.search(q)) and not _HOW_TO_RE.search(q) and not _asks_to_run_tests(q)
 
 
 def _ran_tests(run_targets: list[str]) -> bool:
