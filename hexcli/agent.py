@@ -1078,12 +1078,21 @@ def prime_backend(config: dict[str, Any]) -> None:
         return
     if config.get("autopilot_system_prompt", "").strip():
         return
+    # Build under this session's config: before the first turn nothing has set
+    # it, and the template then fell back to DEFAULT_CONFIG's unstable prefix
+    # (date and cwd in line 2). That prompt shared 88 characters with the
+    # first turn's, so the prime was discarded and the first turn rebuilt the
+    # dialog (9.4 s to first token on 2.22.3, 3 fresh servers).
+    previous = _ACTIVE_CONFIG
+    set_active_config(config)
     try:
         base = str(config["openai_compatible"]["base_url"]).rstrip("/")
         system_prompt = build_autopilot_prompt(cwd=str(Path.cwd()),
                                                max_steps=int(config.get("max_agent_steps", 15)))
     except Exception:
         return
+    finally:
+        set_active_config(previous)
 
     def _post() -> None:
         try:

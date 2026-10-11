@@ -754,6 +754,34 @@ def test_the_verification_nudge_always_asks_for_the_file_to_be_READ() -> None:
         assert suffix in sa.tools._LANGUAGE_BY_EXT, suffix
 
 
+def test_the_session_prime_warms_the_prompt_the_first_turn_sends() -> None:
+    """The prime ran before any turn had set the active config, so it built
+    the default (unstable) prompt: 88 characters in common with the first
+    turn's, a discarded prime and a dialog rebuild on every REPL start."""
+    session = {**_CFG, "backend": "openai", "prompt_stable_prefix": True, "prompt_split": False,
+               "openai_compatible": {"base_url": "http://127.0.0.1:9/v1", "api_key": "x"}}
+    posted: list[dict[str, Any]] = []
+
+    class _Inline:
+        def __init__(self, target: Any, **_kw: Any) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            self._target()
+
+    sa.set_active_config(None)
+    with unittest.mock.patch.object(sa, "http_json_request", lambda url, payload, h, t: posted.append(payload)), \
+            unittest.mock.patch.object(sa.threading, "Thread", _Inline):
+        sa.prime_backend(session)
+    assert sa._ACTIVE_CONFIG is None, "the prime must not leave its config active"
+    sa.set_mock_responses(['{"action":"finish","message":"4"}'])
+    try:
+        sa.run_autopilot({**session, "backend": "mock"}, [], "what is 2+2", _SHELL)
+    finally:
+        sa.set_active_config(None)   # the turn set it; keep it out of the tests after this one
+    assert posted and posted[0]["messages"][0]["content"] == sa._LAST_SYSTEM_PROMPT
+
+
 def _spy_on_messages() -> tuple[list, Any]:
     seen: list[list[dict[str, Any]]] = []
     real = sa.call_llm
@@ -1752,6 +1780,7 @@ def _run(fn: Any) -> bool:
 
 
 TESTS = [
+    test_the_session_prime_warms_the_prompt_the_first_turn_sends,
     test_fuzzy_loop_trips_on_varying_errors_same_target,
     test_varying_errors_on_different_targets_do_not_trip,
     test_typoed_action_name_is_retried_with_feedback,
