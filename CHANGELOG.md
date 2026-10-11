@@ -4,6 +4,21 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.2 — 2026-10-10
+
+A patch release: nothing the model reads changes.
+
+- Each eval trace records the server-log counts for its own run (requests,
+  Rewind failures, busy-slot retries), and each model call its
+  `finish_reason`. Until now those were only reported per arm.
+- The two exact tests are checked against SciPy 1.16's values. They matched
+  to 1e-15 on every 2×2 table up to 12 runs per arm and every discordant
+  pair up to 40 each; 21 arm-sized points are pinned in the tests.
+- Measured, nothing changed: Hex's token estimate against the real Qwen
+  tokenizer over 134 reconstructed requests from the chat log runs a median
+  3.5 % high (−2.7 % to +7.5 %), and the server's 3.6–5.4 % high, so both
+  err on the safe side and exact counting would buy about 3 % of headroom.
+
 ## 2.22.1 — 2026-10-10
 
 A patch release: only the eval harness changes.
