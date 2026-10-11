@@ -4,6 +4,19 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## 2.22.3 — 2026-10-11
+
+A patch release: nothing the model reads changes.
+
+- A reused keep-alive connection now takes each request's own timeout. It
+  kept the timeout of the request that opened it, so a non-streamed model
+  call made after the 5 s end-of-turn prewarm or the 3 s backend ping was
+  cut off at 5 or 3 s and reported as "backend unreachable: timed out". Of
+  the 237 recorded eval runs marked invalid for a timeout, 206 ended at 3 or
+  5 s and 2 at the real 300 s limit, so most of the "platform" invalid runs
+  on record were this. The interactive REPL streams replies over another
+  path and was not affected; the eval runner and `use_streaming: false` were.
+
 ## 2.22.2 — 2026-10-10
 
 A patch release: nothing the model reads changes.
