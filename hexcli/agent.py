@@ -826,6 +826,10 @@ def execute_tool_call(config: dict[str, Any], action: dict[str, Any], shell_exe:
         except Exception:
             pass
         safety.append_audit_log(_CURRENT_SESSION_ID, classification, cmd, exit_code)
+        if launch_requested:
+            started = tools.offer_keyboard_window(cmd, result)
+            if started is not None:
+                return started
         return result
     if tool == "read_file":
         path = str(args.get("path") or "").strip()

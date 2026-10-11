@@ -1665,6 +1665,86 @@ def test_start_process_on_a_page_here_asks_to_open_it() -> None:
             assert out == blocked and ask.call_count == 0 and sens.call_count == 1, out   # not asked: as before
 
 
+def test_run_command_gives_no_keyboard() -> None:
+    """In a console, `python hilo.py` through run_command sat on input() for
+    the whole timeout behind a prompt that never printed (reproduced
+    2026-10-11). The child gets no stdin, so it ends at once."""
+    import time as _time
+
+    from hexcli import tools
+    seen: list[Any] = []
+    real = tools.subprocess.Popen
+
+    def spy(*a: Any, **k: Any) -> Any:
+        seen.append(k.get("stdin"))
+        return real(*a, **k)
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "hilo.py").write_text('print("Welcome")\nguess = input("Guess: ")\n', encoding="utf-8")
+        with unittest.mock.patch.object(tools.subprocess, "Popen", spy):
+            t0 = _time.monotonic()
+            out = tools.run_command_tool("python hilo.py", _SHELL, 4000, show_command=False, timeout=20)
+        assert _time.monotonic() - t0 < 15, out
+    assert seen == [tools.subprocess.DEVNULL], seen
+    assert "Welcome" in out and out.rstrip().endswith("EOFError: EOF when reading a line"), out
+
+
+def test_run_command_offers_a_keyboard_script_its_own_window() -> None:
+    """3 of 8 "run the game" probe runs used run_command `python hilo.py`
+    and missed 2.23.0's offer. Only that shape, only input()'s EOFError,
+    only a script here, only when asked; a deny keeps the old result."""
+    from hexcli import tools, ui
+    with tempfile.TemporaryDirectory() as tmp, _in_dir(tmp) as cwd:
+        (cwd / "hilo.py").write_text('print("Welcome")\nguess = input("Guess: ")\n', encoding="utf-8")
+        (cwd / "empty.pkl").write_bytes(b"")
+        (cwd / "load.py").write_text("import pickle\npickle.load(open('empty.pkl', 'rb'))\n",
+                                     encoding="utf-8")
+        cfg = {**_CFG, "timeout_seconds": 30}
+
+        def run(cmd: str, asked: bool) -> str:
+            return sa.execute_tool_call(cfg, {"tool": "run_command", "args": {"command": cmd}}, _SHELL,
+                                        launch_requested=asked)
+        started: list[list[str]] = []
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=False) as ask:
+            plain = run("python hilo.py", False)
+            assert ask.call_count == 0 and plain.rstrip().endswith("EOFError: EOF when reading a line")
+            assert run("python hilo.py", True) == plain and ask.call_count == 1   # denied: as before
+            for cmd in ("python load.py", "python hilo.py; Get-Date", f"python {cwd.parent / 'x.py'}",
+                        "node hilo.py", "Get-Content hilo.py"):
+                run(cmd, True)
+            assert ask.call_count == 1 and not started, ask.call_args_list   # none of those asked
+        with unittest.mock.patch.object(tools, "start_in_window",
+                                        side_effect=lambda cmd, where: started.append(cmd) or True), \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=True) as ask:
+            out = run('python "hilo.py" --easy', True)
+        assert ask.call_args.args[0] == "python hilo.py --easy", ask.call_args
+        assert started and started[0][1:] == [str(cwd / "hilo.py"), "--easy"], started
+        assert out.startswith("Started python hilo.py --easy in a new window, where the user can use it."), out
+        assert "Welcome" in out and "EOFError" not in out and "Traceback" not in out, out
+
+
+def test_the_keyboard_offer_takes_one_python_command_on_a_script_here() -> None:
+    """Each guard on its own, with a result that did end at input()."""
+    from hexcli import tools, ui
+    ended = "Exit code: 1\nWelcome\nGuess: Traceback (most recent call last):\nEOFError: EOF when reading a line"
+    with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory(dir=outer) as tmp, \
+         _in_dir(tmp) as cwd:
+        (cwd / "hilo.py").write_text("input()\n", encoding="utf-8")
+        (cwd / "hilo.txt").write_text("input()\n", encoding="utf-8")
+        (Path(outer) / "x.py").write_text("input()\n", encoding="utf-8")
+        with unittest.mock.patch.object(tools, "start_in_window", return_value=True) as start, \
+             unittest.mock.patch.object(ui, "confirm_new_window", return_value=True) as ask:
+            for cmd in ("Get-Date; python hilo.py", "python hilo.py | Out-Host", "python $env:X",
+                        "python ..\\x.py", "python missing.py", "node hilo.py", "pythonw hilo.py",
+                        "python hilo.txt"):
+                assert tools.offer_keyboard_window(cmd, ended) is None, cmd
+            assert ask.call_count == 0 and start.call_count == 0, ask.call_args_list
+            for cmd in ("python hilo.py", "py hilo.py", "python3 .\\hilo.py"):
+                assert tools.offer_keyboard_window(cmd, ended) is not None, cmd
+            assert start.call_count == 3
+
+
 def test_the_loop_offers_a_window_only_when_the_request_asks() -> None:
     """The flag reaches run_code from the user's wording, through the loop."""
     from hexcli import ui
@@ -2120,6 +2200,9 @@ TESTS = [
     test_an_eoferror_that_is_not_the_keyboard_is_not_offered,
     test_start_in_window_hands_the_program_no_shell,
     test_start_process_on_a_page_here_asks_to_open_it,
+    test_run_command_gives_no_keyboard,
+    test_run_command_offers_a_keyboard_script_its_own_window,
+    test_the_keyboard_offer_takes_one_python_command_on_a_script_here,
     test_the_loop_offers_a_window_only_when_the_request_asks,
     test_write_file_tool_leaves_no_tmp_file,
     test_batch_over_limit_returns_error_not_crash,

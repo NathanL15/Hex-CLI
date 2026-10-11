@@ -27,6 +27,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -194,8 +195,14 @@ def run_command_tool(
 ) -> str:
     if show_command:
         ui.command_echo(command)
+    # No keyboard, as run_code (2.20.0). Inherited, a program's input()
+    # waited for the whole timeout (300 s in the REPL) behind a prompt that
+    # never printed, since output is read by the line and the Esc monitor
+    # eats keys (reproduced in a console, 2026-10-11). Evals already ran with
+    # stdin = NUL, so they see no change.
     process = subprocess.Popen(
         [shell_exe, "-NoLogo", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
@@ -976,6 +983,41 @@ def page_open_target(command: str) -> Path | None:
     if not path.is_relative_to(Path.cwd().resolve()):
         return None
     return path
+
+
+_KEYBOARD_EOF = "EOFError: EOF when reading a line"   # input() with no keyboard, nothing else
+_PY_LAUNCHERS = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
+
+
+def offer_keyboard_window(command: str, result: str) -> str | None:
+    """The run_command side of run_code's offer: `python game.py [args]`, one
+    command on a script under the working directory, that stopped at input().
+    3 of 8 "run the game" probe runs went this way (2026-10-11). Asks the
+    user; returns the result to hand back on yes, None to keep the old one."""
+    lines = [line for line in result.strip().splitlines() if line.strip()]
+    if not lines or not lines[-1].startswith(_KEYBOARD_EOF):
+        return None
+    if any(ch in command for ch in ";|&<>`$"):
+        return None
+    try:
+        tokens = [t.strip("\"'") for t in shlex.split(command, posix=False)]
+    except ValueError:
+        return None
+    if len(tokens) < 2 or tokens[0].lower() not in _PY_LAUNCHERS or not tokens[1].lower().endswith(".py"):
+        return None
+    cwd = Path.cwd().resolve()
+    path = resolve_path(tokens[1])
+    if not path.is_file() or not path.is_relative_to(cwd):
+        return None
+    shown = " ".join([Path(tokens[0]).stem, path.name, *tokens[2:]])
+    exe = shutil.which(tokens[0]) or sys.executable
+    if not (ui.confirm_new_window(shown) and start_in_window([exe, str(path), *tokens[2:]], cwd)):
+        return None
+    ui.tool_event("run", f"{path}  (new window)")
+    printed = result.split("\n", 1)[1] if "\n" in result else ""   # without the "Exit code" line
+    printed = printed.split("Traceback (most recent call last):")[0].strip()
+    return (f"Started {shown} in a new window, where the user can use it. "
+            f"Before it waited for the keyboard it printed:\n\n{printed or '(nothing)'}")
 
 
 def run_code_tool(

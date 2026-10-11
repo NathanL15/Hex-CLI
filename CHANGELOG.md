@@ -4,6 +4,22 @@ Full evidence for every claim below — including the experiments that failed �
 lives in `docs/V2_PLAN.md` §14. Numbers are pass^k over repeated live runs on
 the Hexagon NPU, not single-run anecdotes.
 
+## Unreleased
+
+- `run_command` gives the program no keyboard, as `run_code` has since
+  2.20.0. In a console, `python hilo.py` through `run_command` waited on
+  `input()` for the whole timeout (300 s in the REPL) behind a prompt that
+  never printed, since output is read by the line and the Esc monitor takes
+  the keys; it now ends at once with `EOFError`. On a run or open request, a
+  single `python script.py [args]` on a script in the working directory that
+  stopped at `input()` gets the same new-window offer as `run_code`. Eval
+  runs already gave commands an empty stdin, so they see no change. One
+  difference outside evals: `npx` no longer asks before installing a
+  package, as it already did in evals. Live probe, the two game requests
+  from the owner's sessions, 4 runs each, consent answered yes: the game
+  was opened in 6 of 8 runs and all 6 answers said it was running in a new
+  window (2.23.0's last probe: 4 of 8).
+
 ## 2.23.0 — 2026-10-11
 
 A minor release: a tool result the model reads changes when the user says yes.
